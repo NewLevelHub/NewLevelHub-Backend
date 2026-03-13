@@ -1,0 +1,67 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: nlh_db_prod
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - nlh_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nlh_backend_prod
+    command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    expose:
+      - "8000"
+    env_file:
+      - .env.production
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DEBUG=False
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    networks:
+      - nlh_network
+
+  nginx:
+    image: nginx:alpine
+    container_name: nlh_nginx_prod
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    restart: always
+    networks:
+      - nlh_network
+
+volumes:
+  postgres_data_prod:
+    driver: local
+  static_volume:
+  media_volume:
+
+networks:
+  nlh_network:
+    driver: bridge

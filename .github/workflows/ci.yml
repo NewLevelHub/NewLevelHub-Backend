@@ -63,7 +63,7 @@ jobs:
           SECRET_KEY: test-secret-key
         run: |
           python manage.py migrate
-          pytest --cov=apps --cov-report=xml
+          pytest --cov-report=xml
 
   build_and_push:
     name: Build and push Docker image

@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 
 class LogoutValidationTests(SimpleTestCase):
     databases = {'default'}
+
     def test_logout_requires_refresh_token(self):
         path = reverse("logout")  # /api/v1/auth/logout/
 
@@ -17,4 +18,3 @@ class LogoutValidationTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data, {"error": "Refresh token is required"})
-

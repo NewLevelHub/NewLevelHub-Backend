@@ -1,7 +1,10 @@
 """
 Production settings.
 """
-from .base import *
+import os
+
+from .base import *  # noqa: F403
+from .base import BASE_DIR
 
 DEBUG = False
 

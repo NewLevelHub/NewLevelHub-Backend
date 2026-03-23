@@ -85,6 +85,31 @@ def build_info(request):
 
 @extend_schema(
     tags=['System'],
+    summary='Ping',
+    description='Minimal endpoint for API smoke checks',
+    responses={
+        200: OpenApiResponse(
+            description='Pong response',
+            response={
+                'type': 'object',
+                'properties': {
+                    'message': {'type': 'string', 'example': 'pong'}
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def ping(request):
+    """
+    Minimal endpoint for smoke checking API availability.
+    """
+    return Response({'message': 'pong'}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
     summary='Server Time',
     description='Current server time in UTC ISO 8601 format',
     responses={

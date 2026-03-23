@@ -85,7 +85,6 @@ def build_info(request):
 
 @extend_schema(
     tags=['System'],
-<<<<<<< HEAD
     summary='Ping',
     description='Minimal endpoint for API smoke checks',
     responses={
@@ -95,7 +94,22 @@ def build_info(request):
                 'type': 'object',
                 'properties': {
                     'message': {'type': 'string', 'example': 'pong'}
-=======
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def ping(request):
+    """
+    Minimal endpoint for smoke checking API availability.
+    """
+    return Response({'message': 'pong'}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
     summary='Server Time',
     description='Current server time in UTC ISO 8601 format',
     responses={
@@ -105,7 +119,6 @@ def build_info(request):
                 'type': 'object',
                 'properties': {
                     'utc_time': {'type': 'string', 'example': '2026-03-23T12:34:56.789012Z'}
->>>>>>> main
                 }
             }
         )
@@ -113,17 +126,9 @@ def build_info(request):
 )
 @api_view(['GET'])
 @permission_classes([AllowAny])
-<<<<<<< HEAD
-def ping(request):
-    """
-    Minimal endpoint for smoke checking API availability.
-    """
-    return Response({'message': 'pong'}, status=status.HTTP_200_OK)
-=======
 def server_time(request):
     """
     Returns current server time in UTC ISO 8601 format with Z suffix.
     """
     utc_time = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     return Response({'utc_time': utc_time}, status=status.HTTP_200_OK)
->>>>>>> main

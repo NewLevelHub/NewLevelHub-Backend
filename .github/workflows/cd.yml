@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKER_REPOSITORY }}
+  IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
   IMAGE_TAG: latest
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          BACKEND_IMAGE: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          BACKEND_IMAGE: ${{ secrets.DOCKER_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}

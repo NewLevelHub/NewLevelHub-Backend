@@ -83,6 +83,8 @@ class HealthCheckEndpointTests(SimpleTestCase):
 
 
 class ServerTimeEndpointTests(SimpleTestCase):
+    databases = {'default'}
+
     def test_server_time_returns_utc_time_in_iso8601_format(self):
         path = reverse('server-time')
         self.assertEqual(path, '/api/v1/time/')

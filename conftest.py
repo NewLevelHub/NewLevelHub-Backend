@@ -12,4 +12,7 @@ def django_db_setup():
         'PASSWORD': 'test_password',
         'HOST': 'localhost',
         'PORT': '5432',
+        # DRF/Django use settings.DATABASES[*]['ATOMIC_REQUESTS'] inside request handling.
+        # If this fixture fully overrides DATABASES without it, tests can crash with KeyError.
+        'ATOMIC_REQUESTS': True,
     }

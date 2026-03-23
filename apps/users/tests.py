@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 
 
 class LogoutValidationTests(SimpleTestCase):
+    databases = {'default'}
     def test_logout_requires_refresh_token(self):
         path = reverse("logout")  # /api/v1/auth/logout/
 

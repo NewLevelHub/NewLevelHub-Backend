@@ -46,3 +46,37 @@ def health_check(request):
         'database': db_status,
         'message': 'New Level Hub Backend is running'
     }, status=response_status)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='Build Info',
+    description='Smoke endpoint with static service build information',
+    responses={
+        200: OpenApiResponse(
+            description='Static build information',
+            response={
+                'type': 'object',
+                'properties': {
+                    'service': {'type': 'string', 'example': 'newlevelhub-backend'},
+                    'version': {'type': 'string', 'example': '1.0.0'},
+                    'status': {'type': 'string', 'example': 'ok'}
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def build_info(request):
+    """
+    Minimal endpoint for smoke checking API availability.
+    """
+    return Response(
+        {
+            'service': 'newlevelhub-backend',
+            'version': '1.0.0',
+            'status': 'ok',
+        },
+        status=status.HTTP_200_OK,
+    )

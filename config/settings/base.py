@@ -23,13 +23,13 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party apps
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
     'drf_spectacular',
-    
+
     # Local apps
     'apps.core',
     'apps.users',
@@ -164,7 +164,10 @@ SIMPLE_JWT = {
 # drf-spectacular Settings (Swagger/OpenAPI)
 SPECTACULAR_SETTINGS = {
     'TITLE': 'New Level Hub API',
-    'DESCRIPTION': 'API documentation for New Level Hub platform - управление физическим зданием, бронирование, CRM и IoT',
+    'DESCRIPTION': (
+        'API documentation for New Level Hub platform - '
+        'управление физическим зданием, бронирование, CRM и IoT'
+    ),
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'SCHEMA_PATH_PREFIX': '/api/v1/',

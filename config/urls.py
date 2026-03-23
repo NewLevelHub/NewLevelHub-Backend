@@ -13,7 +13,7 @@ from apps.core.views import build_info, ping, server_time, status_text
 urlpatterns = [
     # Admin
     path('admin/', admin.site.urls),
-    
+
     # API v1
     path('api/v1/', include([
         path('auth/', include('apps.users.urls')),
@@ -26,7 +26,7 @@ urlpatterns = [
         # path('crm/', include('apps.crm.urls')),
         # path('iot/', include('apps.iot.urls')),
     ])),
-    
+
     # API Documentation
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),

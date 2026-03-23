@@ -1,7 +1,10 @@
 """
 Production settings.
 """
+import os
+
 from .base import *
+# flake8: noqa: F403,F405
 
 DEBUG = False
 

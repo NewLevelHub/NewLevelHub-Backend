@@ -11,20 +11,20 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     """
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True, required=True)
-    
+
     class Meta:
         model = User
         fields = ['email', 'phone', 'first_name', 'last_name', 'password', 'password_confirm', 'role']
         extra_kwargs = {
             'role': {'default': 'employee'},
         }
-    
+
     def validate(self, attrs):
         """Validate that passwords match."""
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords do not match"})
         return attrs
-    
+
     def create(self, validated_data):
         """Create user with hashed password."""
         validated_data.pop('password_confirm')
@@ -45,11 +45,11 @@ class UserSerializer(serializers.ModelSerializer):
     Serializer for User model (read operations).
     """
     full_name = serializers.ReadOnlyField()
-    
+
     class Meta:
         model = User
         fields = [
-            'id', 'email', 'phone', 'first_name', 'last_name', 
+            'id', 'email', 'phone', 'first_name', 'last_name',
             'full_name', 'role', 'is_active', 'face_data_ref',
             'last_login', 'date_joined', 'created_at'
         ]
@@ -79,7 +79,7 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField(required=True)
     password = serializers.CharField(required=True, validators=[validate_password])
     password_confirm = serializers.CharField(required=True)
-    
+
     def validate(self, attrs):
         """Validate that passwords match."""
         if attrs['password'] != attrs['password_confirm']:

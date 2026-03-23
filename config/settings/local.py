@@ -2,6 +2,7 @@
 Local development settings.
 """
 from .base import *
+# flake8: noqa: F403,F405
 
 DEBUG = True
 
@@ -15,7 +16,7 @@ CSRF_COOKIE_SECURE = False
 # Enable Django Debug Toolbar for local development
 if DEBUG:
     # INSTALLED_APPS += ['django_extensions']  # Optional, enable if needed
-    
+
     # Add BrowsableAPIRenderer for local development
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = [
         'rest_framework.renderers.JSONRenderer',

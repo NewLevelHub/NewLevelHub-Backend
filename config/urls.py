@@ -8,6 +8,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+from apps.core.views import build_info
 
 urlpatterns = [
     # Admin
@@ -17,6 +18,7 @@ urlpatterns = [
     path('api/v1/', include([
         path('auth/', include('apps.users.urls')),
         path('health/', include('apps.core.urls')),
+        path('build-info/', build_info, name='build-info'),
         # path('bookings/', include('apps.booking.urls')),
         # path('crm/', include('apps.crm.urls')),
         # path('iot/', include('apps.iot.urls')),

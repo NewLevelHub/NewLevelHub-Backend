@@ -8,7 +8,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-from apps.core.views import build_info
+from apps.core.views import build_info, server_time
 
 urlpatterns = [
     # Admin
@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/v1/', include([
         path('auth/', include('apps.users.urls')),
         path('health/', include('apps.core.urls')),
+        path('time/', server_time, name='server-time'),
         path('build-info/', build_info, name='build-info'),
         # path('bookings/', include('apps.booking.urls')),
         # path('crm/', include('apps.crm.urls')),

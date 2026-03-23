@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping, status_text
+from apps.core.views import build_info, echo, health_check, ping, status_text
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -108,3 +108,26 @@ class ServerTimeEndpointTests(SimpleTestCase):
         self.assertIn('utc_time', response.data)
         self.assertIsInstance(response.data['utc_time'], str)
         self.assertTrue(response.data['utc_time'].endswith('Z'))
+
+
+class EchoEndpointTests(SimpleTestCase):
+    def test_echo_returns_text_query_param(self):
+        path = reverse('echo')
+        self.assertEqual(path, '/api/v1/echo/')
+
+        match = resolve(path)
+        self.assertIs(match.func, echo)
+
+        client = APIClient()
+        response = client.get(path, {'text': 'hello'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {'echo': 'hello'})
+
+    def test_echo_returns_empty_string_when_text_query_param_missing(self):
+        path = reverse('echo')
+        client = APIClient()
+        response = client.get(path)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {'echo': ''})

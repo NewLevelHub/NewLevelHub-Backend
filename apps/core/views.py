@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
 from datetime import datetime, timezone
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 
 @extend_schema(
@@ -157,3 +157,37 @@ def server_time(request):
     """
     utc_time = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     return Response({'utc_time': utc_time}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='Echo',
+    description='Returns provided text query parameter as-is',
+    parameters=[
+        OpenApiParameter(
+            name='text',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Text value to echo back',
+        )
+    ],
+    responses={
+        200: OpenApiResponse(
+            description='Echo payload',
+            response={
+                'type': 'object',
+                'properties': {
+                    'echo': {'type': 'string', 'example': 'hello'}
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def echo(request):
+    """
+    Returns text query parameter under "echo" key.
+    """
+    return Response({'echo': request.query_params.get('text', '')}, status=status.HTTP_200_OK)

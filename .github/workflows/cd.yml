@@ -9,6 +9,7 @@ permissions:
 
 env:
   IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   IMAGE_TAG: latest
 
 jobs:
@@ -17,6 +18,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Build image reference
+        id: image_meta
+        run: |
+          IMAGE_PATH="$IMAGE_REPOSITORY"
+          if [[ "$IMAGE_PATH" != */* ]]; then
+            IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
+          fi
+          echo "image_ref=${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
         env:
@@ -24,7 +34,7 @@ jobs:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          BACKEND_IMAGE: ${{ secrets.DOCKER_REGISTRY }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          BACKEND_IMAGE: ${{ steps.image_meta.outputs.image_ref }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}

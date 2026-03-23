@@ -1,10 +1,10 @@
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
 from rest_framework import status
-from rest_framework.test import APIRequestFactory, APIClient
+from rest_framework.test import APIRequestFactory
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping, status_text
+from apps.core.views import build_info, health_check, ping, server_time, status_text
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -101,8 +101,11 @@ class ServerTimeEndpointTests(SimpleTestCase):
         path = reverse('server-time')
         self.assertEqual(path, '/api/v1/time/')
 
-        client = APIClient()
-        response = client.get(path)
+        match = resolve(path)
+        self.assertIs(match.func, server_time)
+
+        request = APIRequestFactory().get(path)
+        response = server_time(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('utc_time', response.data)

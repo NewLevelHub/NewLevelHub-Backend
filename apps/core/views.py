@@ -3,6 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
+from datetime import datetime, timezone
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 
@@ -80,3 +81,29 @@ def build_info(request):
         },
         status=status.HTTP_200_OK,
     )
+
+
+@extend_schema(
+    tags=['System'],
+    summary='Server Time',
+    description='Current server time in UTC ISO 8601 format',
+    responses={
+        200: OpenApiResponse(
+            description='Current UTC server time',
+            response={
+                'type': 'object',
+                'properties': {
+                    'utc_time': {'type': 'string', 'example': '2026-03-23T12:34:56.789012Z'}
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def server_time(request):
+    """
+    Returns current server time in UTC ISO 8601 format with Z suffix.
+    """
+    utc_time = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    return Response({'utc_time': utc_time}, status=status.HTTP_200_OK)

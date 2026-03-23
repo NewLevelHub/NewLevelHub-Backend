@@ -1,7 +1,7 @@
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
 from rest_framework import status
-from rest_framework.test import APIRequestFactory
+from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
 from apps.core.views import build_info, health_check, ping
@@ -80,3 +80,17 @@ class HealthCheckEndpointTests(SimpleTestCase):
         self.assertEqual(response.data['status'], 'unhealthy')
         self.assertEqual(response.data['database'], 'error: db down')
         self.assertEqual(response.data['message'], 'New Level Hub Backend is running')
+
+
+class ServerTimeEndpointTests(SimpleTestCase):
+    def test_server_time_returns_utc_time_in_iso8601_format(self):
+        path = reverse('server-time')
+        self.assertEqual(path, '/api/v1/time/')
+
+        client = APIClient()
+        response = client.get(path)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('utc_time', response.data)
+        self.assertIsInstance(response.data['utc_time'], str)
+        self.assertTrue(response.data['utc_time'].endswith('Z'))

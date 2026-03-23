@@ -1,0 +1,41 @@
+name: Backend CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ${{ secrets.DOCKER_REPOSITORY }}
+  IMAGE_TAG: latest
+
+jobs:
+  deploy:
+    name: Deploy on main push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BACKEND_IMAGE: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DEPLOY_PATH,BACKEND_IMAGE
+          script: |
+            set -e
+            echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+            cd "$DEPLOY_PATH"
+            export BACKEND_IMAGE="$BACKEND_IMAGE"
+            docker pull "$BACKEND_IMAGE"
+            docker compose -f docker-compose.prod.yml up -d --force-recreate backend
+            docker compose -f docker-compose.prod.yml up -d nginx

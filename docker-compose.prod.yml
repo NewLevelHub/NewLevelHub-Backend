@@ -18,9 +18,7 @@ services:
       - nlh_network
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${BACKEND_IMAGE}
     container_name: nlh_backend_prod
     command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application
     volumes:

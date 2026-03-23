@@ -8,8 +8,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-from apps.core.views import build_info, ping
-from apps.core.views import build_info, server_time
+from apps.core.views import build_info, ping, server_time, status_text
 
 urlpatterns = [
     # Admin
@@ -20,6 +19,7 @@ urlpatterns = [
         path('auth/', include('apps.users.urls')),
         path('health/', include('apps.core.urls')),
         path('ping/', ping, name='ping'),
+        path('status-text/', status_text, name='status-text'),
         path('time/', server_time, name='server-time'),
         path('build-info/', build_info, name='build-info'),
         # path('bookings/', include('apps.booking.urls')),

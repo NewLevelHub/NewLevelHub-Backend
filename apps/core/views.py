@@ -110,6 +110,31 @@ def ping(request):
 
 @extend_schema(
     tags=['System'],
+    summary='Status Text',
+    description='Returns static service status text',
+    responses={
+        200: OpenApiResponse(
+            description='Service status text',
+            response={
+                'type': 'object',
+                'properties': {
+                    'status_text': {'type': 'string', 'example': 'service is up'}
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def status_text(request):
+    """
+    Returns static service status text.
+    """
+    return Response({'status_text': 'service is up'}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
     summary='Server Time',
     description='Current server time in UTC ISO 8601 format',
     responses={

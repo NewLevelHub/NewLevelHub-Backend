@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping
+from apps.core.views import build_info, health_check, ping, status_text
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -40,6 +40,20 @@ class PingEndpointTests(SimpleTestCase):
         response = ping(request)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {'message': 'pong'})
+
+
+class StatusTextEndpointTests(SimpleTestCase):
+    def test_status_text_returns_static_payload(self):
+        path = reverse('status-text')
+        self.assertEqual(path, '/api/v1/status-text/')
+
+        match = resolve(path)
+        self.assertIs(match.func, status_text)
+
+        request = APIRequestFactory().get(path)
+        response = status_text(request)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {'status_text': 'service is up'})
 
 
 class HealthCheckEndpointTests(SimpleTestCase):

@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping
+from apps.core.views import build_info, health_check, ping, system_features
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -40,6 +40,30 @@ class PingEndpointTests(SimpleTestCase):
         response = ping(request)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {'message': 'pong'})
+
+
+class SystemFeaturesEndpointTests(SimpleTestCase):
+    def test_system_features_returns_static_feature_flags(self):
+        path = reverse('system-features')
+        self.assertEqual(path, '/api/v1/system/features/')
+
+        match = resolve(path)
+        self.assertIs(match.func, system_features)
+
+        request = APIRequestFactory().get(path)
+        response = system_features(request)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                'features': {
+                    'auth': True,
+                    'booking': False,
+                    'crm': False,
+                    'iot': False,
+                }
+            },
+        )
 
 
 class HealthCheckEndpointTests(SimpleTestCase):

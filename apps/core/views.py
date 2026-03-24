@@ -26,6 +26,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
         503: OpenApiResponse(description='Service unavailable')
     }
 )
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def health_check(request):

@@ -86,6 +86,49 @@ def build_info(request):
 
 @extend_schema(
     tags=['System'],
+    summary='System Features',
+    description='Static feature flags for platform modules',
+    responses={
+        200: OpenApiResponse(
+            description='Feature flags grouped by modules',
+            response={
+                'type': 'object',
+                'properties': {
+                    'features': {
+                        'type': 'object',
+                        'properties': {
+                            'auth': {'type': 'boolean', 'example': True},
+                            'booking': {'type': 'boolean', 'example': False},
+                            'crm': {'type': 'boolean', 'example': False},
+                            'iot': {'type': 'boolean', 'example': False},
+                        },
+                    },
+                },
+            },
+        )
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def system_features(request):
+    """
+    Static endpoint with platform module feature flags.
+    """
+    return Response(
+        {
+            'features': {
+                'auth': True,
+                'booking': False,
+                'crm': False,
+                'iot': False,
+            }
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['System'],
     summary='Ping',
     description='Minimal endpoint for API smoke checks',
     responses={

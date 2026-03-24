@@ -53,6 +53,14 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         ('guest', 'Guest'),
     ]
 
+    ROLE_DESCRIPTIONS = {
+        'supermentor': 'Полный доступ ко всему',
+        'admin': 'Администратор бизнес-центра',
+        'tenant': 'Арендатор офиса',
+        'employee': 'Рядовой сотрудник',
+        'guest': 'Гость (временный доступ)',
+    }
+
     # Basic fields
     email = models.EmailField(unique=True, db_index=True, verbose_name='Email address')
     phone = models.CharField(
@@ -120,3 +128,15 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     def is_tenant_user(self):
         """Check if user is tenant, admin, or supermentor."""
         return self.role in ['tenant', 'admin', 'supermentor']
+
+    @classmethod
+    def get_role_definitions(cls):
+        """Return stable role reference list for API responses."""
+        return [
+            {
+                'code': code,
+                'label': label,
+                'description': cls.ROLE_DESCRIPTIONS.get(code, ''),
+            }
+            for code, label in cls.ROLE_CHOICES
+        ]

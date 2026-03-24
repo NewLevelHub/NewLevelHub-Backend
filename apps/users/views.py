@@ -11,6 +11,7 @@ from .serializers import (
     UserSerializer,
     PasswordResetRequestSerializer,
     MobileBiometricConfirmSerializer,
+    UserRoleSerializer,
 )
 
 User = get_user_model()
@@ -309,3 +310,22 @@ def password_reset_request(request):
             }, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@extend_schema(
+    tags=['Authentication'],
+    summary='Get User Roles',
+    description='Получить справочный список ролей пользователей',
+    responses={
+        200: UserRoleSerializer(many=True),
+    }
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_user_roles(request):
+    """
+    GET /api/v1/auth/roles/
+    Справочный список ролей пользователей.
+    """
+    serializer = UserRoleSerializer(User.get_role_definitions(), many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)

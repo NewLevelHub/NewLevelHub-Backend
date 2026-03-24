@@ -94,3 +94,10 @@ class MobileBiometricConfirmSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(required=True)
     biometric_token = serializers.CharField(required=True)
     device_id = serializers.CharField(required=True)
+
+
+class UserRoleSerializer(serializers.Serializer):
+    """Serializer for public user role reference endpoint."""
+    code = serializers.CharField()
+    label = serializers.CharField()
+    description = serializers.CharField()

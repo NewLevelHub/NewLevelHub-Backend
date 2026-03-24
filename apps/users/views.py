@@ -16,6 +16,39 @@ from .serializers import (
 
 User = get_user_model()
 
+ROLE_CAPABILITIES = {
+    'supermentor': {
+        'can_manage_users': True,
+        'can_view_crm': True,
+        'can_manage_booking': True,
+        'can_access_iot': True,
+    },
+    'admin': {
+        'can_manage_users': True,
+        'can_view_crm': True,
+        'can_manage_booking': True,
+        'can_access_iot': True,
+    },
+    'tenant': {
+        'can_manage_users': False,
+        'can_view_crm': True,
+        'can_manage_booking': True,
+        'can_access_iot': False,
+    },
+    'employee': {
+        'can_manage_users': False,
+        'can_view_crm': True,
+        'can_manage_booking': False,
+        'can_access_iot': False,
+    },
+    'guest': {
+        'can_manage_users': False,
+        'can_view_crm': False,
+        'can_manage_booking': False,
+        'can_access_iot': False,
+    },
+}
+
 
 def get_tokens_for_user(user):
     """Generate JWT tokens for user."""
@@ -160,6 +193,51 @@ def get_current_user(request):
     """
     serializer = UserSerializer(request.user)
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['Authentication'],
+    summary='Get Current User Permissions',
+    description='Получить роль и capability-флаги текущего авторизованного пользователя',
+    responses={
+        200: OpenApiResponse(
+            description='Permissions for current user',
+            response={
+                'type': 'object',
+                'properties': {
+                    'role': {'type': 'string', 'example': 'admin'},
+                    'capabilities': {
+                        'type': 'object',
+                        'properties': {
+                            'can_manage_users': {'type': 'boolean', 'example': True},
+                            'can_view_crm': {'type': 'boolean', 'example': True},
+                            'can_manage_booking': {'type': 'boolean', 'example': True},
+                            'can_access_iot': {'type': 'boolean', 'example': True},
+                        },
+                    },
+                },
+            },
+        ),
+        401: OpenApiResponse(description='Unauthorized'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_current_user_permissions(request):
+    """
+    GET /api/v1/auth/me/permissions/
+    Роль и capability-флаги текущего пользователя для фронтенда.
+    """
+    role = request.user.role
+    capabilities = ROLE_CAPABILITIES.get(role, ROLE_CAPABILITIES['guest'])
+
+    return Response(
+        {
+            'role': role,
+            'capabilities': capabilities,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 
 @extend_schema(

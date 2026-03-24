@@ -1,13 +1,10 @@
 from types import SimpleNamespace
 
-<<<<<<< HEAD
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
-=======
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
->>>>>>> main
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 

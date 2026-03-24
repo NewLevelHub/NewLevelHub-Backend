@@ -16,6 +16,7 @@ urlpatterns = [
 
     # Current User
     path('me/', views.get_current_user, name='current-user'),
+    path('me/permissions/', views.get_current_user_permissions, name='current-user-permissions'),
 
     # Password Reset
     path('password/reset/', views.password_reset_request, name='password-reset'),

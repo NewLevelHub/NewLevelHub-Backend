@@ -1,4 +1,4 @@
-from rest_framework import status, generics
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -9,7 +9,6 @@ from .serializers import (
     UserRegistrationSerializer,
     UserLoginSerializer,
     UserSerializer,
-    UserUpdateSerializer,
     PasswordResetRequestSerializer,
     MobileBiometricConfirmSerializer,
 )
@@ -76,9 +75,9 @@ def login_user(request):
     if serializer.is_valid():
         email = serializer.validated_data['email']
         password = serializer.validated_data['password']
-        
+
         user = authenticate(request, username=email, password=password)
-        
+
         if user is not None:
             if user.is_active:
                 tokens = get_tokens_for_user(user)
@@ -95,7 +94,7 @@ def login_user(request):
             return Response({
                 'error': 'Invalid email or password'
             }, status=status.HTTP_401_UNAUTHORIZED)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -119,26 +118,26 @@ def mobile_biometric_confirm(request):
     serializer = MobileBiometricConfirmSerializer(data=request.data)
     if serializer.is_valid():
         user_id = serializer.validated_data['user_id']
-        biometric_token = serializer.validated_data['biometric_token']
-        
+        _ = serializer.validated_data['biometric_token']
+
         try:
             user = User.objects.get(id=user_id, is_active=True)
-            
+
             # TODO: Implement biometric validation logic
             # For now, we just check if user exists
-            
+
             tokens = get_tokens_for_user(user)
             return Response({
                 'user': UserSerializer(user).data,
                 'tokens': tokens,
                 'message': 'Biometric authentication successful'
             }, status=status.HTTP_200_OK)
-            
+
         except User.DoesNotExist:
             return Response({
                 'error': 'Invalid user or biometric data'
             }, status=status.HTTP_401_UNAUTHORIZED)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -216,19 +215,19 @@ def password_reset_request(request):
     serializer = PasswordResetRequestSerializer(data=request.data)
     if serializer.is_valid():
         email = serializer.validated_data['email']
-        
+
         try:
-            user = User.objects.get(email=email)
+            User.objects.get(email=email)
             # TODO: Implement password reset email/SMS logic
-            
+
             return Response({
                 'message': 'Password reset instructions sent to your email'
             }, status=status.HTTP_200_OK)
-            
+
         except User.DoesNotExist:
             # Security: Don't reveal if email exists
             return Response({
                 'message': 'If the email exists, reset instructions will be sent'
             }, status=status.HTTP_200_OK)
-    
+
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

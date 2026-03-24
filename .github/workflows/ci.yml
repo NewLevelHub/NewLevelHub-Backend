@@ -10,7 +10,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKER_REPOSITORY }}
+  IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
   LATEST_TAG: latest
 
@@ -63,7 +64,7 @@ jobs:
           SECRET_KEY: test-secret-key
         run: |
           python manage.py migrate
-          pytest --cov=apps --cov-report=xml
+          pytest --cov-report=xml
 
   build_and_push:
     name: Build and push Docker image
@@ -77,6 +78,11 @@ jobs:
       - name: Build image reference
         id: image_meta
         run: |
+          IMAGE_PATH="$IMAGE_REPOSITORY"
+          if [[ "$IMAGE_PATH" != */* ]]; then
+            IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
+          fi
+          IMAGE_NAME="${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}"
           echo "pr_image_ref=${IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "latest_image_ref=${IMAGE_NAME}:${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 

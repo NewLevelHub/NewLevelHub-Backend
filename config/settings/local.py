@@ -1,7 +1,8 @@
 """
 Local development settings.
 """
-from .base import *
+from .base import *  # noqa: F401,F403
+from .base import REST_FRAMEWORK
 
 DEBUG = True
 
@@ -15,7 +16,7 @@ CSRF_COOKIE_SECURE = False
 # Enable Django Debug Toolbar for local development
 if DEBUG:
     # INSTALLED_APPS += ['django_extensions']  # Optional, enable if needed
-    
+
     # Add BrowsableAPIRenderer for local development
     REST_FRAMEWORK['DEFAULT_RENDERER_CLASSES'] = [
         'rest_framework.renderers.JSONRenderer',

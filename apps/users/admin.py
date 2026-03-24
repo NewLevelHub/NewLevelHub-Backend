@@ -14,7 +14,7 @@ class UserAdmin(BaseUserAdmin):
     list_filter = ['role', 'is_active', 'is_staff', 'date_joined']
     search_fields = ['email', 'first_name', 'last_name', 'phone']
     ordering = ['-date_joined']
-    
+
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'phone')}),
@@ -22,7 +22,7 @@ class UserAdmin(BaseUserAdmin):
         ('Biometric', {'fields': ('face_data_ref',)}),
         ('Important Dates', {'fields': ('last_login', 'date_joined')}),
     )
-    
+
     add_fieldsets = (
         (None, {
             'classes': ('wide',),

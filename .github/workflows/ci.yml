@@ -12,7 +12,6 @@ permissions:
 env:
   IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
   LATEST_TAG: latest
 
 jobs:
@@ -82,8 +81,17 @@ jobs:
           if [[ "$IMAGE_PATH" != */* ]]; then
             IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
           fi
+          # Extract ticket key like "DEV-17" from PR branch name (e.g. DEV-17-...).
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TICKET="$(echo "${{ github.head_ref }}" | grep -Eo '[A-Za-z]+-[0-9]+' | head -n1 || true)"
+          TICKET="${TICKET:-TICKET}"
+          TICKET="$(echo "$TICKET" | tr '[:lower:]' '[:upper:]')"
+
+          # Use ticket-only tag (e.g. DEV-19)
+          PR_TAG="${TICKET}"
+
           IMAGE_NAME="${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}"
-          echo "pr_image_ref=${IMAGE_NAME}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "pr_image_ref=${IMAGE_NAME}:${PR_TAG}" >> "$GITHUB_OUTPUT"
           echo "latest_image_ref=${IMAGE_NAME}:${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker registry
@@ -105,3 +113,29 @@ jobs:
           tags: |
             ${{ steps.image_meta.outputs.pr_image_ref }}
             ${{ steps.image_meta.outputs.latest_image_ref }}
+
+  notify:
+    name: Slack notification
+    runs-on: ubuntu-latest
+    needs: [quality, build_and_push]
+    if: always()
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+    steps:
+      - name: Send Slack message
+        if: ${{ env.SLACK_WEBHOOK_URL != '' }}
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ needs.build_and_push.result == 'success' && '✅ SUCCESS' || '❌ FAILURE' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref != '' && github.head_ref || github.ref_name }}`\n*Actor:* ${{ github.actor }}${{ github.event_name == 'pull_request' && format('\n*PR:* {0} by {1}', github.event.pull_request.title, github.event.pull_request.user.login) || '' }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                  }
+                }
+              ]
+            }

@@ -28,7 +28,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse
     }
 )
 
-@api_view(['GET'])
+@api_view(['GET'])  # noqa: E304
 @permission_classes([AllowAny])
 def health_check(request):
     """

@@ -1,10 +1,11 @@
 from django.test import SimpleTestCase
 from django.urls import resolve, reverse
+from django.conf import settings
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping, system_features
+from apps.core.views import build_info, health_check, ping, system_environment, system_features
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -120,3 +121,24 @@ class ServerTimeEndpointTests(SimpleTestCase):
         self.assertIn('utc_time', response.data)
         self.assertIsInstance(response.data['utc_time'], str)
         self.assertTrue(response.data['utc_time'].endswith('Z'))
+
+
+class SystemEnvironmentEndpointTests(SimpleTestCase):
+    def test_system_environment_returns_environment_and_debug(self):
+        path = reverse('system-environment')
+        self.assertEqual(path, '/api/v1/system/environment/')
+
+        match = resolve(path)
+        self.assertIs(match.func, system_environment)
+
+        request = APIRequestFactory().get(path)
+        response = system_environment(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data,
+            {
+                'environment': 'local' if settings.DEBUG else 'production',
+                'debug': settings.DEBUG,
+            },
+        )

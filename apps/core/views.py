@@ -3,6 +3,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from django.db import connection
+from django.conf import settings
 from datetime import datetime, timezone
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
@@ -176,3 +177,32 @@ def server_time(request):
     """
     utc_time = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     return Response({'utc_time': utc_time}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='System Environment',
+    description='Возвращает окружение приложения и режим debug для smoke-проверок',
+    responses={
+        200: OpenApiResponse(
+            description='System environment payload',
+            response={
+                'type': 'object',
+                'properties': {
+                    'environment': {'type': 'string', 'example': 'local'},
+                    'debug': {'type': 'boolean', 'example': True},
+                },
+            },
+        ),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def system_environment(request):
+    """
+    GET /api/v1/system/environment/
+    Минимальный системный endpoint для проверки рабочего процесса разработки.
+    """
+    debug = bool(getattr(settings, 'DEBUG', False))
+    environment = 'local' if debug else 'production'
+    return Response({'environment': environment, 'debug': debug}, status=status.HTTP_200_OK)

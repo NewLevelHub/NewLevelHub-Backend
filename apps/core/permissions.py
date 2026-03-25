@@ -25,6 +25,7 @@ class IsEmployee(BasePermission):
         return request.user.is_authenticated and request.user.role in ['employee', 'tenant', 'admin', 'supermentor']
 
 
+
 class IsOwnerOrAdmin(BasePermission):
     """
     Permission: Object owner or admin can access.

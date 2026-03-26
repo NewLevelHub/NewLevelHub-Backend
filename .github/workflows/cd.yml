@@ -57,10 +57,9 @@ jobs:
               ls -la
               exit 1
             fi
-            set -a
-            . ./.env.production
-            set +a
-            if [ -z "$POSTGRES_DB" ] || [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_PASSWORD" ]; then
+            if ! grep -Eq '^POSTGRES_DB=.+' .env.production || \
+               ! grep -Eq '^POSTGRES_USER=.+' .env.production || \
+               ! grep -Eq '^POSTGRES_PASSWORD=.+' .env.production; then
               echo "POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD must be set in .env.production"
               exit 1
             fi

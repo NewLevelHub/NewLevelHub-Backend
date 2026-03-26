@@ -122,6 +122,7 @@ class ServerTimeEndpointTests(SimpleTestCase):
         self.assertIsInstance(response.data['utc_time'], str)
         self.assertTrue(response.data['utc_time'].endswith('Z'))
 
+
 class SystemEnvironmentEndpointTests(SimpleTestCase):
     def test_system_environment_returns_environment_and_debug(self):
         path = reverse('system-environment')

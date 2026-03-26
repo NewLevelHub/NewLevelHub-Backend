@@ -19,6 +19,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docker-compose.prod.yml
+            nginx/nginx.conf
+          sparse-checkout-cone-mode: false
+
       - name: Build image reference
         id: image_meta
         run: |
@@ -27,6 +35,17 @@ jobs:
             IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
           fi
           echo "image_ref=${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload compose and nginx config
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          source: "docker-compose.prod.yml,nginx/nginx.conf"
+          target: ${{ secrets.DEPLOY_PATH }}
+          overwrite: true
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1.2.0
@@ -46,6 +65,11 @@ jobs:
             set -e
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
             cd "$DEPLOY_PATH"
+            if [ ! -f "docker-compose.prod.yml" ]; then
+              echo "docker-compose.prod.yml not found in $DEPLOY_PATH"
+              ls -la
+              exit 1
+            fi
             export BACKEND_IMAGE="$BACKEND_IMAGE"
             docker pull "$BACKEND_IMAGE"
             docker compose -f docker-compose.prod.yml up -d --force-recreate backend

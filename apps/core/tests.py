@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping, system_environment, system_features
+from apps.core.views import build_info, health_check, ping, system_environment, system_features, system_uptime_note
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -142,3 +142,18 @@ class SystemEnvironmentEndpointTests(SimpleTestCase):
                 'debug': settings.DEBUG,
             },
         )
+
+
+class SystemUptimeNoteEndpointTests(SimpleTestCase):
+    def test_system_uptime_note_returns_static_note(self):
+        path = reverse('system-uptime-note')
+        self.assertEqual(path, '/api/v1/system/uptime-note/')
+
+        match = resolve(path)
+        self.assertIs(match.func, system_uptime_note)
+
+        request = APIRequestFactory().get(path)
+        response = system_uptime_note(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {'note': 'service is operational'})

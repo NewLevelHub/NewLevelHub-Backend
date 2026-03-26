@@ -206,3 +206,29 @@ def system_environment(request):
     debug = bool(getattr(settings, 'DEBUG', False))
     environment = 'local' if debug else 'production'
     return Response({'environment': environment, 'debug': debug}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='System Uptime Note',
+    description='Статичное сообщение о доступности сервиса для smoke-проверок',
+    responses={
+        200: OpenApiResponse(
+            description='Service availability note',
+            response={
+                'type': 'object',
+                'properties': {
+                    'note': {'type': 'string', 'example': 'service is operational'},
+                },
+            },
+        ),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def system_uptime_note(request):
+    """
+    GET /api/v1/system/uptime-note/
+    Минимальный системный endpoint со статичным сообщением о доступности сервиса.
+    """
+    return Response({'note': 'service is operational'}, status=status.HTTP_200_OK)

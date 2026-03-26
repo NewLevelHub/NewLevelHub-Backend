@@ -5,7 +5,15 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import build_info, health_check, ping, system_environment, system_features, system_uptime_note
+from apps.core.views import (
+    build_info,
+    health_check,
+    ping,
+    system_environment,
+    system_features,
+    system_routes_summary,
+    system_uptime_note,
+)
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -157,3 +165,24 @@ class SystemUptimeNoteEndpointTests(SimpleTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {'note': 'service is operational'})
+
+
+class SystemRoutesSummaryEndpointTests(SimpleTestCase):
+    def test_system_routes_summary_returns_expected_structure(self):
+        path = reverse('system-routes-summary')
+        self.assertEqual(path, '/api/v1/system/routes-summary/')
+
+        match = resolve(path)
+        self.assertIs(match.func, system_routes_summary)
+
+        request = APIRequestFactory().get(path)
+        response = system_routes_summary(request)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('auth', response.data)
+        self.assertIn('system', response.data)
+        self.assertIn('health', response.data)
+
+        for key in ('auth', 'system', 'health'):
+            self.assertIsInstance(response.data[key], list)
+            self.assertTrue(all(isinstance(route, str) for route in response.data[key]))

@@ -232,3 +232,70 @@ def system_uptime_note(request):
     Минимальный системный endpoint со статичным сообщением о доступности сервиса.
     """
     return Response({'note': 'service is operational'}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='System Routes Summary',
+    description='Возвращает ключевые API маршруты для быстрого smoke-тестирования',
+    responses={
+        200: OpenApiResponse(
+            description='Key API routes grouped by module',
+            response={
+                'type': 'object',
+                'properties': {
+                    'auth': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'example': [
+                            '/api/v1/auth/register/',
+                            '/api/v1/auth/login/',
+                            '/api/v1/auth/me/',
+                        ],
+                    },
+                    'system': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'example': [
+                            '/api/v1/build-info/',
+                            '/api/v1/system/features/',
+                            '/api/v1/system/environment/',
+                            '/api/v1/system/uptime-note/',
+                        ],
+                    },
+                    'health': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'example': ['/api/v1/health/'],
+                    },
+                },
+            },
+        )
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def system_routes_summary(request):
+    """
+    GET /api/v1/system/routes-summary/
+    Список ключевых API маршрутов для фронта и QA.
+    """
+    return Response(
+        {
+            'auth': [
+                '/api/v1/auth/register/',
+                '/api/v1/auth/login/',
+                '/api/v1/auth/me/',
+            ],
+            'system': [
+                '/api/v1/build-info/',
+                '/api/v1/system/features/',
+                '/api/v1/system/environment/',
+                '/api/v1/system/uptime-note/',
+            ],
+            'health': [
+                '/api/v1/health/',
+            ],
+        },
+        status=status.HTTP_200_OK,
+    )

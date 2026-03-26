@@ -12,6 +12,7 @@ env:
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
   IMAGE_TAG: latest
 
+
 jobs:
   deploy:
     name: Deploy on main push

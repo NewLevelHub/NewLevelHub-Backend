@@ -8,7 +8,14 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
-from apps.core.views import build_info, ping, server_time, system_environment, system_features
+from apps.core.views import (
+    build_info,
+    ping,
+    server_time,
+    system_environment,
+    system_features,
+    system_uptime_note,
+)
 
 urlpatterns = [
     # Admin
@@ -23,6 +30,7 @@ urlpatterns = [
         path('build-info/', build_info, name='build-info'),
         path('system/features/', system_features, name='system-features'),
         path('system/environment/', system_environment, name='system-environment'),
+        path('system/uptime-note/', system_uptime_note, name='system-uptime-note'),
         # path('bookings/', include('apps.booking.urls')),
         # path('crm/', include('apps.crm.urls')),
         # path('iot/', include('apps.iot.urls')),

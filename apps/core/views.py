@@ -7,6 +7,8 @@ from django.conf import settings
 from datetime import datetime, timezone
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
+APP_STARTED_AT = datetime.now(timezone.utc)
+
 
 @extend_schema(
     tags=['Health'],
@@ -206,3 +208,93 @@ def system_environment(request):
     debug = bool(getattr(settings, 'DEBUG', False))
     environment = 'local' if debug else 'production'
     return Response({'environment': environment, 'debug': debug}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['System'],
+    summary='System Uptime',
+    description='Возвращает время старта процесса и uptime в секундах',
+    responses={
+        200: OpenApiResponse(
+            description='System uptime payload',
+            response={
+                'type': 'object',
+                'properties': {
+                    'started_at': {'type': 'string', 'example': '2026-03-31T10:00:00Z'},
+                    'uptime_seconds': {'type': 'integer', 'example': 42},
+                },
+            },
+        ),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def system_uptime(request):
+    """
+    GET /api/v1/system/uptime/
+    Возвращает UTC-время старта процесса приложения и uptime в секундах.
+    """
+    now_utc = datetime.now(timezone.utc)
+    uptime_seconds = max(int((now_utc - APP_STARTED_AT).total_seconds()), 0)
+    started_at = APP_STARTED_AT.isoformat().replace('+00:00', 'Z')
+    return Response(
+        {'started_at': started_at, 'uptime_seconds': uptime_seconds},
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['Stubs'],
+    summary='Bookings Stub',
+    description='Temporary empty endpoint for bookings module',
+    responses={200: OpenApiResponse(description='Empty bookings list')},
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def bookings_stub(request):
+    return Response(
+        {
+            'items': [],
+            'count': 0,
+            'message': 'Bookings stub endpoint',
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['Stubs'],
+    summary='CRM Stub',
+    description='Temporary empty endpoint for CRM module',
+    responses={200: OpenApiResponse(description='Empty CRM payload')},
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def crm_stub(request):
+    return Response(
+        {
+            'items': [],
+            'count': 0,
+            'message': 'CRM stub endpoint',
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['Stubs'],
+    summary='IoT Stub',
+    description='Temporary empty endpoint for IoT module',
+    responses={200: OpenApiResponse(description='Empty IoT payload')},
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def iot_stub(request):
+    return Response(
+        {
+            'items': [],
+            'count': 0,
+            'message': 'IoT stub endpoint',
+        },
+        status=status.HTTP_200_OK,
+    )

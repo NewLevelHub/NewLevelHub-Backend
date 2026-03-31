@@ -101,3 +101,40 @@ class UserRoleSerializer(serializers.Serializer):
     code = serializers.CharField()
     label = serializers.CharField()
     description = serializers.CharField()
+
+
+class UserManagementSerializer(serializers.ModelSerializer):
+    """
+    Serializer for admin user management CRUD.
+    """
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        validators=[validate_password],
+    )
+    full_name = serializers.ReadOnlyField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'phone', 'first_name', 'last_name', 'full_name',
+            'role', 'is_active', 'is_staff', 'face_data_ref', 'password',
+            'last_login', 'date_joined', 'created_at',
+        ]
+        read_only_fields = ['id', 'last_login', 'date_joined', 'created_at']
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', None)
+        if not password:
+            raise serializers.ValidationError({'password': 'This field is required.'})
+        return User.objects.create_user(password=password, **validated_data)
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', None)
+        for key, value in validated_data.items():
+            setattr(instance, key, value)
+        if password:
+            instance.set_password(password)
+        instance.save()
+        return instance

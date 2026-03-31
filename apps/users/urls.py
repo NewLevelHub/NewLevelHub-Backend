@@ -18,6 +18,15 @@ urlpatterns = [
     path('me/', views.get_current_user, name='current-user'),
     path('roles/', views.list_user_roles, name='user-roles'),
     path('me/permissions/', views.get_current_user_permissions, name='current-user-permissions'),
+    path('profile/', views.get_my_profile, name='my-profile'),
+    path('profile/update/', views.update_my_profile, name='my-profile-update'),
+
+    # User Management (admin/supermentor)
+    path('users/', views.list_users, name='users-list'),
+    path('users/create/', views.create_user, name='users-create'),
+    path('users/<int:user_id>/', views.get_user_by_id, name='users-detail'),
+    path('users/<int:user_id>/update/', views.update_user_by_id, name='users-update'),
+    path('users/<int:user_id>/delete/', views.delete_user_by_id, name='users-delete'),
 
     # Password Reset
     path('password/reset/', views.password_reset_request, name='password-reset'),

@@ -10,12 +10,14 @@ from drf_spectacular.views import (
 )
 from apps.core.views import (
     build_info,
+    bookings_stub,
+    crm_stub,
+    iot_stub,
     ping,
-    system_routes_summary,
     server_time,
     system_environment,
     system_features,
-    system_uptime_note,
+    system_uptime,
 )
 
 urlpatterns = [
@@ -31,11 +33,10 @@ urlpatterns = [
         path('build-info/', build_info, name='build-info'),
         path('system/features/', system_features, name='system-features'),
         path('system/environment/', system_environment, name='system-environment'),
-        path('system/uptime-note/', system_uptime_note, name='system-uptime-note'),
-        path('system/routes-summary/', system_routes_summary, name='system-routes-summary'),
-        # path('bookings/', include('apps.booking.urls')),
-        # path('crm/', include('apps.crm.urls')),
-        # path('iot/', include('apps.iot.urls')),
+        path('system/uptime/', system_uptime, name='system-uptime'),
+        path('bookings/', bookings_stub, name='bookings-stub'),
+        path('crm/', crm_stub, name='crm-stub'),
+        path('iot/', iot_stub, name='iot-stub'),
     ])),
 
     # API Documentation

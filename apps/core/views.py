@@ -7,6 +7,8 @@ from django.conf import settings
 from datetime import datetime, timezone
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
+APP_STARTED_AT = datetime.now(timezone.utc)
+
 
 @extend_schema(
     tags=['Health'],
@@ -210,15 +212,16 @@ def system_environment(request):
 
 @extend_schema(
     tags=['System'],
-    summary='System Uptime Note',
-    description='Статичное сообщение о доступности сервиса для smoke-проверок',
+    summary='System Uptime',
+    description='Возвращает время старта процесса и uptime в секундах',
     responses={
         200: OpenApiResponse(
-            description='Service availability note',
+            description='System uptime payload',
             response={
                 'type': 'object',
                 'properties': {
-                    'note': {'type': 'string', 'example': 'service is operational'},
+                    'started_at': {'type': 'string', 'example': '2026-03-31T10:00:00Z'},
+                    'uptime_seconds': {'type': 'integer', 'example': 42},
                 },
             },
         ),
@@ -226,76 +229,72 @@ def system_environment(request):
 )
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def system_uptime_note(request):
+def system_uptime(request):
     """
-    GET /api/v1/system/uptime-note/
-    Минимальный системный endpoint со статичным сообщением о доступности сервиса.
+    GET /api/v1/system/uptime/
+    Возвращает UTC-время старта процесса приложения и uptime в секундах.
     """
-    return Response({'note': 'service is operational'}, status=status.HTTP_200_OK)
+    now_utc = datetime.now(timezone.utc)
+    uptime_seconds = max(int((now_utc - APP_STARTED_AT).total_seconds()), 0)
+    started_at = APP_STARTED_AT.isoformat().replace('+00:00', 'Z')
+    return Response(
+        {'started_at': started_at, 'uptime_seconds': uptime_seconds},
+        status=status.HTTP_200_OK,
+    )
 
 
 @extend_schema(
-    tags=['System'],
-    summary='System Routes Summary',
-    description='Возвращает ключевые API маршруты для быстрого smoke-тестирования',
-    responses={
-        200: OpenApiResponse(
-            description='Key API routes grouped by module',
-            response={
-                'type': 'object',
-                'properties': {
-                    'auth': {
-                        'type': 'array',
-                        'items': {'type': 'string'},
-                        'example': [
-                            '/api/v1/auth/register/',
-                            '/api/v1/auth/login/',
-                            '/api/v1/auth/me/',
-                        ],
-                    },
-                    'system': {
-                        'type': 'array',
-                        'items': {'type': 'string'},
-                        'example': [
-                            '/api/v1/build-info/',
-                            '/api/v1/system/features/',
-                            '/api/v1/system/environment/',
-                            '/api/v1/system/uptime-note/',
-                        ],
-                    },
-                    'health': {
-                        'type': 'array',
-                        'items': {'type': 'string'},
-                        'example': ['/api/v1/health/'],
-                    },
-                },
-            },
-        )
-    },
+    tags=['Stubs'],
+    summary='Bookings Stub',
+    description='Temporary empty endpoint for bookings module',
+    responses={200: OpenApiResponse(description='Empty bookings list')},
 )
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def system_routes_summary(request):
-    """
-    GET /api/v1/system/routes-summary/
-    Список ключевых API маршрутов для фронта и QA.
-    """
+def bookings_stub(request):
     return Response(
         {
-            'auth': [
-                '/api/v1/auth/register/',
-                '/api/v1/auth/login/',
-                '/api/v1/auth/me/',
-            ],
-            'system': [
-                '/api/v1/build-info/',
-                '/api/v1/system/features/',
-                '/api/v1/system/environment/',
-                '/api/v1/system/uptime-note/',
-            ],
-            'health': [
-                '/api/v1/health/',
-            ],
+            'items': [],
+            'count': 0,
+            'message': 'Bookings stub endpoint',
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['Stubs'],
+    summary='CRM Stub',
+    description='Temporary empty endpoint for CRM module',
+    responses={200: OpenApiResponse(description='Empty CRM payload')},
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def crm_stub(request):
+    return Response(
+        {
+            'items': [],
+            'count': 0,
+            'message': 'CRM stub endpoint',
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@extend_schema(
+    tags=['Stubs'],
+    summary='IoT Stub',
+    description='Temporary empty endpoint for IoT module',
+    responses={200: OpenApiResponse(description='Empty IoT payload')},
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def iot_stub(request):
+    return Response(
+        {
+            'items': [],
+            'count': 0,
+            'message': 'IoT stub endpoint',
         },
         status=status.HTTP_200_OK,
     )

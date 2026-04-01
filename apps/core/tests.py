@@ -5,15 +5,7 @@ from rest_framework import status
 from rest_framework.test import APIRequestFactory, APIClient
 from unittest.mock import patch
 
-from apps.core.views import (
-    build_info,
-    health_check,
-    ping,
-    system_environment,
-    system_features,
-    system_routes_summary,
-    system_uptime_note,
-)
+from apps.core.views import build_info, health_check, ping, system_environment, system_features, system_uptime
 
 
 class BuildInfoEndpointTests(SimpleTestCase):
@@ -152,37 +144,21 @@ class SystemEnvironmentEndpointTests(SimpleTestCase):
         )
 
 
-class SystemUptimeNoteEndpointTests(SimpleTestCase):
-    def test_system_uptime_note_returns_static_note(self):
-        path = reverse('system-uptime-note')
-        self.assertEqual(path, '/api/v1/system/uptime-note/')
+class SystemUptimeEndpointTests(SimpleTestCase):
+    def test_system_uptime_returns_started_at_and_uptime(self):
+        path = reverse('system-uptime')
+        self.assertEqual(path, '/api/v1/system/uptime/')
 
         match = resolve(path)
-        self.assertIs(match.func, system_uptime_note)
+        self.assertIs(match.func, system_uptime)
 
         request = APIRequestFactory().get(path)
-        response = system_uptime_note(request)
+        response = system_uptime(request)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data, {'note': 'service is operational'})
-
-
-class SystemRoutesSummaryEndpointTests(SimpleTestCase):
-    def test_system_routes_summary_returns_expected_structure(self):
-        path = reverse('system-routes-summary')
-        self.assertEqual(path, '/api/v1/system/routes-summary/')
-
-        match = resolve(path)
-        self.assertIs(match.func, system_routes_summary)
-
-        request = APIRequestFactory().get(path)
-        response = system_routes_summary(request)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('auth', response.data)
-        self.assertIn('system', response.data)
-        self.assertIn('health', response.data)
-
-        for key in ('auth', 'system', 'health'):
-            self.assertIsInstance(response.data[key], list)
-            self.assertTrue(all(isinstance(route, str) for route in response.data[key]))
+        self.assertIn('started_at', response.data)
+        self.assertIn('uptime_seconds', response.data)
+        self.assertIsInstance(response.data['started_at'], str)
+        self.assertTrue(response.data['started_at'].endswith('Z'))
+        self.assertIsInstance(response.data['uptime_seconds'], int)
+        self.assertGreaterEqual(response.data['uptime_seconds'], 0)

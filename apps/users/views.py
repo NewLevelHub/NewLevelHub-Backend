@@ -358,7 +358,11 @@ def list_users(request):
     summary='Create user',
     description='Создать пользователя (admin/supermentor only)',
     request=UserManagementSerializer,
-    responses={201: UserManagementSerializer, 400: OpenApiResponse(description='Validation error'), 403: OpenApiResponse(description='Forbidden')},
+    responses={
+        201: UserManagementSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        403: OpenApiResponse(description='Forbidden'),
+    },
 )
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -376,7 +380,11 @@ def create_user(request):
     tags=['Users'],
     summary='Get user by id',
     description='Получить пользователя по id (admin/supermentor only)',
-    responses={200: UserManagementSerializer, 403: OpenApiResponse(description='Forbidden'), 404: OpenApiResponse(description='Not found')},
+    responses={
+        200: UserManagementSerializer,
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Not found'),
+    },
 )
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -395,7 +403,12 @@ def get_user_by_id(request, user_id: int):
     summary='Update user by id',
     description='Обновить пользователя по id (admin/supermentor only)',
     request=UserManagementSerializer,
-    responses={200: UserManagementSerializer, 400: OpenApiResponse(description='Validation error'), 403: OpenApiResponse(description='Forbidden'), 404: OpenApiResponse(description='Not found')},
+    responses={
+        200: UserManagementSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Not found'),
+    },
 )
 @api_view(['PATCH', 'PUT'])
 @permission_classes([IsAuthenticated])
@@ -417,7 +430,11 @@ def update_user_by_id(request, user_id: int):
     tags=['Users'],
     summary='Delete user by id',
     description='Удалить пользователя по id (admin/supermentor only)',
-    responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Forbidden'), 404: OpenApiResponse(description='Not found')},
+    responses={
+        204: OpenApiResponse(description='Deleted'),
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Not found'),
+    },
 )
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])

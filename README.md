@@ -1,39 +1,105 @@
-# New Level Hub Backend (Clean Skeleton)
+# New Level Hub Backend
 
-Проект очищен до базового каркаса и готов к разработке с нуля.
+Backend API для веб-платформы бизнес-центра нового поколения в Астане.
 
-## Что оставили
+## Стек
 
-- Django + DRF проектную структуру
-- PostgreSQL конфигурацию
-- Docker и docker-compose (local/prod)
-- Nginx + Gunicorn для production
-- Swagger/OpenAPI инфраструктуру (`drf-spectacular`)
-- CI/CD пайплайны
+- **Django 4.2** + Django REST Framework
+- **PostgreSQL** — основная БД
+- **Redis + Celery** — фоновые задачи
+- **JWT** (`djangorestframework-simplejwt`) — авторизация
+- **drf-spectacular** — Swagger / OpenAPI
+- **Docker Compose** — local и production
+- **Nginx + Gunicorn** — production runtime
+- **GitHub Actions** — CI/CD
 
-## Что удалили
+## Структура модулей
 
-- Все старые API endpoint'ы
-- Прикладную бизнес-логику
-- Старые модели, сериалайзеры, views и тесты
+```
+apps/
+├── core/            Базовые модели, пермишны, миксины, health check
+├── users/           Пользователи, авторизация, профили
+├── companies/       Компании-арендаторы, тарифы, инвайты
+├── bookings/        Бронирование ресурсов (столы, залы, парковка, капсулы)
+├── crm/             Канбан-доски, задачи, комментарии, лейблы
+├── storage/         Файловое хранилище (личное + корпоративное)
+├── hr/              Отпуска, отгулы, онбординг
+├── access/          Гостевые пропуска, QR-коды, лог доступа
+├── services/        Карта здания, сервисные заявки, объявления
+├── notifications/   Уведомления + настройки доставки
+└── analytics/       Дашборды и аналитика
+```
 
 ## Быстрый старт
 
 ```bash
 cp .env.example .env
 docker-compose -f docker-compose.local.yml up --build
+
+# В контейнере:
+python manage.py makemigrations
+python manage.py migrate
+python manage.py createsuperuser
 ```
 
-После запуска:
-- Admin: `http://localhost:8000/admin/`
-- Swagger: `http://localhost:8000/api/docs/`
-- ReDoc: `http://localhost:8000/api/redoc/`
-- OpenAPI schema: `http://localhost:8000/api/schema/`
+## Доступ после запуска
 
-## Следующие шаги
+| Сервис | URL |
+|--------|-----|
+| Admin | http://localhost:8000/admin/ |
+| Swagger UI | http://localhost:8000/api/docs/ |
+| ReDoc | http://localhost:8000/api/redoc/ |
+| OpenAPI schema | http://localhost:8000/api/schema/ |
+| Health check | http://localhost:8000/api/v1/health/ |
 
-1. Создать первый доменный модуль (`python manage.py startapp <module_name>`).
-2. Описать модели и миграции.
-3. Добавить API (`urls.py`, `views.py`, `serializers.py`).
-4. Подключить роуты в `config/urls.py`.
-5. Добавить unit/integration тесты.
+## API Prefix
+
+Все бизнес-эндпоинты под `/api/v1/`:
+
+```
+/api/v1/auth/           — регистрация, логин, JWT
+/api/v1/companies/      — компании, инвайты, настройки
+/api/v1/bookings/       — ресурсы, бронирования
+/api/v1/crm/            — доски, задачи, лейблы
+/api/v1/storage/        — файлы, папки, шаринг
+/api/v1/hr/             — отпуска, онбординг
+/api/v1/access/         — гостевые пропуска, QR валидация
+/api/v1/services/       — карта, заявки, объявления
+/api/v1/notifications/  — уведомления, настройки
+/api/v1/analytics/      — дашборды
+```
+
+## Роли
+
+| Роль | Код | Описание |
+|------|-----|----------|
+| Суперадмин БЦ | `superadmin` | Полный контроль над платформой |
+| Админ компании | `company_admin` | Управляет своей компанией |
+| Сотрудник | `employee` | Работает в CRM, бронирует |
+| Гость коворкинга | `guest` | Только бронирование и базовые сервисы |
+
+## Мультитенанси
+
+Изоляция данных между компаниями реализована через `CompanyQuerySetMixin` — каждый queryset автоматически фильтруется по `company` текущего пользователя. Суперадмин видит всё.
+
+## Что реализовано в scaffold
+
+- Все модели с полями и связями
+- Сериализаторы для каждой модели
+- ViewSets с правильным роутингом и тегами Swagger
+- Пермишны (`IsSuperAdmin`, `IsCompanyAdmin`, `IsCompanyMember`, `IsOwnerOrAdmin`)
+- Django Admin регистрация всех моделей
+- Celery task-заготовки для фоновых операций
+- `TODO` комментарии в местах со сложной бизнес-логикой
+
+## Что нужно реализовать (TODO)
+
+Бизнес-логика помечена `TODO` в коде. Основные направления:
+
+- Валидация конфликтов при бронировании
+- Email-рассылка (verification, invite, password reset, notifications)
+- QR-код генерация для гостевых пропусков
+- Проверка тарифных лимитов (сотрудники, доски, хранилище)
+- WIP-лимиты в CRM-колонках
+- Автоматизации: напоминания, auto-cancel, recurring bookings
+- Аналитика: графики и экспорт в CSV/PDF

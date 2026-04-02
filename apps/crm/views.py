@@ -1,0 +1,145 @@
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, extend_schema_view
+
+from apps.core.permissions import IsCompanyMember
+from apps.core.mixins import CompanyQuerySetMixin, SetCompanyOnCreateMixin
+from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
+from .serializers import (
+    BoardSerializer, BoardListSerializer, ColumnSerializer,
+    LabelSerializer, TaskSerializer, TaskMoveSerializer,
+    ChecklistSerializer, ChecklistItemSerializer,
+    CommentSerializer, TaskAttachmentSerializer, TaskHistorySerializer,
+)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['CRM'], summary='List boards'),
+    retrieve=extend_schema(tags=['CRM'], summary='Get board with columns and tasks'),
+    create=extend_schema(tags=['CRM'], summary='Create board'),
+    partial_update=extend_schema(tags=['CRM'], summary='Update board'),
+    destroy=extend_schema(tags=['CRM'], summary='Delete board'),
+)
+class BoardViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+    serializer_class = BoardSerializer
+    permission_classes = [IsCompanyMember]
+
+    def get_queryset(self):
+        return Board.objects.filter(is_archived=False).prefetch_related('columns__tasks')
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return BoardListSerializer
+        return BoardSerializer
+
+    def perform_create(self, serializer):
+        board = serializer.save(company=self.request.user.company, created_by=self.request.user)
+        # Колонки по умолчанию
+        for i, name in enumerate(['К выполнению', 'В работе', 'Готово']):
+            Column.objects.create(board=board, name=name, position=i)
+
+    @extend_schema(tags=['CRM'], summary='Archive board')
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive(self, request, pk=None):
+        board = self.get_object()
+        board.is_archived = True
+        board.save(update_fields=['is_archived'])
+        return Response({'detail': 'Board archived'})
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['CRM'], summary='List columns of a board'),
+    create=extend_schema(tags=['CRM'], summary='Add column to board'),
+    partial_update=extend_schema(tags=['CRM'], summary='Update column'),
+    destroy=extend_schema(tags=['CRM'], summary='Delete column'),
+)
+class ColumnViewSet(viewsets.ModelViewSet):
+    serializer_class = ColumnSerializer
+    permission_classes = [IsCompanyMember]
+
+    def get_queryset(self):
+        return Column.objects.filter(board_id=self.kwargs.get('board_pk')).prefetch_related('tasks')
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['CRM'], summary='List tasks'),
+    retrieve=extend_schema(tags=['CRM'], summary='Get task details'),
+    create=extend_schema(tags=['CRM'], summary='Create task'),
+    partial_update=extend_schema(tags=['CRM'], summary='Update task'),
+    destroy=extend_schema(tags=['CRM'], summary='Delete task'),
+)
+class TaskViewSet(viewsets.ModelViewSet):
+    serializer_class = TaskSerializer
+    permission_classes = [IsCompanyMember]
+    search_fields = ['title']
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Task.objects.select_related('column__board', 'assignee')
+        if user.role == 'superadmin':
+            return qs
+        if user.company_id:
+            return qs.filter(column__board__company=user.company)
+        return qs.none()
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @extend_schema(tags=['CRM'], summary='Move task (drag & drop)')
+    @action(detail=True, methods=['post'], url_path='move')
+    def move(self, request, pk=None):
+        task = self.get_object()
+        serializer = TaskMoveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        old_col = task.column_id
+        task.column_id = serializer.validated_data['column_id']
+        task.position = serializer.validated_data['position']
+        task.save(update_fields=['column', 'position'])
+        # TODO: проверить WIP-лимит колонки, записать TaskHistory
+        TaskHistory.objects.create(
+            task=task, user=request.user, action='moved',
+            old_value=str(old_col), new_value=str(task.column_id),
+        )
+        return Response(TaskSerializer(task).data)
+
+    @extend_schema(tags=['CRM'], summary='My tasks across all boards')
+    @action(detail=False, methods=['get'], url_path='my')
+    def my_tasks(self, request):
+        qs = self.get_queryset().filter(assignee=request.user, is_archived=False)
+        serializer = TaskSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(tags=['CRM'], summary='Task history')
+    @action(detail=True, methods=['get'], url_path='history')
+    def history(self, request, pk=None):
+        task = self.get_object()
+        return Response(TaskHistorySerializer(task.history.all(), many=True).data)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['CRM'], summary='List comments'),
+    create=extend_schema(tags=['CRM'], summary='Add comment'),
+)
+class CommentViewSet(viewsets.ModelViewSet):
+    serializer_class = CommentSerializer
+    permission_classes = [IsCompanyMember]
+    http_method_names = ['get', 'post', 'delete']
+
+    def get_queryset(self):
+        return Comment.objects.filter(task_id=self.kwargs.get('task_pk'))
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user, task_id=self.kwargs.get('task_pk'))
+        # TODO: уведомление assignee задачи
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['CRM'], summary='List labels'),
+    create=extend_schema(tags=['CRM'], summary='Create label'),
+)
+class LabelViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+    serializer_class = LabelSerializer
+    permission_classes = [IsCompanyMember]
+    queryset = Label.objects.all()

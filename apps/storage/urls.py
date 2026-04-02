@@ -1,0 +1,13 @@
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from . import views
+
+router = DefaultRouter()
+router.register('folders', views.FolderViewSet, basename='folder')
+router.register('files', views.FileViewSet, basename='file')
+router.register('shares', views.FileShareViewSet, basename='file-share')
+
+urlpatterns = [
+    path('', include(router.urls)),
+    path('usage/', views.storage_usage, name='storage-usage'),
+]

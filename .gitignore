@@ -1,47 +1,88 @@
+# ------------------------------
 # Python
+# ------------------------------
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-__pycache__/
-*.egg-info/
-dist/
-build/
+.python-version
 
+# Packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# ------------------------------
 # Django
+# ------------------------------
 *.log
+logs/
 db.sqlite3
 db.sqlite3-journal
 media/
 staticfiles/
 
-# Environment
-.env
-.env.local
-.env.production
-*.env
+# Optional local static dir (can be committed if needed)
+# static/
 
-# IDE
+# ------------------------------
+# Environment / secrets
+# ------------------------------
+.env
+.env.*
+*.env
+!.env.example
+
+# ------------------------------
+# Testing / quality
+# ------------------------------
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# ------------------------------
+# IDE / editor
+# ------------------------------
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
 
-# OS
+# ------------------------------
+# OS files
+# ------------------------------
 .DS_Store
 Thumbs.db
 
-# Docker
+# ------------------------------
+# Docker / local runtime
+# ------------------------------
 *.pid
 *.seed
 *.pid.lock
+.docker/
 
-# Testing
-.coverage
-htmlcov/
-.pytest_cache/
-.tox/
-
-# Backup
+# ------------------------------
+# Backups
+# ------------------------------
 *.bak
+*.tmp

@@ -1,6 +1,8 @@
-"""Base settings for a clean NewLevelHub backend skeleton."""
+"""Base settings for NewLevelHub project."""
 from pathlib import Path
+from datetime import timedelta
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,9 +17,26 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Third-party
     'rest_framework',
+    'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'drf_spectacular',
+    'django_filters',
+    'django_celery_beat',
+    # Local apps
+    'apps.core',
+    'apps.users',
+    'apps.companies',
+    'apps.bookings',
+    'apps.crm',
+    'apps.storage',
+    'apps.hr',
+    'apps.access',
+    'apps.services',
+    'apps.notifications',
+    'apps.analytics',
 ]
 
 MIDDLEWARE = [
@@ -63,6 +82,8 @@ DATABASES = {
     }
 }
 
+AUTH_USER_MODEL = 'users.User'
+
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 8}},
@@ -71,21 +92,25 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = 'en-us'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'Asia/Almaty'
 USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
-
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'apps.core.pagination.StandardPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
@@ -94,19 +119,70 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.FormParser',
         'rest_framework.parsers.MultiPartParser',
     ],
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'EXCEPTION_HANDLER': 'apps.core.exceptions.custom_exception_handler',
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=int(os.getenv('ACCESS_TOKEN_LIFETIME_MINUTES', 60))),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=int(os.getenv('REFRESH_TOKEN_LIFETIME_DAYS', 7))),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
 }
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'New Level Hub API',
-    'DESCRIPTION': 'Clean backend skeleton. API modules are planned but not implemented yet.',
+    'DESCRIPTION': 'Backend API для веб-платформы бизнес-центра нового поколения в Астане',
     'VERSION': '0.1.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'SCHEMA_PATH_PREFIX': '/api/v1/',
+    'COMPONENT_SPLIT_REQUEST': True,
     'SERVE_PERMISSIONS': ['rest_framework.permissions.AllowAny'],
+    'TAGS': [
+        {'name': 'Auth', 'description': 'Регистрация, вход, JWT-токены'},
+        {'name': 'Users', 'description': 'Профили пользователей'},
+        {'name': 'Companies', 'description': 'Управление компаниями и мультитенанси'},
+        {'name': 'Bookings', 'description': 'Бронирование ресурсов БЦ'},
+        {'name': 'CRM', 'description': 'Канбан-доски, задачи, проекты'},
+        {'name': 'Storage', 'description': 'Файловое хранилище'},
+        {'name': 'HR', 'description': 'Отпуска, отгулы, онбординг'},
+        {'name': 'Access', 'description': 'Гостевые пропуска и контроль доступа'},
+        {'name': 'Services', 'description': 'Сервисы здания — карта, заявки, объявления'},
+        {'name': 'Notifications', 'description': 'Уведомления'},
+        {'name': 'Analytics', 'description': 'Аналитика и отчёты'},
+        {'name': 'System', 'description': 'Health check и системные эндпоинты'},
+    ],
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 CORS_ALLOW_CREDENTIALS = True
+
+# Celery
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Email
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+
+# File upload limits
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False

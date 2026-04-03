@@ -3,7 +3,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Sum
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyMember
 from .models import Folder, File, FileShare
@@ -11,10 +11,32 @@ from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, 
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Storage'], summary='List folders'),
-    create=extend_schema(tags=['Storage'], summary='Create folder'),
-    partial_update=extend_schema(tags=['Storage'], summary='Rename / move folder'),
-    destroy=extend_schema(tags=['Storage'], summary='Delete folder'),
+    list=extend_schema(
+        tags=['Storage'],
+        summary='List folders',
+        responses={200: FolderSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Storage'],
+        summary='Create folder',
+        request=FolderSerializer,
+        responses={
+            201: FolderSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['Storage'],
+        summary='Rename / move folder',
+        request=FolderSerializer,
+        responses={200: FolderSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
+    destroy=extend_schema(
+        tags=['Storage'],
+        summary='Delete folder',
+        responses={204: OpenApiResponse(description='Deleted'), 401: OpenApiResponse(description='Not authenticated')},
+    ),
 )
 class FolderViewSet(viewsets.ModelViewSet):
     serializer_class = FolderSerializer
@@ -31,9 +53,26 @@ class FolderViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Storage'], summary='List files'),
-    create=extend_schema(tags=['Storage'], summary='Upload file'),
-    destroy=extend_schema(tags=['Storage'], summary='Delete file (soft)'),
+    list=extend_schema(
+        tags=['Storage'],
+        summary='List files',
+        responses={200: FileSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Storage'],
+        summary='Upload file',
+        request=FileSerializer,
+        responses={
+            201: FileSerializer,
+            400: OpenApiResponse(description='Validation error or quota exceeded'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['Storage'],
+        summary='Delete file (soft)',
+        responses={204: OpenApiResponse(description='Deleted'), 401: OpenApiResponse(description='Not authenticated')},
+    ),
 )
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
@@ -61,9 +100,26 @@ class FileViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Storage'], summary='List file shares'),
-    create=extend_schema(tags=['Storage'], summary='Share file'),
-    destroy=extend_schema(tags=['Storage'], summary='Revoke share'),
+    list=extend_schema(
+        tags=['Storage'],
+        summary='List file shares',
+        responses={200: FileShareSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Storage'],
+        summary='Share file',
+        request=FileShareSerializer,
+        responses={
+            201: FileShareSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['Storage'],
+        summary='Revoke share',
+        responses={204: OpenApiResponse(description='Share revoked'), 401: OpenApiResponse(description='Not authenticated')},
+    ),
 )
 class FileShareViewSet(viewsets.ModelViewSet):
     serializer_class = FileShareSerializer
@@ -77,7 +133,14 @@ class FileShareViewSet(viewsets.ModelViewSet):
         serializer.save(shared_by=self.request.user)
 
 
-@extend_schema(tags=['Storage'], summary='Get storage usage for current user / company')
+@extend_schema(
+    tags=['Storage'],
+    summary='Get storage usage for current user / company',
+    responses={
+        200: StorageUsageSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def storage_usage(request):

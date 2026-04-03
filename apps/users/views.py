@@ -4,7 +4,8 @@ from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
+import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
 from .models import User
@@ -29,7 +30,18 @@ def _get_tokens(user):
 
 # ── Auth ──────────────────────────────────────────────────────────────
 
-@extend_schema(tags=['Auth'], summary='Register guest account')
+@extend_schema(
+    tags=['Auth'],
+    summary='Register guest account',
+    request=UserRegistrationSerializer,
+    responses={
+        201: OpenApiResponse(
+            response=UserProfileSerializer,
+            description='User created. Returns profile and JWT tokens.',
+        ),
+        400: OpenApiResponse(description='Validation error'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
@@ -43,7 +55,18 @@ def register(request):
     )
 
 
-@extend_schema(tags=['Auth'], summary='Register via invite link')
+@extend_schema(
+    tags=['Auth'],
+    summary='Register via invite link',
+    request=InviteRegistrationSerializer,
+    responses={
+        201: OpenApiResponse(
+            response=UserProfileSerializer,
+            description='User registered via invite. Returns profile and JWT tokens.',
+        ),
+        400: OpenApiResponse(description='Validation error or invalid invite token'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_by_invite(request):
@@ -57,7 +80,18 @@ def register_by_invite(request):
     )
 
 
-@extend_schema(tags=['Auth'], summary='Login')
+@extend_schema(
+    tags=['Auth'],
+    summary='Login',
+    request=LoginSerializer,
+    responses={
+        200: OpenApiResponse(
+            response=UserProfileSerializer,
+            description='Login successful. Returns profile and JWT tokens (access + refresh).',
+        ),
+        400: OpenApiResponse(description='Invalid credentials or inactive account'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
@@ -67,7 +101,19 @@ def login(request):
     return Response({'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)})
 
 
-@extend_schema(tags=['Auth'], summary='Logout (blacklist refresh token)')
+@extend_schema(
+    tags=['Auth'],
+    summary='Logout (blacklist refresh token)',
+    request=inline_serializer(
+        name='LogoutRequest',
+        fields={'refresh': fields.CharField()},
+    ),
+    responses={
+        200: OpenApiResponse(description='Logged out successfully'),
+        400: OpenApiResponse(description='Missing or invalid refresh token'),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout(request):
@@ -82,7 +128,15 @@ def logout(request):
     return Response({'detail': 'Logged out'})
 
 
-@extend_schema(tags=['Auth'], summary='Verify email')
+@extend_schema(
+    tags=['Auth'],
+    summary='Verify email',
+    request=EmailVerifySerializer,
+    responses={
+        200: OpenApiResponse(description='Email verified successfully'),
+        400: OpenApiResponse(description='Invalid or expired token'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_email(request):
@@ -92,7 +146,15 @@ def verify_email(request):
     return Response({'detail': 'Email verified'})
 
 
-@extend_schema(tags=['Auth'], summary='Request password reset')
+@extend_schema(
+    tags=['Auth'],
+    summary='Request password reset',
+    request=PasswordResetRequestSerializer,
+    responses={
+        200: OpenApiResponse(description='Reset link sent if account exists'),
+        400: OpenApiResponse(description='Validation error'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def password_reset_request(request):
@@ -102,7 +164,15 @@ def password_reset_request(request):
     return Response({'detail': 'If an account exists, a reset link has been sent'})
 
 
-@extend_schema(tags=['Auth'], summary='Confirm password reset')
+@extend_schema(
+    tags=['Auth'],
+    summary='Confirm password reset',
+    request=PasswordResetConfirmSerializer,
+    responses={
+        200: OpenApiResponse(description='Password has been reset'),
+        400: OpenApiResponse(description='Invalid or expired token'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def password_reset_confirm(request):
@@ -114,14 +184,30 @@ def password_reset_confirm(request):
 
 # ── Profile ───────────────────────────────────────────────────────────
 
-@extend_schema(tags=['Users'], summary='Get current user profile')
+@extend_schema(
+    tags=['Users'],
+    summary='Get current user profile',
+    responses={
+        200: UserProfileSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def me(request):
     return Response(UserProfileSerializer(request.user).data)
 
 
-@extend_schema(tags=['Users'], summary='Update current user profile')
+@extend_schema(
+    tags=['Users'],
+    summary='Update current user profile',
+    request=UserProfileUpdateSerializer,
+    responses={
+        200: UserProfileSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def update_profile(request):
@@ -131,7 +217,16 @@ def update_profile(request):
     return Response(UserProfileSerializer(request.user).data)
 
 
-@extend_schema(tags=['Users'], summary='Change password')
+@extend_schema(
+    tags=['Users'],
+    summary='Change password',
+    request=ChangePasswordSerializer,
+    responses={
+        200: OpenApiResponse(description='Password changed successfully'),
+        400: OpenApiResponse(description='Current password incorrect or validation error'),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def change_password(request):
@@ -144,7 +239,15 @@ def change_password(request):
 
 # ── Admin: user management ────────────────────────────────────────────
 
-@extend_schema(tags=['Users'], summary='List all users (superadmin)')
+@extend_schema(
+    tags=['Users'],
+    summary='List all users (superadmin)',
+    responses={
+        200: UserListSerializer(many=True),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+    },
+)
 class UserListView(ListAPIView):
     queryset = User.objects.all()
     serializer_class = UserListSerializer
@@ -154,7 +257,16 @@ class UserListView(ListAPIView):
     ordering_fields = ['date_joined', 'last_login', 'email']
 
 
-@extend_schema(tags=['Users'], summary='Get / update user by id (superadmin)')
+@extend_schema(
+    tags=['Users'],
+    summary='Get / update user by id (superadmin)',
+    responses={
+        200: UserProfileSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+        404: OpenApiResponse(description='User not found'),
+    },
+)
 class UserDetailView(RetrieveUpdateAPIView):
     queryset = User.objects.all()
     serializer_class = UserProfileSerializer

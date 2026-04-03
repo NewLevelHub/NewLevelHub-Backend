@@ -4,7 +4,7 @@ from django.utils import timezone
 from django.db.models import Count, Avg, F
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
 from apps.users.models import User
@@ -15,10 +15,18 @@ from apps.services.models import ServiceRequest
 from apps.crm.models import Task
 from apps.storage.models import File
 
-from .serializers import SuperAdminDashboardSerializer, CompanyAdminDashboardSerializer
+from .serializers import SuperAdminDashboardSerializer, CompanyAdminDashboardSerializer, ResourceUsageSerializer
 
 
-@extend_schema(tags=['Analytics'], summary='Superadmin dashboard')
+@extend_schema(
+    tags=['Analytics'],
+    summary='Superadmin dashboard',
+    responses={
+        200: SuperAdminDashboardSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsSuperAdmin])
 def superadmin_dashboard(request):
@@ -38,7 +46,16 @@ def superadmin_dashboard(request):
     return Response(SuperAdminDashboardSerializer(data).data)
 
 
-@extend_schema(tags=['Analytics'], summary='Company admin dashboard')
+@extend_schema(
+    tags=['Analytics'],
+    summary='Company admin dashboard',
+    responses={
+        200: CompanyAdminDashboardSerializer,
+        400: OpenApiResponse(description='No company assigned'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Company admin only'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsCompanyAdmin])
 def company_dashboard(request):
@@ -70,7 +87,15 @@ def company_dashboard(request):
     return Response(CompanyAdminDashboardSerializer(data).data)
 
 
-@extend_schema(tags=['Analytics'], summary='Resource usage stats (superadmin)')
+@extend_schema(
+    tags=['Analytics'],
+    summary='Resource usage stats (superadmin)',
+    responses={
+        200: ResourceUsageSerializer(many=True),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+    },
+)
 @api_view(['GET'])
 @permission_classes([IsSuperAdmin])
 def resource_usage(request):

@@ -14,7 +14,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'reviewed_by', 'review_comment', 'reviewed_at',
             'created_at',
         ]
-        read_only_fields = ['id', 'user', 'company', 'status', 'reviewed_by', 'review_comment', 'reviewed_at', 'created_at']
+        read_only_fields = [
+            'id', 'user', 'company', 'status',
+            'reviewed_by', 'review_comment', 'reviewed_at', 'created_at',
+        ]
 
 
 class LeaveRequestReviewSerializer(serializers.Serializer):

@@ -1,17 +1,15 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyMember
 from apps.core.mixins import CompanyQuerySetMixin, SetCompanyOnCreateMixin
-from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
+from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer,
     LabelSerializer, TaskSerializer, TaskMoveSerializer,
-    ChecklistSerializer, ChecklistItemSerializer,
-    CommentSerializer, TaskAttachmentSerializer, TaskHistorySerializer,
+    CommentSerializer, TaskHistorySerializer,
 )
 
 

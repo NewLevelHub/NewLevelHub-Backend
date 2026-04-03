@@ -1,10 +1,10 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
+from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
 from apps.users.models import User
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
@@ -224,6 +224,6 @@ class InvitationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
-        invitation = self.get_object()
+        self.get_object()
         # TODO: отправить повторный email
         return Response({'detail': 'Invitation resent'})

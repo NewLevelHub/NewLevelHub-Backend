@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
+from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 
 class MapPointSerializer(serializers.ModelSerializer):

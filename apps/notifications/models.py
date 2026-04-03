@@ -47,7 +47,10 @@ class Notification(TimeStampedModel):
 
 
 class NotificationPreference(TimeStampedModel):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notification_preferences')
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='notification_preferences',
+    )
 
     booking_in_app = models.BooleanField(default=True)
     booking_email = models.BooleanField(default=True)

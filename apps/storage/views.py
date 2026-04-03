@@ -1,11 +1,9 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework import viewsets
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
-
-from apps.core.permissions import IsCompanyMember
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
 
@@ -118,7 +116,10 @@ class FileViewSet(viewsets.ModelViewSet):
     destroy=extend_schema(
         tags=['Storage'],
         summary='Revoke share',
-        responses={204: OpenApiResponse(description='Share revoked'), 401: OpenApiResponse(description='Not authenticated')},
+        responses={
+            204: OpenApiResponse(description='Share revoked'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
     ),
 )
 class FileShareViewSet(viewsets.ModelViewSet):
@@ -127,7 +128,10 @@ class FileShareViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'delete']
 
     def get_queryset(self):
-        return FileShare.objects.filter(shared_by=self.request.user) | FileShare.objects.filter(shared_with=self.request.user)
+        return (
+            FileShare.objects.filter(shared_by=self.request.user)
+            | FileShare.objects.filter(shared_with=self.request.user)
+        )
 
     def perform_create(self, serializer):
         serializer.save(shared_by=self.request.user)

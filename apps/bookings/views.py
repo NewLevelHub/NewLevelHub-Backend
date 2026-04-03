@@ -6,7 +6,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
-from .models import Resource, Booking, RecurringBooking, ResourceBlock
+from .models import Resource, Booking, RecurringBooking
 from .serializers import (
     ResourceSerializer,
     ResourceListSerializer,

@@ -3,7 +3,8 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
@@ -17,11 +18,37 @@ from .serializers import (
 # ── Карта здания ──────────────────────────────────────────────────────
 
 @extend_schema_view(
-    list=extend_schema(tags=['Services'], summary='List floors'),
-    retrieve=extend_schema(tags=['Services'], summary='Get floor with map points'),
-    create=extend_schema(tags=['Services'], summary='Create floor (superadmin)'),
-    partial_update=extend_schema(tags=['Services'], summary='Update floor'),
-    destroy=extend_schema(tags=['Services'], summary='Delete floor'),
+    list=extend_schema(
+        tags=['Services'],
+        summary='List floors',
+        responses={200: FloorSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=['Services'],
+        summary='Get floor with map points',
+        responses={200: FloorSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create floor (superadmin)',
+        request=FloorSerializer,
+        responses={
+            201: FloorSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['Services'],
+        summary='Update floor',
+        request=FloorSerializer,
+        responses={200: FloorSerializer, 403: OpenApiResponse(description='Superadmin only')},
+    ),
+    destroy=extend_schema(
+        tags=['Services'],
+        summary='Delete floor',
+        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+    ),
 )
 class FloorViewSet(viewsets.ModelViewSet):
     queryset = Floor.objects.prefetch_related('points')
@@ -34,10 +61,32 @@ class FloorViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Services'], summary='List map points'),
-    create=extend_schema(tags=['Services'], summary='Create map point (superadmin)'),
-    partial_update=extend_schema(tags=['Services'], summary='Update map point'),
-    destroy=extend_schema(tags=['Services'], summary='Delete map point'),
+    list=extend_schema(
+        tags=['Services'],
+        summary='List map points',
+        responses={200: MapPointSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create map point (superadmin)',
+        request=MapPointSerializer,
+        responses={
+            201: MapPointSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['Services'],
+        summary='Update map point',
+        request=MapPointSerializer,
+        responses={200: MapPointSerializer, 403: OpenApiResponse(description='Superadmin only')},
+    ),
+    destroy=extend_schema(
+        tags=['Services'],
+        summary='Delete map point',
+        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+    ),
 )
 class MapPointViewSet(viewsets.ModelViewSet):
     queryset = MapPoint.objects.all()
@@ -52,9 +101,26 @@ class MapPointViewSet(viewsets.ModelViewSet):
 # ── Сервисные заявки ──────────────────────────────────────────────────
 
 @extend_schema_view(
-    list=extend_schema(tags=['Services'], summary='List service requests'),
-    create=extend_schema(tags=['Services'], summary='Create service request'),
-    retrieve=extend_schema(tags=['Services'], summary='Get service request details'),
+    list=extend_schema(
+        tags=['Services'],
+        summary='List service requests',
+        responses={200: ServiceRequestSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create service request',
+        request=ServiceRequestSerializer,
+        responses={
+            201: ServiceRequestSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['Services'],
+        summary='Get service request details',
+        responses={200: ServiceRequestSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
 )
 class ServiceRequestViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceRequestSerializer
@@ -70,7 +136,18 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
-    @extend_schema(tags=['Services'], summary='Quick cleaning request')
+    @extend_schema(
+        tags=['Services'],
+        summary='Quick cleaning request',
+        request=inline_serializer(
+            name='QuickCleaningRequest',
+            fields={'floor': fields.IntegerField(required=False)},
+        ),
+        responses={
+            201: ServiceRequestSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
     @action(detail=False, methods=['post'], url_path='cleaning')
     def quick_cleaning(self, request):
         sr = ServiceRequest.objects.create(
@@ -82,7 +159,17 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         )
         return Response(ServiceRequestSerializer(sr).data, status=status.HTTP_201_CREATED)
 
-    @extend_schema(tags=['Services'], summary='Update request status (superadmin)')
+    @extend_schema(
+        tags=['Services'],
+        summary='Update request status (superadmin)',
+        request=ServiceRequestUpdateSerializer,
+        responses={
+            200: ServiceRequestSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['patch'], url_path='update-status', permission_classes=[IsSuperAdmin])
     def update_status(self, request, pk=None):
         sr = self.get_object()
@@ -95,7 +182,20 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         # TODO: уведомить пользователя о смене статуса
         return Response(ServiceRequestSerializer(sr).data)
 
-    @extend_schema(tags=['Services'], summary='Rate completed request')
+    @extend_schema(
+        tags=['Services'],
+        summary='Rate completed request',
+        request=inline_serializer(
+            name='RateServiceRequest',
+            fields={'rating': fields.IntegerField(min_value=1, max_value=5)},
+        ),
+        responses={
+            200: OpenApiResponse(description='Rating saved'),
+            400: OpenApiResponse(description='Rating must be 1-5'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='rate')
     def rate(self, request, pk=None):
         sr = self.get_object()
@@ -110,9 +210,26 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
 # ── Объявления ────────────────────────────────────────────────────────
 
 @extend_schema_view(
-    list=extend_schema(tags=['Services'], summary='List announcements'),
-    create=extend_schema(tags=['Services'], summary='Create announcement'),
-    retrieve=extend_schema(tags=['Services'], summary='Get announcement details'),
+    list=extend_schema(
+        tags=['Services'],
+        summary='List announcements',
+        responses={200: AnnouncementSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create announcement',
+        request=AnnouncementSerializer,
+        responses={
+            201: AnnouncementSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['Services'],
+        summary='Get announcement details',
+        responses={200: AnnouncementSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
 )
 class AnnouncementViewSet(viewsets.ModelViewSet):
     serializer_class = AnnouncementSerializer
@@ -135,7 +252,16 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         serializer.save(author=self.request.user)
         # TODO: если notify_email=True — Celery task рассылки
 
-    @extend_schema(tags=['Services'], summary='Mark announcement as read')
+    @extend_schema(
+        tags=['Services'],
+        summary='Mark announcement as read',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Marked as read'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='read')
     def mark_read(self, request, pk=None):
         announcement = self.get_object()

@@ -2,7 +2,8 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
 from .models import GuestPass, AccessLog
@@ -12,9 +13,26 @@ from .serializers import (
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Access'], summary='List guest passes'),
-    retrieve=extend_schema(tags=['Access'], summary='Get guest pass details'),
-    create=extend_schema(tags=['Access'], summary='Create guest pass'),
+    list=extend_schema(
+        tags=['Access'],
+        summary='List guest passes',
+        responses={200: GuestPassSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=['Access'],
+        summary='Get guest pass details',
+        responses={200: GuestPassSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
+    create=extend_schema(
+        tags=['Access'],
+        summary='Create guest pass',
+        request=GuestPassCreateSerializer,
+        responses={
+            201: GuestPassSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
 )
 class GuestPassViewSet(viewsets.ModelViewSet):
     serializer_class = GuestPassSerializer
@@ -35,7 +53,16 @@ class GuestPassViewSet(viewsets.ModelViewSet):
             return GuestPassCreateSerializer
         return GuestPassSerializer
 
-    @extend_schema(tags=['Access'], summary='Revoke guest pass')
+    @extend_schema(
+        tags=['Access'],
+        summary='Revoke guest pass',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Pass revoked'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='revoke')
     def revoke(self, request, pk=None):
         guest_pass = self.get_object()
@@ -43,14 +70,41 @@ class GuestPassViewSet(viewsets.ModelViewSet):
         guest_pass.save(update_fields=['status'])
         return Response({'detail': 'Pass revoked'})
 
-    @extend_schema(tags=['Access'], summary='Resend QR to guest email')
+    @extend_schema(
+        tags=['Access'],
+        summary='Resend QR to guest email',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='QR code resent'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
         # TODO: отправить QR-код повторно на email гостя
         return Response({'detail': 'QR code resent'})
 
 
-@extend_schema(tags=['Access'], summary='Validate QR code (reception desk)')
+@extend_schema(
+    tags=['Access'],
+    summary='Validate QR code (reception desk)',
+    request=GuestPassValidateSerializer,
+    responses={
+        200: inline_serializer(
+            name='QRValidateSuccess',
+            fields={
+                'valid': fields.BooleanField(),
+                'guest_name': fields.CharField(),
+                'visit_purpose': fields.CharField(),
+                'created_by': fields.CharField(),
+            },
+        ),
+        400: OpenApiResponse(description='Invalid or missing QR code'),
+        401: OpenApiResponse(description='Not authenticated'),
+        404: OpenApiResponse(description='Pass not found'),
+    },
+)
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def validate_qr(request):
@@ -85,8 +139,21 @@ def validate_qr(request):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['Access'], summary='List access logs'),
-    create=extend_schema(tags=['Access'], summary='Create manual access log entry'),
+    list=extend_schema(
+        tags=['Access'],
+        summary='List access logs',
+        responses={200: AccessLogSerializer(many=True), 403: OpenApiResponse(description='Superadmin only')},
+    ),
+    create=extend_schema(
+        tags=['Access'],
+        summary='Create manual access log entry',
+        request=AccessLogSerializer,
+        responses={
+            201: AccessLogSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    ),
 )
 class AccessLogViewSet(viewsets.ModelViewSet):
     serializer_class = AccessLogSerializer

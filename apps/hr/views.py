@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyQuerySetMixin
@@ -15,9 +15,27 @@ from .serializers import (
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['HR'], summary='List leave requests'),
-    create=extend_schema(tags=['HR'], summary='Submit leave request'),
-    retrieve=extend_schema(tags=['HR'], summary='Get leave request details'),
+    list=extend_schema(
+        tags=['HR'],
+        summary='List leave requests',
+        responses={200: LeaveRequestSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['HR'],
+        summary='Submit leave request',
+        request=LeaveRequestSerializer,
+        responses={
+            201: LeaveRequestSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company members only'),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['HR'],
+        summary='Get leave request details',
+        responses={200: LeaveRequestSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
 )
 class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
@@ -31,7 +49,18 @@ class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)
 
-    @extend_schema(tags=['HR'], summary='Approve / reject leave request')
+    @extend_schema(
+        tags=['HR'],
+        summary='Approve / reject leave request',
+        request=LeaveRequestReviewSerializer,
+        responses={
+            200: LeaveRequestSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='review', permission_classes=[IsCompanyAdmin])
     def review(self, request, pk=None):
         leave = self.get_object()
@@ -45,7 +74,14 @@ class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
         # TODO: если approved — обновить LeaveBalance, добавить событие в календарь
         return Response(LeaveRequestSerializer(leave).data)
 
-    @extend_schema(tags=['HR'], summary='My leave balance')
+    @extend_schema(
+        tags=['HR'],
+        summary='My leave balance',
+        responses={
+            200: LeaveBalanceSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
     @action(detail=False, methods=['get'], url_path='balance')
     def balance(self, request):
         bal, _ = LeaveBalance.objects.get_or_create(user=request.user)
@@ -53,9 +89,27 @@ class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['HR'], summary='List onboarding templates'),
-    create=extend_schema(tags=['HR'], summary='Create onboarding template'),
-    partial_update=extend_schema(tags=['HR'], summary='Update onboarding template'),
+    list=extend_schema(
+        tags=['HR'],
+        summary='List onboarding templates',
+        responses={200: OnboardingTemplateSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['HR'],
+        summary='Create onboarding template',
+        request=OnboardingTemplateSerializer,
+        responses={
+            201: OnboardingTemplateSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company admin only'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['HR'],
+        summary='Update onboarding template',
+        request=OnboardingTemplateSerializer,
+        responses={200: OnboardingTemplateSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
 )
 class OnboardingTemplateViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
     serializer_class = OnboardingTemplateSerializer
@@ -69,7 +123,11 @@ class OnboardingTemplateViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['HR'], summary='My onboarding progress'),
+    list=extend_schema(
+        tags=['HR'],
+        summary='My onboarding progress',
+        responses={200: UserOnboardingProgressSerializer(many=True)},
+    ),
 )
 class UserOnboardingProgressViewSet(viewsets.ModelViewSet):
     serializer_class = UserOnboardingProgressSerializer
@@ -79,7 +137,16 @@ class UserOnboardingProgressViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return UserOnboardingProgress.objects.filter(user=self.request.user)
 
-    @extend_schema(tags=['HR'], summary='Mark onboarding step as completed')
+    @extend_schema(
+        tags=['HR'],
+        summary='Mark onboarding step as completed',
+        request=None,
+        responses={
+            200: UserOnboardingProgressSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='complete')
     def complete_step(self, request, pk=None):
         progress = self.get_object()

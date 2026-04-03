@@ -2,7 +2,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyMember
 from apps.core.mixins import CompanyQuerySetMixin, SetCompanyOnCreateMixin
@@ -16,11 +16,37 @@ from .serializers import (
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['CRM'], summary='List boards'),
-    retrieve=extend_schema(tags=['CRM'], summary='Get board with columns and tasks'),
-    create=extend_schema(tags=['CRM'], summary='Create board'),
-    partial_update=extend_schema(tags=['CRM'], summary='Update board'),
-    destroy=extend_schema(tags=['CRM'], summary='Delete board'),
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List boards',
+        responses={200: BoardListSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=['CRM'],
+        summary='Get board with columns and tasks',
+        responses={200: BoardSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Create board',
+        request=BoardSerializer,
+        responses={
+            201: BoardSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['CRM'],
+        summary='Update board',
+        request=BoardSerializer,
+        responses={200: BoardSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete board',
+        responses={204: OpenApiResponse(description='Deleted')},
+    ),
 )
 class BoardViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BoardSerializer
@@ -40,7 +66,16 @@ class BoardViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.Model
         for i, name in enumerate(['К выполнению', 'В работе', 'Готово']):
             Column.objects.create(board=board, name=name, position=i)
 
-    @extend_schema(tags=['CRM'], summary='Archive board')
+    @extend_schema(
+        tags=['CRM'],
+        summary='Archive board',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Board archived'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
         board = self.get_object()
@@ -50,10 +85,28 @@ class BoardViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.Model
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['CRM'], summary='List columns of a board'),
-    create=extend_schema(tags=['CRM'], summary='Add column to board'),
-    partial_update=extend_schema(tags=['CRM'], summary='Update column'),
-    destroy=extend_schema(tags=['CRM'], summary='Delete column'),
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List columns of a board',
+        responses={200: ColumnSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Add column to board',
+        request=ColumnSerializer,
+        responses={201: ColumnSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
+    partial_update=extend_schema(
+        tags=['CRM'],
+        summary='Update column',
+        request=ColumnSerializer,
+        responses={200: ColumnSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete column',
+        responses={204: OpenApiResponse(description='Deleted')},
+    ),
 )
 class ColumnViewSet(viewsets.ModelViewSet):
     serializer_class = ColumnSerializer
@@ -64,11 +117,37 @@ class ColumnViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['CRM'], summary='List tasks'),
-    retrieve=extend_schema(tags=['CRM'], summary='Get task details'),
-    create=extend_schema(tags=['CRM'], summary='Create task'),
-    partial_update=extend_schema(tags=['CRM'], summary='Update task'),
-    destroy=extend_schema(tags=['CRM'], summary='Delete task'),
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List tasks',
+        responses={200: TaskSerializer(many=True)},
+    ),
+    retrieve=extend_schema(
+        tags=['CRM'],
+        summary='Get task details',
+        responses={200: TaskSerializer, 404: OpenApiResponse(description='Not found')},
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Create task',
+        request=TaskSerializer,
+        responses={
+            201: TaskSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['CRM'],
+        summary='Update task',
+        request=TaskSerializer,
+        responses={200: TaskSerializer, 400: OpenApiResponse(description='Validation error')},
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete task',
+        responses={204: OpenApiResponse(description='Deleted')},
+    ),
 )
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
@@ -87,7 +166,16 @@ class TaskViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
-    @extend_schema(tags=['CRM'], summary='Move task (drag & drop)')
+    @extend_schema(
+        tags=['CRM'],
+        summary='Move task (drag & drop)',
+        request=TaskMoveSerializer,
+        responses={
+            200: TaskSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='Task not found'),
+        },
+    )
     @action(detail=True, methods=['post'], url_path='move')
     def move(self, request, pk=None):
         task = self.get_object()
@@ -104,14 +192,22 @@ class TaskViewSet(viewsets.ModelViewSet):
         )
         return Response(TaskSerializer(task).data)
 
-    @extend_schema(tags=['CRM'], summary='My tasks across all boards')
+    @extend_schema(
+        tags=['CRM'],
+        summary='My tasks across all boards',
+        responses={200: TaskSerializer(many=True)},
+    )
     @action(detail=False, methods=['get'], url_path='my')
     def my_tasks(self, request):
         qs = self.get_queryset().filter(assignee=request.user, is_archived=False)
         serializer = TaskSerializer(qs, many=True)
         return Response(serializer.data)
 
-    @extend_schema(tags=['CRM'], summary='Task history')
+    @extend_schema(
+        tags=['CRM'],
+        summary='Task history',
+        responses={200: TaskHistorySerializer(many=True), 404: OpenApiResponse(description='Not found')},
+    )
     @action(detail=True, methods=['get'], url_path='history')
     def history(self, request, pk=None):
         task = self.get_object()
@@ -119,8 +215,21 @@ class TaskViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['CRM'], summary='List comments'),
-    create=extend_schema(tags=['CRM'], summary='Add comment'),
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List comments',
+        responses={200: CommentSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Add comment',
+        request=CommentSerializer,
+        responses={
+            201: CommentSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+        },
+    ),
 )
 class CommentViewSet(viewsets.ModelViewSet):
     serializer_class = CommentSerializer
@@ -136,8 +245,20 @@ class CommentViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema_view(
-    list=extend_schema(tags=['CRM'], summary='List labels'),
-    create=extend_schema(tags=['CRM'], summary='Create label'),
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List labels',
+        responses={200: LabelSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Create label',
+        request=LabelSerializer,
+        responses={
+            201: LabelSerializer,
+            400: OpenApiResponse(description='Validation error'),
+        },
+    ),
 )
 class LabelViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LabelSerializer

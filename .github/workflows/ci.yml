@@ -12,7 +12,6 @@ permissions:
 env:
   IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  LATEST_TAG: latest
 
 jobs:
   quality:
@@ -71,6 +70,9 @@ jobs:
     needs: quality
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    outputs:
+      image_ref: ${{ steps.image_meta.outputs.image_ref }}
+      ticket: ${{ steps.image_meta.outputs.ticket }}
 
     steps:
       - uses: actions/checkout@v4
@@ -82,18 +84,14 @@ jobs:
           if [[ "$IMAGE_PATH" != */* ]]; then
             IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
           fi
-          # Extract ticket key like "DEV-17" from PR branch name (e.g. DEV-17-...).
-          SHORT_SHA="${GITHUB_SHA::7}"
+
           TICKET="$(echo "${{ github.head_ref }}" | grep -Eo '[A-Za-z]+-[0-9]+' | head -n1 || true)"
           TICKET="${TICKET:-TICKET}"
           TICKET="$(echo "$TICKET" | tr '[:lower:]' '[:upper:]')"
 
-          # Use ticket-only tag (e.g. DEV-19)
-          PR_TAG="${TICKET}"
-
           IMAGE_NAME="${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}"
-          echo "pr_image_ref=${IMAGE_NAME}:${PR_TAG}" >> "$GITHUB_OUTPUT"
-          echo "latest_image_ref=${IMAGE_NAME}:${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_NAME}:${TICKET}" >> "$GITHUB_OUTPUT"
+          echo "ticket=${TICKET}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker registry
         uses: docker/login-action@v3
@@ -111,14 +109,63 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: |
-            ${{ steps.image_meta.outputs.pr_image_ref }}
-            ${{ steps.image_meta.outputs.latest_image_ref }}
+          tags: ${{ steps.image_meta.outputs.image_ref }}
+
+  deploy_staging:
+    name: Deploy to staging
+    needs: build_and_push
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    environment: staging
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          BACKEND_IMAGE: ${{ needs.build_and_push.outputs.image_ref }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DEPLOY_PATH,BACKEND_IMAGE
+          script: |
+            set -e
+
+            echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+            cd "$DEPLOY_PATH"
+
+            if [ ! -f "docker-compose.staging.yml" ]; then
+              echo "ERROR: docker-compose.staging.yml not found in $DEPLOY_PATH"
+              ls -la
+              exit 1
+            fi
+            if [ ! -f ".env.staging" ]; then
+              echo "ERROR: .env.staging not found in $DEPLOY_PATH"
+              exit 1
+            fi
+
+            export BACKEND_IMAGE="$BACKEND_IMAGE"
+            docker pull "$BACKEND_IMAGE"
+
+            docker compose --env-file .env.staging -f docker-compose.staging.yml up -d --force-recreate backend nginx
+            sleep 5
+
+            docker compose --env-file .env.staging -f docker-compose.staging.yml exec -T backend python manage.py migrate --noinput || echo "WARNING: migrate failed"
+            docker compose --env-file .env.staging -f docker-compose.staging.yml exec -T backend python manage.py collectstatic --noinput || echo "WARNING: collectstatic failed"
+
+            echo "=== Staging deploy complete ==="
+            echo "Image: $BACKEND_IMAGE"
+            docker compose --env-file .env.staging -f docker-compose.staging.yml ps
 
   notify:
     name: Slack notification
     runs-on: ubuntu-latest
-    needs: [quality, build_and_push]
+    needs: [quality, build_and_push, deploy_staging]
     if: always() && github.event.pull_request.draft == false
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -135,7 +182,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.build_and_push.result == 'success' && '✅ SUCCESS' || '❌ FAILURE' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref != '' && github.head_ref || github.ref_name }}`\n*Actor:* ${{ github.actor }}${{ github.event_name == 'pull_request' && format('\n*PR:* {0} by {1}', github.event.pull_request.title, github.event.pull_request.user.login) || '' }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.deploy_staging.result == 'success' && ':white_check_mark: Deployed to STAGING' || needs.build_and_push.result == 'success' && ':warning: Built OK but staging deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*Ticket:* `${{ needs.build_and_push.outputs.ticket || 'N/A' }}`\n*Actor:* ${{ github.actor }}\n*PR:* ${{ github.event.pull_request.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

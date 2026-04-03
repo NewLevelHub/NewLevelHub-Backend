@@ -41,6 +41,8 @@ staticfiles/
 .env.*
 *.env
 !.env.example
+!.env.staging.example
+!.env.production.example
 
 # ------------------------------
 # Testing / quality
@@ -86,3 +88,9 @@ Thumbs.db
 # ------------------------------
 *.bak
 *.tmp
+
+# ------------------------------
+# Linear (локальные секреты и свой backlog — не коммитить)
+# ------------------------------
+scripts/linear-tickets.json
+scripts/linear-config.local.js

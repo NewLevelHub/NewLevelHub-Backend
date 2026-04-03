@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -7,10 +7,10 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyQuerySetMixin
-from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
+from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
-    OnboardingTemplateSerializer, OnboardingStepSerializer, UserOnboardingProgressSerializer,
+    OnboardingTemplateSerializer, UserOnboardingProgressSerializer,
 )
 
 

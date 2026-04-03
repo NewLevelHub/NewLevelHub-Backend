@@ -19,8 +19,7 @@ Each permission is exercised for:
     a company association               → denied where company required
 """
 
-import pytest
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock
 
 from rest_framework.test import APIRequestFactory
 

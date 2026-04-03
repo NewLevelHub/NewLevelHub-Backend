@@ -9,8 +9,24 @@ router.register('labels', views.LabelViewSet, basename='label')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('boards/<int:board_pk>/columns/', views.ColumnViewSet.as_view({'get': 'list', 'post': 'create'}), name='board-columns'),
-    path('boards/<int:board_pk>/columns/<int:pk>/', views.ColumnViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}), name='board-column-detail'),
-    path('tasks/<int:task_pk>/comments/', views.CommentViewSet.as_view({'get': 'list', 'post': 'create'}), name='task-comments'),
-    path('tasks/<int:task_pk>/comments/<int:pk>/', views.CommentViewSet.as_view({'delete': 'destroy'}), name='task-comment-detail'),
+    path(
+        'boards/<int:board_pk>/columns/',
+        views.ColumnViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='board-columns',
+    ),
+    path(
+        'boards/<int:board_pk>/columns/<int:pk>/',
+        views.ColumnViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
+        name='board-column-detail',
+    ),
+    path(
+        'tasks/<int:task_pk>/comments/',
+        views.CommentViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='task-comments',
+    ),
+    path(
+        'tasks/<int:task_pk>/comments/<int:pk>/',
+        views.CommentViewSet.as_view({'delete': 'destroy'}),
+        name='task-comment-detail',
+    ),
 ]

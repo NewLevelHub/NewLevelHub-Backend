@@ -119,6 +119,16 @@ jobs:
     environment: staging
 
     steps:
+      - name: Build image ref
+        id: img
+        run: |
+          IMAGE_PATH="${{ secrets.DOCKER_REPOSITORY }}"
+          if [[ "$IMAGE_PATH" != */* ]]; then
+            IMAGE_PATH="${{ secrets.DOCKER_USERNAME }}/${IMAGE_PATH}"
+          fi
+          TICKET="${{ needs.build_and_push.outputs.ticket }}"
+          echo "ref=${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}:${TICKET}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
@@ -126,7 +136,7 @@ jobs:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          BACKEND_IMAGE: ${{ needs.build_and_push.outputs.image_ref }}
+          BACKEND_IMAGE: ${{ steps.img.outputs.ref }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}

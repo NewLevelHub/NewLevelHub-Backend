@@ -20,7 +20,6 @@ from .serializers import (
     ChangePasswordSerializer,
     PasswordResetRequestSerializer,
     PasswordResetConfirmSerializer,
-    EmailVerifySerializer,
     UserListSerializer,
 )
 from .throttles import EmailResendThrottle

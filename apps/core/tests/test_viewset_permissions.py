@@ -6,8 +6,7 @@ CompanyIsolationMixin scopes querysets properly — all without touching the
 database (MagicMock + APIRequestFactory pattern from test_permissions.py).
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from rest_framework.test import APIRequestFactory
 

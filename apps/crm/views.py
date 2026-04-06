@@ -5,7 +5,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 
 from apps.core.permissions import IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
+from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer,
     LabelSerializer, TaskSerializer, TaskMoveSerializer,

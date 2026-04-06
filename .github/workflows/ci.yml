@@ -3,11 +3,12 @@ name: Backend CI
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
 
 permissions:
   contents: read
   packages: write
+  pull-requests: write
 
 env:
   IMAGE_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
@@ -17,7 +18,9 @@ jobs:
   quality:
     name: Lint and tests
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: |
+      github.event.action != 'closed' &&
+      github.event.pull_request.draft == false
 
     services:
       postgres:
@@ -69,10 +72,12 @@ jobs:
     name: Build and push Docker image
     needs: quality
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    if: |
+      github.event.action != 'closed' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.fork == false
     outputs:
       image_ref: ${{ steps.image_meta.outputs.image_ref }}
-      ticket: ${{ steps.image_meta.outputs.ticket }}
 
     steps:
       - uses: actions/checkout@v4
@@ -85,13 +90,10 @@ jobs:
             IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
           fi
 
-          TICKET="$(echo "${{ github.head_ref }}" | grep -Eo '[A-Za-z]+-[0-9]+' | head -n1 || true)"
-          TICKET="${TICKET:-TICKET}"
-          TICKET="$(echo "$TICKET" | tr '[:lower:]' '[:upper:]')"
-
+          PR_NUMBER="${{ github.event.pull_request.number }}"
           IMAGE_NAME="${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}"
-          echo "image_ref=${IMAGE_NAME}:${TICKET}" >> "$GITHUB_OUTPUT"
-          echo "ticket=${TICKET}" >> "$GITHUB_OUTPUT"
+
+          echo "image_ref=${IMAGE_NAME}:pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to Docker registry
         uses: docker/login-action@v3
@@ -111,72 +113,265 @@ jobs:
           push: true
           tags: ${{ steps.image_meta.outputs.image_ref }}
 
-  deploy_staging:
-    name: Deploy to staging
+  deploy_preview:
+    name: Deploy PR preview
     needs: build_and_push
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.fork == false
+    if: |
+      github.event.action != 'closed' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.fork == false
     environment: staging
 
     steps:
-      - name: Build image ref
-        id: img
-        run: |
-          IMAGE_PATH="${{ secrets.DOCKER_REPOSITORY }}"
-          if [[ "$IMAGE_PATH" != */* ]]; then
-            IMAGE_PATH="${{ secrets.DOCKER_USERNAME }}/${IMAGE_PATH}"
-          fi
-          TICKET="${{ needs.build_and_push.outputs.ticket }}"
-          echo "ref=${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}:${TICKET}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
 
-      - name: Deploy via SSH
+      - name: Copy compose file to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: "docker-compose.preview.yml"
+          target: "${{ secrets.DEPLOY_PATH }}"
+
+      - name: Deploy preview via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
           DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          BACKEND_IMAGE: ${{ steps.img.outputs.ref }}
+          BACKEND_IMAGE: ${{ needs.build_and_push.outputs.image_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DEPLOY_PATH,BACKEND_IMAGE
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DEPLOY_PATH,BACKEND_IMAGE,PR_NUMBER
           script: |
             set -e
 
+            PR_SLUG="pr-${PR_NUMBER}"
+            PREVIEW_PORT=$((10000 + PR_NUMBER))
+            PREVIEW_DB_NAME="nlh_pr${PR_NUMBER}"
+            NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
+
+            echo "--- [1/5] Docker: pull & deploy containers ---"
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
             cd "$DEPLOY_PATH"
 
-            if [ ! -f "docker-compose.staging.yml" ]; then
-              echo "ERROR: docker-compose.staging.yml not found in $DEPLOY_PATH"
-              ls -la
-              exit 1
-            fi
             if [ ! -f ".env.staging" ]; then
               echo "ERROR: .env.staging not found in $DEPLOY_PATH"
               exit 1
             fi
 
-            export BACKEND_IMAGE="$BACKEND_IMAGE"
             docker pull "$BACKEND_IMAGE"
 
-            docker compose --env-file .env.staging -f docker-compose.staging.yml up -d --force-recreate backend nginx
-            sleep 5
+            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT
+            docker compose \
+              --project-name "$PR_SLUG" \
+              --env-file .env.staging \
+              -f docker-compose.preview.yml \
+              up -d --force-recreate
 
-            docker compose --env-file .env.staging -f docker-compose.staging.yml exec -T backend python manage.py migrate --noinput || echo "WARNING: migrate failed"
-            docker compose --env-file .env.staging -f docker-compose.staging.yml exec -T backend python manage.py collectstatic --noinput || echo "WARNING: collectstatic failed"
+            echo "--- [2/5] Waiting for DB to be healthy ---"
+            sleep 10
 
-            echo "=== Staging deploy complete ==="
-            echo "Image: $BACKEND_IMAGE"
-            docker compose --env-file .env.staging -f docker-compose.staging.yml ps
+            echo "--- [3/5] Running migrations ---"
+            docker compose \
+              --project-name "$PR_SLUG" \
+              -f docker-compose.preview.yml \
+              exec -T backend python manage.py migrate --noinput \
+              || echo "WARNING: migrate failed"
+
+            echo "--- [4/5] Writing nginx config ---"
+            sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+            server {
+                listen 80;
+                server_name ${PR_SLUG}.staging.newlevelhub.kz;
+
+                location / {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT};
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 300;
+                    client_max_body_size 20M;
+                }
+            }
+            NGINXEOF
+
+            sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
+            sudo nginx -t && sudo nginx -s reload
+
+            echo "--- [5/5] Getting SSL certificate ---"
+            sleep 2
+            sudo certbot --nginx \
+              -d "${PR_SLUG}.staging.newlevelhub.kz" \
+              --non-interactive \
+              --agree-tos \
+              -m "admin@newlevelhub.kz" \
+              --redirect \
+              2>&1 | tail -10
+
+            echo ""
+            echo "=== Preview deployed successfully ==="
+            echo "URL:    https://${PR_SLUG}.staging.newlevelhub.kz"
+            echo "Docs:   https://${PR_SLUG}.staging.newlevelhub.kz/api/docs/"
+            echo "Port:   ${PREVIEW_PORT}"
+
+      - name: Post preview URL comment to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.issue.number;
+            const slug = `pr-${prNumber}`;
+            const baseUrl = `https://${slug}.staging.newlevelhub.kz`;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const sha = '${{ github.event.pull_request.head.sha }}'.slice(0, 7);
+            const branch = '${{ github.head_ref }}';
+
+            const body = [
+              `## 🚀 Preview Environment`,
+              ``,
+              `| | |`,
+              `|---|---|`,
+              `| **Status** | ✅ Deployed |`,
+              `| **API Base** | \`${baseUrl}/api/v1/\` |`,
+              `| **Swagger** | [${baseUrl}/api/docs/](${baseUrl}/api/docs/) |`,
+              `| **Branch** | \`${branch}\` |`,
+              `| **Commit** | \`${sha}\` |`,
+              ``,
+              `> Preview автоматически удалится когда PR будет закрыт.`,
+              ``,
+              `[View deploy run](${runUrl})`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(
+              c => c.user.type === 'Bot' && c.body.includes('## 🚀 Preview Environment')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
+
+  destroy_preview:
+    name: Destroy PR preview
+    runs-on: ubuntu-latest
+    if: |
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.fork == false
+    environment: staging
+
+    steps:
+      - name: Destroy preview via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          envs: DEPLOY_PATH,PR_NUMBER
+          script: |
+            PR_SLUG="pr-${PR_NUMBER}"
+            NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
+
+            echo "--- [1/3] Stopping Docker containers ---"
+            cd "$DEPLOY_PATH"
+            if [ -f "docker-compose.preview.yml" ]; then
+              docker compose \
+                --project-name "$PR_SLUG" \
+                -f docker-compose.preview.yml \
+                down -v --remove-orphans \
+                2>/dev/null || true
+            fi
+
+            # Fallback: remove any leftover resources by project label
+            CONTAINERS=$(docker ps -a --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
+            if [ -n "$CONTAINERS" ]; then
+              docker stop $CONTAINERS 2>/dev/null || true
+              docker rm $CONTAINERS 2>/dev/null || true
+            fi
+            VOLUMES=$(docker volume ls --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
+            if [ -n "$VOLUMES" ]; then
+              docker volume rm $VOLUMES 2>/dev/null || true
+            fi
+
+            echo "--- [2/3] Removing nginx config ---"
+            sudo rm -f "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
+            sudo nginx -t && sudo nginx -s reload
+
+            echo "--- [3/3] Deleting SSL certificate ---"
+            sudo certbot delete \
+              --cert-name "${PR_SLUG}.staging.newlevelhub.kz" \
+              --non-interactive \
+              2>/dev/null || echo "Cert not found or already deleted."
+
+            echo ""
+            echo "=== Preview destroyed: ${PR_SLUG} ==="
+
+      - name: Update PR comment on destroy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.issue.number;
+            const merged = '${{ github.event.pull_request.merged }}' === 'true';
+            const action = merged ? 'merged ✅' : 'closed';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+            });
+
+            const existing = comments.find(
+              c => c.user.type === 'Bot' && c.body.includes('## 🚀 Preview Environment')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: existing.body
+                  .replace('✅ Deployed', `🗑️ Destroyed (PR ${action})`)
+                  .replace('> Preview автоматически удалится когда PR будет закрыт.', ''),
+              });
+            }
 
   notify:
     name: Slack notification
     runs-on: ubuntu-latest
-    needs: [quality, build_and_push, deploy_staging]
-    if: always() && github.event.pull_request.draft == false
+    needs: [quality, build_and_push, deploy_preview]
+    if: |
+      always() &&
+      github.event.pull_request.draft == false &&
+      github.event.action != 'closed'
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
@@ -192,7 +387,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.deploy_staging.result == 'success' && ':white_check_mark: Deployed to STAGING' || needs.build_and_push.result == 'success' && ':warning: Built OK but staging deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*Ticket:* `${{ needs.build_and_push.outputs.ticket || 'N/A' }}`\n*Actor:* ${{ github.actor }}\n*PR:* ${{ github.event.pull_request.title }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://pr-${{ github.event.pull_request.number }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

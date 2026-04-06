@@ -5,7 +5,8 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin
+from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import GuestPass, AccessLog
 from .serializers import (
     GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer, AccessLogSerializer,
@@ -34,19 +35,12 @@ from .serializers import (
         },
     ),
 )
-class GuestPassViewSet(viewsets.ModelViewSet):
+class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = GuestPassSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyAdmin]
+    queryset = GuestPass.objects.all()
     http_method_names = ['get', 'post']
     filterset_fields = ['status']
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == 'superadmin':
-            return GuestPass.objects.all()
-        if user.role == 'company_admin' and user.company_id:
-            return GuestPass.objects.filter(company=user.company)
-        return GuestPass.objects.filter(created_by=user)
 
     def get_serializer_class(self):
         if self.action == 'create':

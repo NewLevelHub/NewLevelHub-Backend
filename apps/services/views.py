@@ -6,7 +6,8 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin
+from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdminOrReadOnly
+from apps.core.mixins import SetCompanyOnCreateMixin
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
     FloorSerializer, MapPointSerializer,
@@ -124,7 +125,7 @@ class MapPointViewSet(viewsets.ModelViewSet):
 )
 class ServiceRequestViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceRequestSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
     filterset_fields = ['request_type', 'status', 'urgency']
 
     def get_queryset(self):
@@ -231,14 +232,10 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         responses={200: AnnouncementSerializer, 404: OpenApiResponse(description='Not found')},
     ),
 )
-class AnnouncementViewSet(viewsets.ModelViewSet):
+class AnnouncementViewSet(SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = AnnouncementSerializer
+    permission_classes = [IsCompanyAdminOrReadOnly]
     filterset_fields = ['scope', 'category', 'is_pinned']
-
-    def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy'):
-            return [IsAuthenticated()]  # TODO: IsSuperAdmin для building, IsCompanyAdmin для company
-        return [IsAuthenticated()]
 
     def get_queryset(self):
         user = self.request.user
@@ -249,7 +246,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         return building_qs
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user)
+        serializer.save(author=self.request.user, company=self.request.user.company)
         # TODO: если notify_email=True — Celery task рассылки
 
     @extend_schema(

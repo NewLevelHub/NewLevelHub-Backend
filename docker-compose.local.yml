@@ -30,6 +30,7 @@ services:
       - .env
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.local
+      - POSTGRES_HOST=db
       - DEBUG=True
     depends_on:
       db:

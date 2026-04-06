@@ -6,8 +6,8 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
-from apps.core.mixins import CompanyQuerySetMixin
-from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
     OnboardingTemplateSerializer, UserOnboardingProgressSerializer,
@@ -37,14 +37,12 @@ from .serializers import (
         responses={200: LeaveRequestSerializer, 404: OpenApiResponse(description='Not found')},
     ),
 )
-class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
+class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsCompanyMember]
+    queryset = LeaveRequest.objects.select_related('user', 'reviewed_by')
     http_method_names = ['get', 'post']
     filterset_fields = ['status', 'leave_type', 'user']
-
-    def get_queryset(self):
-        return LeaveRequest.objects.select_related('user', 'reviewed_by')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)
@@ -111,7 +109,7 @@ class LeaveRequestViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
         responses={200: OnboardingTemplateSerializer, 400: OpenApiResponse(description='Validation error')},
     ),
 )
-class OnboardingTemplateViewSet(CompanyQuerySetMixin, viewsets.ModelViewSet):
+class OnboardingTemplateViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = OnboardingTemplateSerializer
     permission_classes = [IsCompanyAdmin]
 

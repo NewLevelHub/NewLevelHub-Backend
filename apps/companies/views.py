@@ -1,6 +1,5 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
@@ -85,9 +84,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('create', 'destroy'):
             return [IsSuperAdmin()]
-        if self.action in ('update', 'partial_update'):
-            return [IsCompanyAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyAdmin()]
 
     def get_queryset(self):
         user = self.request.user

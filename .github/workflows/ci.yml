@@ -148,6 +148,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
+          command_timeout: 20m
           envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DOCKER_REPOSITORY,DEPLOY_PATH,PR_NUMBER
           script: |
             set -e
@@ -186,11 +187,18 @@ jobs:
             sleep 10
 
             echo "--- [3/5] Running migrations ---"
-            docker compose \
-              --project-name "$PR_SLUG" \
-              -f docker-compose.preview.yml \
-              exec -T backend python manage.py migrate --noinput \
-              || echo "WARNING: migrate failed"
+            # Check that the backend container is actually running before exec
+            BACKEND_CONTAINER="${PR_SLUG}-backend-1"
+            if docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null | grep -q true; then
+              timeout 120 docker compose \
+                --project-name "$PR_SLUG" \
+                -f docker-compose.preview.yml \
+                exec -T backend python manage.py migrate --noinput \
+                || echo "WARNING: migrate failed or timed out — continuing"
+            else
+              echo "WARNING: backend container is not running, skipping migrate"
+              docker compose --project-name "$PR_SLUG" -f docker-compose.preview.yml logs backend | tail -20
+            fi
 
             echo "--- [4/5] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF

@@ -6,7 +6,7 @@ import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from .models import Resource, Booking, RecurringBooking, ResourceBlock
+from .models import Resource, Booking, RecurringBooking
 from .serializers import (
     ResourceSerializer,
     ResourceListSerializer,

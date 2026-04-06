@@ -76,8 +76,6 @@ jobs:
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.fork == false
-    outputs:
-      image_ref: ${{ steps.image_meta.outputs.image_ref }}
 
     steps:
       - uses: actions/checkout@v4
@@ -142,15 +140,15 @@ jobs:
           DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          BACKEND_IMAGE: ${{ needs.build_and_push.outputs.image_ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DEPLOY_PATH,BACKEND_IMAGE,PR_NUMBER
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DOCKER_REPOSITORY,DEPLOY_PATH,PR_NUMBER
           script: |
             set -e
 
@@ -158,6 +156,13 @@ jobs:
             PREVIEW_PORT=$((10000 + PR_NUMBER))
             PREVIEW_DB_NAME="nlh_pr${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
+
+            # Build image ref locally to avoid GitHub Actions masked-output issue
+            IMAGE_PATH="$DOCKER_REPOSITORY"
+            if [[ "$IMAGE_PATH" != */* ]]; then
+              IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
+            fi
+            BACKEND_IMAGE="${DOCKER_REGISTRY}/${IMAGE_PATH}:pr-${PR_NUMBER}"
 
             echo "--- [1/5] Docker: pull & deploy containers ---"
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin

@@ -1,14 +1,16 @@
+import uuid as _uuid
+
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
-from .models import User
+from .models import User, EmailVerificationToken
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
@@ -21,6 +23,7 @@ from .serializers import (
     EmailVerifySerializer,
     UserListSerializer,
 )
+from .throttles import EmailResendThrottle
 
 
 def _get_tokens(user):
@@ -48,7 +51,10 @@ def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    # TODO: отправить email подтверждения (send_verification_email task)
+
+    from .tasks import send_verification_email
+    send_verification_email.delay(user.id)
+
     return Response(
         {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
@@ -131,19 +137,70 @@ def logout(request):
 @extend_schema(
     tags=['Auth'],
     summary='Verify email',
-    request=EmailVerifySerializer,
+    parameters=[
+        OpenApiParameter(name='token', type=str, location=OpenApiParameter.QUERY, required=True),
+    ],
     responses={
         200: OpenApiResponse(description='Email verified successfully'),
-        400: OpenApiResponse(description='Invalid or expired token'),
+        400: OpenApiResponse(description='Token already used or expired'),
+        404: OpenApiResponse(description='Token not found'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def verify_email(request):
+    raw_token = request.query_params.get('token')
+    if not raw_token:
+        return Response({'detail': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        _uuid.UUID(str(raw_token))
+    except (ValueError, AttributeError):
+        return Response({'detail': 'Invalid token format'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        token = EmailVerificationToken.objects.select_related('user').get(token=raw_token)
+    except EmailVerificationToken.DoesNotExist:
+        return Response({'detail': 'Token not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if token.is_used:
+        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if token.is_expired:
+        return Response({'detail': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+
+    token.is_used = True
+    token.save(update_fields=['is_used'])
+
+    token.user.is_email_verified = True
+    token.user.save(update_fields=['is_email_verified'])
+
+    return Response({'detail': 'Email verified'})
+
+
+@extend_schema(
+    tags=['Auth'],
+    summary='Resend verification email',
+    request=None,
+    responses={
+        200: OpenApiResponse(description='Verification email sent'),
+        400: OpenApiResponse(description='Email already verified'),
+        401: OpenApiResponse(description='Not authenticated'),
+        429: OpenApiResponse(description='Rate limit exceeded'),
     },
 )
 @api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_email(request):
-    serializer = EmailVerifySerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    # TODO: найти EmailVerificationToken, пометить is_email_verified=True
-    return Response({'detail': 'Email verified'})
+@permission_classes([IsAuthenticated])
+@throttle_classes([EmailResendThrottle])
+def resend_verification_email(request):
+    user = request.user
+    if user.is_email_verified:
+        return Response({'detail': 'Email already verified'}, status=status.HTTP_400_BAD_REQUEST)
+
+    from .tasks import send_verification_email
+    send_verification_email.delay(user.id)
+
+    return Response({'detail': 'Verification email sent'})
 
 
 @extend_schema(

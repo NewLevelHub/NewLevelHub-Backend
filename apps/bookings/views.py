@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember
+from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerified
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Resource, Booking, RecurringBooking
 from .serializers import (
@@ -138,6 +138,11 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     ordering_fields = ['start_time', 'created_at']
     http_method_names = ['get', 'post', 'patch', 'delete']
 
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy', 'cancel'):
+            return [IsCompanyMember(), IsEmailVerified()]
+        return [IsCompanyMember()]
+
     def get_serializer_class(self):
         if self.action == 'create':
             return BookingCreateSerializer
@@ -202,6 +207,11 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     permission_classes = [IsCompanyMember]
     queryset = RecurringBooking.objects.all()
     http_method_names = ['get', 'post', 'patch', 'delete']
+
+    def get_permissions(self):
+        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+            return [IsCompanyMember(), IsEmailVerified()]
+        return [IsCompanyMember()]
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)

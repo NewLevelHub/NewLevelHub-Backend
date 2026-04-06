@@ -3,7 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
-from apps.core.permissions import IsCompanyMember
+from apps.core.permissions import IsCompanyMember, IsEmailVerified
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
@@ -48,7 +48,7 @@ from .serializers import (
 )
 class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BoardSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerified]
 
     def get_queryset(self):
         return Board.objects.filter(is_archived=False).prefetch_related('columns__tasks')
@@ -108,7 +108,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
 )
 class ColumnViewSet(viewsets.ModelViewSet):
     serializer_class = ColumnSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerified]
 
     def get_queryset(self):
         return Column.objects.filter(board_id=self.kwargs.get('board_pk')).prefetch_related('tasks')
@@ -149,7 +149,7 @@ class ColumnViewSet(viewsets.ModelViewSet):
 )
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerified]
     search_fields = ['title']
 
     def get_queryset(self):
@@ -231,7 +231,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 )
 class CommentViewSet(viewsets.ModelViewSet):
     serializer_class = CommentSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerified]
     http_method_names = ['get', 'post', 'delete']
 
     def get_queryset(self):
@@ -260,5 +260,5 @@ class CommentViewSet(viewsets.ModelViewSet):
 )
 class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LabelSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerified]
     queryset = Label.objects.all()

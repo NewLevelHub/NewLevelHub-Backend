@@ -23,6 +23,10 @@ if DEBUG:
         'rest_framework.renderers.BrowsableAPIRenderer',
     ]
 
+# Run Celery tasks synchronously (no Redis/worker needed for local dev)
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True
+
 # Email backend for development (console)
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 

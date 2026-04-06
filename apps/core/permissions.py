@@ -93,6 +93,20 @@ class IsCompanyAdminOrReadOnly(_AuthenticatedPermission):
         return request.user.role in ('superadmin', 'company_admin')
 
 
+class IsEmailVerified(_AuthenticatedPermission):
+    """
+    Denies access with 403 when the user's email is not verified.
+    Superadmins bypass this check.
+    """
+
+    message = 'Email not verified'
+
+    def _has_role_permission(self, request, view):
+        if request.user.role == 'superadmin':
+            return True
+        return request.user.is_email_verified
+
+
 class IsOwnerOrAdmin(_AuthenticatedPermission):
     """
     Object-level permission.

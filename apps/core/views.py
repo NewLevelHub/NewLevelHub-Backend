@@ -16,6 +16,7 @@ import rest_framework.fields as fields
             fields={
                 'status': fields.CharField(),
                 'database': fields.CharField(),
+                'deployment_marker': fields.CharField(),
             },
         ),
         503: OpenApiResponse(description='Service unavailable — database unreachable'),
@@ -35,6 +36,8 @@ def health_check(request):
         {
             'status': 'healthy' if healthy else 'unhealthy',
             'database': 'connected' if db_ok else 'unavailable',
+            # Bump when verifying CI/CD (staging → prod); visible at GET /api/v1/health/
+            'deployment_marker': 'pipeline-verify-2026-04-06',
         },
         status=status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE,
     )

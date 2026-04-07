@@ -143,17 +143,20 @@ jobs:
           DOCKER_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH_NAME: ${{ github.head_ref }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
           command_timeout: 20m
-          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DOCKER_REPOSITORY,DEPLOY_PATH,PR_NUMBER
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DOCKER_REPOSITORY,DEPLOY_PATH,PR_NUMBER,BRANCH_NAME
           script: |
             set -e
 
-            PR_SLUG="pr-${PR_NUMBER}"
+            TICKET=$(echo "$BRANCH_NAME" | grep -oE 'dev-[0-9]+' | head -1)
+            if [ -z "$TICKET" ]; then TICKET="noticket"; fi
+            PR_SLUG="be-${TICKET}-pr${PR_NUMBER}"
             PREVIEW_PORT=$((10000 + PR_NUMBER))
             PREVIEW_DB_NAME="nlh_pr${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
@@ -247,11 +250,13 @@ jobs:
         with:
           script: |
             const prNumber = context.issue.number;
-            const slug = `pr-${prNumber}`;
+            const branch = '${{ github.head_ref }}';
+            const ticketMatch = branch.match(/dev-\d+/);
+            const ticket = ticketMatch ? ticketMatch[0] : 'noticket';
+            const slug = `be-${ticket}-pr${prNumber}`;
             const baseUrl = `https://${slug}.staging.newlevelhub.kz`;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const sha = '${{ github.event.pull_request.head.sha }}'.slice(0, 7);
-            const branch = '${{ github.head_ref }}';
 
             const body = [
               `## 🚀 Preview Environment`,
@@ -309,14 +314,17 @@ jobs:
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH_NAME: ${{ github.head_ref }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          envs: DEPLOY_PATH,PR_NUMBER
+          envs: DEPLOY_PATH,PR_NUMBER,BRANCH_NAME
           script: |
-            PR_SLUG="pr-${PR_NUMBER}"
+            TICKET=$(echo "$BRANCH_NAME" | grep -oE 'dev-[0-9]+' | head -1)
+            if [ -z "$TICKET" ]; then TICKET="noticket"; fi
+            PR_SLUG="be-${TICKET}-pr${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
 
             COMPOSE_FILE="$DEPLOY_PATH/docker-compose.${PR_SLUG}.yml"
@@ -397,6 +405,14 @@ jobs:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
     steps:
+      - name: Compute preview slug
+        id: slug
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          TICKET=$(echo "$BRANCH" | grep -oE 'dev-[0-9]+' | head -1)
+          if [ -z "$TICKET" ]; then TICKET="noticket"; fi
+          echo "pr_slug=be-${TICKET}-pr${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+
       - name: Send Slack message
         if: ${{ env.SLACK_WEBHOOK_URL != '' }}
         uses: slackapi/slack-github-action@v1.27.0
@@ -408,7 +424,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://pr-${{ github.event.pull_request.number }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

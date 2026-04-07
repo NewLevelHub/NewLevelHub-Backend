@@ -1,5 +1,6 @@
-# Per-PR preview environment.
-# Deployed by CI via: docker compose --project-name pr-N -f docker-compose.preview.yml up -d
+# Per-PR preview environment template.
+# CI copies this file to the staging server as docker-compose.pr-N.yml
+# and runs: docker compose --project-name pr-N -f docker-compose.pr-N.yml up -d
 # Required env vars at runtime: PR_SLUG, PREVIEW_DB_NAME, BACKEND_IMAGE, PREVIEW_PORT
 # Base secrets loaded from .env.staging on the server.
 

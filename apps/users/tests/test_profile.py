@@ -23,7 +23,6 @@ import io
 from unittest.mock import patch, MagicMock
 
 import pytest
-from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 from PIL import Image
@@ -278,7 +277,7 @@ class TestAvatarUpload:
         employee.avatar = old_mock
 
         image = _make_image('JPEG')
-        with patch('apps.users.serializers._delete_file') as mock_delete, \
+        with patch('apps.users.serializers._delete_file'), \
                 patch('apps.users.serializers._resize_avatar'):
             # Simulate: the serializer sees the old avatar and deletes it.
             response = auth_client.patch(
@@ -305,7 +304,6 @@ class TestAvatarDelete:
     @pytest.mark.django_db
     def test_sets_avatar_to_null(self, auth_client, employee, db):
         # Pre-condition: give the user an avatar stored in a fake path.
-        from apps.users.models import User
         with patch('apps.users.serializers._delete_file'):
             response = auth_client.delete(ME_AVATAR_URL)
 

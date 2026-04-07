@@ -40,6 +40,22 @@ services:
     networks:
       - nlh_network
 
+  celery:
+    image: ${BACKEND_IMAGE}
+    container_name: nlh_celery_prod
+    command: celery -A config.celery worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.production
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DEBUG=False
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    networks:
+      - nlh_network
+
   nginx:
     image: nginx:alpine
     container_name: nlh_nginx_prod

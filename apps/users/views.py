@@ -1,14 +1,20 @@
+from datetime import timedelta
+
+import logging
+
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
-from .models import User
+from .models import PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
@@ -21,6 +27,9 @@ from .serializers import (
     EmailVerifySerializer,
     UserListSerializer,
 )
+from .throttles import PasswordResetRateThrottle
+
+logger = logging.getLogger(__name__)
 
 
 def _get_tokens(user):
@@ -153,14 +162,49 @@ def verify_email(request):
     responses={
         200: OpenApiResponse(description='Reset link sent if account exists'),
         400: OpenApiResponse(description='Validation error'),
+        429: OpenApiResponse(description='Too many requests'),
     },
 )
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([PasswordResetRateThrottle])
 def password_reset_request(request):
+    from .tasks import send_password_reset_email
+
     serializer = PasswordResetRequestSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    # TODO: создать PasswordResetToken, отправить email
+    email = serializer.validated_data['email']
+
+    try:
+        user = User.objects.get(email=email, is_active=True)
+    except User.DoesNotExist:
+        # Anti-enumeration: always return 200 regardless of whether the account exists.
+        return Response({'detail': 'If an account exists, a reset link has been sent'})
+
+    token = PasswordResetToken.objects.create(
+        user=user,
+        expires_at=timezone.now() + timedelta(hours=1),
+    )
+
+    try:
+        send_password_reset_email.delay(token.id)
+        logger.info(
+            'password_reset_request: enqueued send_password_reset_email '
+            'for token_id=%s user=%s',
+            token.id,
+            user.email,
+        )
+    except Exception:
+        # Broker unavailable (e.g. Redis not reachable). The token is already
+        # persisted; log the failure and continue so the HTTP response is still
+        # 200. A monitoring alert or dead-letter queue should handle retries.
+        logger.error(
+            'password_reset_request: failed to enqueue send_password_reset_email '
+            'for token_id=%s — broker may be unreachable',
+            token.id,
+            exc_info=True,
+        )
+
     return Response({'detail': 'If an account exists, a reset link has been sent'})
 
 
@@ -178,7 +222,43 @@ def password_reset_request(request):
 def password_reset_confirm(request):
     serializer = PasswordResetConfirmSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    # TODO: валидация токена, смена пароля
+
+    token_value = serializer.validated_data['token']
+    new_password = serializer.validated_data['new_password']
+
+    try:
+        reset_token = PasswordResetToken.objects.select_related('user').get(token=token_value)
+    except PasswordResetToken.DoesNotExist:
+        return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = reset_token.user
+
+    if not user.is_active:
+        return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if reset_token.is_used:
+        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if reset_token.is_expired:
+        return Response({'detail': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Atomic update to prevent race condition: only proceeds if the token is still unused.
+    updated = PasswordResetToken.objects.filter(token=token_value, is_used=False).update(is_used=True)
+    if updated == 0:
+        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user.set_password(new_password)
+    user.save(update_fields=['password'])
+
+    # Bulk-blacklist all outstanding refresh tokens for this user without N+1 queries.
+    outstanding = OutstandingToken.objects.filter(user=user).exclude(
+        blacklistedtoken__isnull=False
+    )
+    BlacklistedToken.objects.bulk_create(
+        [BlacklistedToken(token=t) for t in outstanding],
+        ignore_conflicts=True,
+    )
+
     return Response({'detail': 'Password has been reset'})
 
 

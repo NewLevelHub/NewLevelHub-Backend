@@ -1,6 +1,8 @@
 """
 Local development settings.
 """
+import os
+
 from .base import *  # noqa: F401,F403
 from .base import REST_FRAMEWORK
 
@@ -23,8 +25,8 @@ if DEBUG:
         'rest_framework.renderers.BrowsableAPIRenderer',
     ]
 
-# Email backend for development (console)
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# Email backend for development — reads from .env, falls back to console
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 # Logging
 LOGGING = {
@@ -32,7 +34,7 @@ LOGGING = {
     'disable_existing_loggers': False,
     'formatters': {
         'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
+            'format': '{levelname} {asctime} {name} {message}',
             'style': '{',
         },
     },

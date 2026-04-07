@@ -1,7 +1,6 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: nlh_db_local
     volumes:
       - postgres_data_local:/var/lib/postgresql/data
     environment:
@@ -16,11 +15,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: nlh_backend_local
+    pull_policy: if_not_present
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
@@ -31,11 +40,35 @@ services:
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.local
       - DEBUG=True
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     stdin_open: true
     tty: true
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: if_not_present
+    command: celery -A config.celery worker --loglevel=info
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.local
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data_local:

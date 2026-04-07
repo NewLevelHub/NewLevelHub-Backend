@@ -100,6 +100,7 @@ ME_AVATAR_URL = '/api/v1/auth/me/avatar/'
 
 class TestMeEndpoint:
 
+    @pytest.mark.django_db
     def test_returns_401_for_unauthenticated(self, client):
         response = client.get(ME_URL)
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
@@ -141,6 +142,7 @@ class TestMeEndpoint:
 
 class TestMeUpdateEndpoint:
 
+    @pytest.mark.django_db
     def test_returns_401_for_unauthenticated(self, client):
         response = client.patch(ME_UPDATE_URL, {'first_name': 'X'})
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
@@ -297,6 +299,7 @@ class TestAvatarUpload:
 
 class TestAvatarDelete:
 
+    @pytest.mark.django_db
     def test_returns_401_for_unauthenticated(self, client):
         response = client.delete(ME_AVATAR_URL)
         assert response.status_code == status.HTTP_401_UNAUTHORIZED

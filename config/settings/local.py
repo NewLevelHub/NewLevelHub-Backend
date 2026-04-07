@@ -1,6 +1,8 @@
 """
 Local development settings.
 """
+import os
+
 from .base import *  # noqa: F401,F403
 from .base import REST_FRAMEWORK
 
@@ -24,7 +26,6 @@ if DEBUG:
     ]
 
 # Email backend for development — reads from .env, falls back to console
-import os
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 # Logging

@@ -15,9 +15,6 @@ import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
 from .models import PasswordResetToken, User
-from .throttles import PasswordResetRateThrottle
-logger = logging.getLogger(__name__)
-
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
@@ -30,6 +27,9 @@ from .serializers import (
     EmailVerifySerializer,
     UserListSerializer,
 )
+from .throttles import PasswordResetRateThrottle
+
+logger = logging.getLogger(__name__)
 
 
 def _get_tokens(user):

@@ -56,4 +56,4 @@ def health_check(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def ping(request):
-    return Response({'message': 'pong'})
+    return Response({'message': 'pong', 'version': 'beta-test'})

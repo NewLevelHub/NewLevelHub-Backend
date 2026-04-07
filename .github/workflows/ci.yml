@@ -124,16 +124,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy compose file to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          source: "docker-compose.preview.yml"
-          target: "${{ secrets.DEPLOY_PATH }}"
-
       - name: Deploy preview via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
@@ -165,6 +155,59 @@ jobs:
             fi
             BACKEND_IMAGE="${DOCKER_REGISTRY}/${IMAGE_PATH}:pr-${PR_NUMBER}"
 
+            # Each PR writes its own compose file to avoid concurrent-deploy race condition
+            COMPOSE_FILE="$DEPLOY_PATH/docker-compose.${PR_SLUG}.yml"
+
+            echo "--- [0/5] Writing ${COMPOSE_FILE} to server ---"
+            mkdir -p "$DEPLOY_PATH"
+            cat > "$COMPOSE_FILE" << 'COMPOSEOF'
+            # Per-PR preview environment — written by CI
+            services:
+              db:
+                image: postgres:15-alpine
+                env_file:
+                  - .env.staging
+                environment:
+                  POSTGRES_DB: ${PREVIEW_DB_NAME}
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nlh_user} -d ${POSTGRES_DB}"]
+                  interval: 10s
+                  timeout: 5s
+                  retries: 10
+                volumes:
+                  - postgres_data:/var/lib/postgresql/data
+                restart: unless-stopped
+
+              backend:
+                image: ${BACKEND_IMAGE}
+                command: gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 config.wsgi:application
+                env_file:
+                  - .env.staging
+                environment:
+                  DJANGO_SETTINGS_MODULE: config.settings.production
+                  DEBUG: "True"
+                  POSTGRES_DB: ${PREVIEW_DB_NAME}
+                  POSTGRES_HOST: db
+                  ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz"
+                  CORS_ALLOWED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
+                  FRONTEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
+                  SECURE_SSL_REDIRECT: "False"
+                ports:
+                  - "${PREVIEW_PORT}:8000"
+                volumes:
+                  - static_volume:/app/staticfiles
+                  - media_volume:/app/media
+                depends_on:
+                  db:
+                    condition: service_healthy
+                restart: unless-stopped
+
+            volumes:
+              postgres_data:
+              static_volume:
+              media_volume:
+            COMPOSEOF
+
             echo "--- [1/5] Docker: pull & deploy containers ---"
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
             cd "$DEPLOY_PATH"
@@ -180,24 +223,23 @@ jobs:
             docker compose \
               --project-name "$PR_SLUG" \
               --env-file .env.staging \
-              -f docker-compose.preview.yml \
+              -f "$COMPOSE_FILE" \
               up -d --force-recreate
 
             echo "--- [2/5] Waiting for DB to be healthy ---"
             sleep 10
 
             echo "--- [3/5] Running migrations ---"
-            # Check that the backend container is actually running before exec
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
             if docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null | grep -q true; then
               timeout 120 docker compose \
                 --project-name "$PR_SLUG" \
-                -f docker-compose.preview.yml \
+                -f "$COMPOSE_FILE" \
                 exec -T backend python manage.py migrate --noinput \
                 || echo "WARNING: migrate failed or timed out — continuing"
             else
               echo "WARNING: backend container is not running, skipping migrate"
-              docker compose --project-name "$PR_SLUG" -f docker-compose.preview.yml logs backend | tail -20
+              docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -20
             fi
 
             echo "--- [4/5] Writing nginx config ---"
@@ -314,14 +356,17 @@ jobs:
             PR_SLUG="pr-${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
 
+            COMPOSE_FILE="$DEPLOY_PATH/docker-compose.${PR_SLUG}.yml"
+
             echo "--- [1/3] Stopping Docker containers ---"
             cd "$DEPLOY_PATH"
-            if [ -f "docker-compose.preview.yml" ]; then
+            if [ -f "$COMPOSE_FILE" ]; then
               docker compose \
                 --project-name "$PR_SLUG" \
-                -f docker-compose.preview.yml \
+                -f "$COMPOSE_FILE" \
                 down -v --remove-orphans \
                 2>/dev/null || true
+              rm -f "$COMPOSE_FILE"
             fi
 
             # Fallback: remove any leftover resources by project label

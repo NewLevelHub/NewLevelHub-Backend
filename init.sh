@@ -5,54 +5,54 @@
 
 set -e
 
-echo "🚀 New Level Hub Backend - Initialization"
+echo "New Level Hub Backend - Initialization"
 echo "=========================================="
 
 # Check if .env exists
 if [ ! -f .env ]; then
-    echo "📝 Creating .env file from .env.example..."
+    echo "Creating .env file from .env.example..."
     cp .env.example .env
-    echo "✅ .env file created. Please update it with your settings."
+    echo ".env file created. Please update it with your settings."
 else
-    echo "✅ .env file already exists."
+    echo ".env file already exists."
 fi
 
-# Start Docker containers
+# Tear down any stale containers (including orphans from previous runs)
+# This prevents "container name already in use" conflicts on re-runs.
 echo ""
-echo "🐳 Starting Docker containers..."
-docker-compose -f docker-compose.local.yml up -d --build
+echo "Removing any stale containers..."
+docker compose -f docker-compose.local.yml down --remove-orphans
 
-# Wait for database to be ready
+# Start Docker containers and wait until all healthchecks pass
 echo ""
-echo "⏳ Waiting for database to be ready..."
-sleep 10
+echo "Starting Docker containers..."
+docker compose -f docker-compose.local.yml up -d --build --wait
 
-# Run migrations
+# Run migrations (apply existing migration files only)
 echo ""
-echo "📦 Running database migrations..."
-docker-compose -f docker-compose.local.yml exec -T backend python manage.py makemigrations
-docker-compose -f docker-compose.local.yml exec -T backend python manage.py migrate
+echo "Running database migrations..."
+docker compose -f docker-compose.local.yml exec -T backend python manage.py migrate
 
 # Create superuser (optional)
 echo ""
-read -p "📝 Do you want to create a superuser? (y/n) " -n 1 -r
+read -p "Do you want to create a superuser? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    docker-compose -f docker-compose.local.yml exec backend python manage.py createsuperuser
+    docker compose -f docker-compose.local.yml exec backend python manage.py createsuperuser
 fi
 
 echo ""
-echo "✅ Setup complete!"
+echo "Setup complete!"
 echo ""
-echo "🌐 Services available at:"
+echo "Services available at:"
 echo "   - Backend API:    http://localhost:8000/api/v1/"
 echo "   - Swagger Docs:   http://localhost:8000/api/docs/"
 echo "   - Admin Panel:    http://localhost:8000/admin/"
 echo "   - Health Check:   http://localhost:8000/api/v1/health/"
 echo ""
-echo "📝 Useful commands:"
-echo "   - View logs:      docker-compose -f docker-compose.local.yml logs -f"
-echo "   - Stop services:  docker-compose -f docker-compose.local.yml down"
-echo "   - Restart:        docker-compose -f docker-compose.local.yml restart"
+echo "Useful commands:"
+echo "   - View logs:      docker compose -f docker-compose.local.yml logs -f"
+echo "   - Stop services:  docker compose -f docker-compose.local.yml down"
+echo "   - Restart:        docker compose -f docker-compose.local.yml restart"
 echo ""
-echo "Happy coding! 🎉"
+echo "Happy coding!"

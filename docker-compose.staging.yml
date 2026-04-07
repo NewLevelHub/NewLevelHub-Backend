@@ -38,6 +38,22 @@ services:
     networks:
       - nlh_network_staging
 
+  celery:
+    image: ${BACKEND_IMAGE}
+    container_name: nlh_celery_staging
+    command: celery -A config.celery worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.staging
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DEBUG=True
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+    networks:
+      - nlh_network_staging
+
   nginx:
     image: nginx:alpine
     container_name: nlh_nginx_staging

@@ -176,9 +176,15 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
 # Email
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+EMAIL_BACKEND     = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST        = os.getenv('EMAIL_HOST', 'localhost')
+EMAIL_PORT        = int(os.getenv('EMAIL_PORT', 25))
+EMAIL_USE_TLS     = os.getenv('EMAIL_USE_TLS', 'False') == 'True'
+EMAIL_USE_SSL     = os.getenv('EMAIL_USE_SSL', 'False') == 'True'
+EMAIL_HOST_USER     = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+DEFAULT_FROM_EMAIL  = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
+FRONTEND_URL        = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # File upload limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB

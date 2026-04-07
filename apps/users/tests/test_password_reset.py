@@ -76,6 +76,9 @@ CONFIRM_URL = '/api/v1/auth/password/reset/confirm/'
 @pytest.mark.django_db
 class TestPasswordResetRequest:
 
+    def setup_method(self):
+        cache.clear()
+
     @patch('apps.users.tasks.send_password_reset_email')
     def test_existing_email_returns_200_and_queues_task(self, mock_task, api_client, user):
         response = api_client.post(REQUEST_URL, {'email': user.email}, format='json')

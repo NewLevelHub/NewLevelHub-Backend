@@ -19,6 +19,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        validated_data.setdefault('is_email_verified', False)
         return User.objects.create_user(**validated_data)
 
 

@@ -7,14 +7,16 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from django.core.cache import cache
+from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin
-from .models import PasswordResetToken, User
+from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
@@ -30,6 +32,7 @@ from .serializers import (
 from .throttles import PasswordResetRateThrottle
 
 logger = logging.getLogger(__name__)
+from .tasks import send_verification_email, create_email_verification_token
 
 
 def _get_tokens(user):
@@ -57,7 +60,8 @@ def register(request):
     serializer = UserRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    # TODO: отправить email подтверждения (send_verification_email task)
+    token = create_email_verification_token(user)
+    send_verification_email.delay(user.id, str(token.token))
     return Response(
         {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
@@ -140,19 +144,74 @@ def logout(request):
 @extend_schema(
     tags=['Auth'],
     summary='Verify email',
-    request=EmailVerifySerializer,
+    request=None,
+    parameters=[
+        OpenApiParameter(
+            name='token',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=True,
+            description='Email verification token (UUID)',
+        ),
+    ],
     responses={
         200: OpenApiResponse(description='Email verified successfully'),
         400: OpenApiResponse(description='Invalid or expired token'),
+        404: OpenApiResponse(description='Token not found'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def verify_email(request):
+    serializer = EmailVerifySerializer(data=request.query_params)
+    serializer.is_valid(raise_exception=True)
+    verification_token = get_object_or_404(
+        EmailVerificationToken.objects.select_related('user'),
+        token=serializer.validated_data['token'],
+    )
+
+    if verification_token.is_used:
+        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+    if verification_token.is_expired:
+        return Response({'detail': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+
+    user = verification_token.user
+    user.is_email_verified = True
+    user.save(update_fields=['is_email_verified'])
+    verification_token.is_used = True
+    verification_token.save(update_fields=['is_used'])
+    return Response({'detail': 'Email verified'})
+
+
+@extend_schema(
+    tags=['Auth'],
+    summary='Resend verification email',
+    request=None,
+    responses={
+        200: OpenApiResponse(description='Verification email sent'),
+        403: OpenApiResponse(description='Email already verified'),
+        429: OpenApiResponse(description='Rate limit exceeded'),
     },
 )
 @api_view(['POST'])
-@permission_classes([AllowAny])
-def verify_email(request):
-    serializer = EmailVerifySerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    # TODO: найти EmailVerificationToken, пометить is_email_verified=True
-    return Response({'detail': 'Email verified'})
+@permission_classes([IsAuthenticated])
+def resend_verification_email(request):
+    if request.user.is_email_verified:
+        return Response({'detail': 'Email already verified'}, status=status.HTTP_403_FORBIDDEN)
+
+    throttle_key = f'email_resend:{request.user.id}'
+    resend_count = cache.get(throttle_key, 0)
+    if resend_count >= 3:
+        return Response({'detail': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+    if resend_count == 0:
+        cache.set(throttle_key, 1, timeout=600)
+    else:
+        cache.incr(throttle_key)
+
+    token = create_email_verification_token(request.user, invalidate_existing=True)
+    send_verification_email.delay(request.user.id, str(token.token))
+    return Response({'detail': 'Verification email sent'})
 
 
 @extend_schema(

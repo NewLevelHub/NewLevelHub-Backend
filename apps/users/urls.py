@@ -10,6 +10,7 @@ urlpatterns = [
     path('logout/', views.logout, name='logout'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('email/verify/', views.verify_email, name='email-verify'),
+    path('email/resend/', views.resend_verification_email, name='email-resend'),
     path('password/reset/', views.password_reset_request, name='password-reset-request'),
     path('password/reset/confirm/', views.password_reset_confirm, name='password-reset-confirm'),
 

@@ -3,8 +3,9 @@ from datetime import timedelta
 import logging
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -26,6 +27,7 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     EmailVerifySerializer,
     UserListSerializer,
+    _delete_file,
 )
 from .throttles import PasswordResetRateThrottle
 
@@ -35,6 +37,11 @@ logger = logging.getLogger(__name__)
 def _get_tokens(user):
     refresh = RefreshToken.for_user(user)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+def _profile_response(user, request):
+    """Return a UserProfileSerializer response with request context for avatar URL."""
+    return Response(UserProfileSerializer(user, context={'request': request}).data)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────
@@ -59,7 +66,7 @@ def register(request):
     user = serializer.save()
     # TODO: отправить email подтверждения (send_verification_email task)
     return Response(
-        {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
     )
 
@@ -84,7 +91,7 @@ def register_by_invite(request):
     user = serializer.save()
     # TODO: привязка к компании из инвайта, email верификация
     return Response(
-        {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
     )
 
@@ -107,7 +114,9 @@ def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.validated_data['user']
-    return Response({'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)})
+    return Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)}
+    )
 
 
 @extend_schema(
@@ -275,26 +284,55 @@ def password_reset_confirm(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def me(request):
-    return Response(UserProfileSerializer(request.user).data)
+    return _profile_response(request.user, request)
 
 
 @extend_schema(
     tags=['Users'],
-    summary='Update current user profile',
-    request=UserProfileUpdateSerializer,
+    summary='Update current user profile (multipart/form-data)',
+    description=(
+        'Updates writable profile fields. '
+        'Send as multipart/form-data when uploading an avatar. '
+        'Allowed avatar formats: JPEG, PNG, WebP; max 5 MB. '
+        'Avatar is resized to 400×400 px server-side. '
+        'Fields email, role, and company are ignored even if supplied.'
+    ),
+    request={'multipart/form-data': UserProfileUpdateSerializer},
     responses={
         200: UserProfileSerializer,
-        400: OpenApiResponse(description='Validation error'),
+        400: OpenApiResponse(description='Validation error (bad file type, size, etc.)'),
         401: OpenApiResponse(description='Not authenticated'),
     },
 )
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def update_profile(request):
     serializer = UserProfileUpdateSerializer(request.user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(UserProfileSerializer(request.user).data)
+    # Re-fetch to ensure avatar field reflects the saved path.
+    request.user.refresh_from_db()
+    return _profile_response(request.user, request)
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Delete current user avatar',
+    description='Removes the avatar file from storage and sets avatar=null on the user profile.',
+    responses={
+        200: UserProfileSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_avatar(request):
+    user = request.user
+    _delete_file(user.avatar)
+    user.avatar = None
+    user.save(update_fields=['avatar'])
+    return _profile_response(user, request)
 
 
 @extend_schema(

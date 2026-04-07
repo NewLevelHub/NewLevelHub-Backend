@@ -6,11 +6,11 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
-
-logger = logging.getLogger(__name__)
 from django.utils import timezone
 
 from .models import EmailVerificationToken, User
+
+logger = logging.getLogger(__name__)
 
 
 def create_email_verification_token(user, invalidate_existing=False):

@@ -29,10 +29,10 @@ from .serializers import (
     EmailVerifySerializer,
     UserListSerializer,
 )
+from .tasks import send_verification_email, create_email_verification_token
 from .throttles import PasswordResetRateThrottle
 
 logger = logging.getLogger(__name__)
-from .tasks import send_verification_email, create_email_verification_token
 
 
 def _get_tokens(user):

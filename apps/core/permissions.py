@@ -93,6 +93,21 @@ class IsCompanyAdminOrReadOnly(_AuthenticatedPermission):
         return request.user.role in ('superadmin', 'company_admin')
 
 
+class IsEmailVerifiedOrSuperAdmin(_AuthenticatedPermission):
+    """
+    Blocks unverified users from protected business actions.
+    Superadmin is always allowed.
+    """
+
+    message = 'Email not verified'
+
+    def _has_role_permission(self, request, view):
+        user = request.user
+        if user.role == 'superadmin':
+            return True
+        return bool(user.is_email_verified)
+
+
 class IsOwnerOrAdmin(_AuthenticatedPermission):
     """
     Object-level permission.

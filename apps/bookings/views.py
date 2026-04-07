@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember
+from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Resource, Booking, RecurringBooking
 from .serializers import (
@@ -132,7 +132,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
 )
 class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BookingSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
     queryset = Booking.objects.all()
     filterset_class = BookingFilter
     ordering_fields = ['start_time', 'created_at']
@@ -199,7 +199,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 )
 class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = RecurringBookingSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
     queryset = RecurringBooking.objects.all()
     http_method_names = ['get', 'post', 'patch', 'delete']
 

@@ -1,18 +1,53 @@
 import logging
+from datetime import timedelta
+from urllib.parse import urlencode
 
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.utils import timezone
+
+from .models import EmailVerificationToken, User
 
 logger = logging.getLogger(__name__)
 
 
+def create_email_verification_token(user, invalidate_existing=False):
+    """
+    Create a fresh verification token with a 24h TTL.
+    Optionally invalidate all active tokens for this user.
+    """
+    if invalidate_existing:
+        EmailVerificationToken.objects.filter(user=user, is_used=False).update(is_used=True)
+    return EmailVerificationToken.objects.create(
+        user=user,
+        expires_at=timezone.now() + timedelta(hours=24),
+    )
+
+
 @shared_task
-def send_verification_email(user_id):
-    """Отправка email для подтверждения аккаунта."""
-    # TODO: создать EmailVerificationToken, сформировать ссылку, отправить email
-    pass
+def send_verification_email(user_id, token=None):
+    """Send email verification link."""
+    user = User.objects.filter(id=user_id).first()
+    if not user:
+        return
+
+    token_value = str(token) if token else str(create_email_verification_token(user).token)
+    verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?{urlencode({'token': token_value})}"
+
+    send_mail(
+        subject='Verify your email',
+        message=(
+            f'Hi {user.full_name},\n\n'
+            'Please verify your email by opening this link:\n'
+            f'{verify_link}\n\n'
+            'This link expires in 24 hours.'
+        ),
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)

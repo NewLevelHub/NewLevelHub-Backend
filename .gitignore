@@ -82,6 +82,7 @@ Thumbs.db
 *.seed
 *.pid.lock
 .docker/
+celerybeat-schedule
 
 # ------------------------------
 # Backups
@@ -94,3 +95,4 @@ Thumbs.db
 # ------------------------------
 scripts/linear-tickets.json
 scripts/linear-config.local.js
+

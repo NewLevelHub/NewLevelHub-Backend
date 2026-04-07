@@ -26,6 +26,7 @@ if DEBUG:
     ]
 
 # Email backend for development — reads from .env, falls back to console
+# Email backend for development (configurable via .env)
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 # Logging

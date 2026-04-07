@@ -1,0 +1,50 @@
+# Per-PR preview environment template.
+# CI copies this file to the staging server as docker-compose.pr-N.yml
+# and runs: docker compose --project-name pr-N -f docker-compose.pr-N.yml up -d
+# Required env vars at runtime: PR_SLUG, PREVIEW_DB_NAME, BACKEND_IMAGE, PREVIEW_PORT
+# Base secrets loaded from .env.staging on the server.
+
+services:
+  db:
+    image: postgres:15-alpine
+    env_file:
+      - .env.staging
+    environment:
+      POSTGRES_DB: ${PREVIEW_DB_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nlh_user} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    image: ${BACKEND_IMAGE}
+    command: gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 config.wsgi:application
+    env_file:
+      - .env.staging
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      DEBUG: "True"
+      POSTGRES_DB: ${PREVIEW_DB_NAME}
+      POSTGRES_HOST: db
+      ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz"
+      CORS_ALLOWED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
+      FRONTEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
+      SECURE_SSL_REDIRECT: "False"
+    ports:
+      - "${PREVIEW_PORT}:8000"
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:

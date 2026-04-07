@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
+from apps.core.permissions import IsOwnerOrAdmin
 from .models import Notification, NotificationPreference
 from .serializers import NotificationSerializer, NotificationPreferenceSerializer, UnreadCountSerializer
 
@@ -23,7 +24,7 @@ from .serializers import NotificationSerializer, NotificationPreferenceSerialize
 )
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsOwnerOrAdmin]
     http_method_names = ['get', 'patch', 'delete']
     filterset_fields = ['is_read', 'notification_type']
 

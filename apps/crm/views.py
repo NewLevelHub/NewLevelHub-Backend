@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsCompanyMember
-from apps.core.mixins import CompanyQuerySetMixin, SetCompanyOnCreateMixin
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer,
@@ -46,7 +46,7 @@ from .serializers import (
         responses={204: OpenApiResponse(description='Deleted')},
     ),
 )
-class BoardViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BoardSerializer
     permission_classes = [IsCompanyMember]
 
@@ -258,7 +258,7 @@ class CommentViewSet(viewsets.ModelViewSet):
         },
     ),
 )
-class LabelViewSet(CompanyQuerySetMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LabelSerializer
     permission_classes = [IsCompanyMember]
     queryset = Label.objects.all()

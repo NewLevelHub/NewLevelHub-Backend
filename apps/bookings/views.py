@@ -1,11 +1,11 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin
+from apps.core.permissions import IsSuperAdmin, IsCompanyMember
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Resource, Booking, RecurringBooking
 from .serializers import (
     ResourceSerializer,
@@ -59,6 +59,7 @@ from .filters import ResourceFilter, BookingFilter
 )
 class ResourceViewSet(viewsets.ModelViewSet):
     queryset = Resource.objects.filter(is_active=True)
+    permission_classes = [IsCompanyMember]
     filterset_class = ResourceFilter
     search_fields = ['name', 'zone']
     ordering_fields = ['name', 'floor', 'capacity']
@@ -71,7 +72,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyMember()]
 
     @extend_schema(
         tags=['Bookings'],
@@ -129,19 +130,13 @@ class ResourceViewSet(viewsets.ModelViewSet):
         },
     ),
 )
-class BookingViewSet(viewsets.ModelViewSet):
+class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BookingSerializer
+    permission_classes = [IsCompanyMember]
+    queryset = Booking.objects.all()
     filterset_class = BookingFilter
     ordering_fields = ['start_time', 'created_at']
     http_method_names = ['get', 'post', 'patch', 'delete']
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == 'superadmin':
-            return Booking.objects.all()
-        if user.role == 'company_admin' and user.company_id:
-            return Booking.objects.filter(company=user.company)
-        return Booking.objects.filter(user=user)
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -202,16 +197,11 @@ class BookingViewSet(viewsets.ModelViewSet):
         },
     ),
 )
-class RecurringBookingViewSet(viewsets.ModelViewSet):
+class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = RecurringBookingSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
+    queryset = RecurringBooking.objects.all()
     http_method_names = ['get', 'post', 'patch', 'delete']
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == 'superadmin':
-            return RecurringBooking.objects.all()
-        return RecurringBooking.objects.filter(user=user)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)

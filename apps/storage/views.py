@@ -1,9 +1,9 @@
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from apps.core.permissions import IsCompanyMember
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
 
@@ -38,7 +38,7 @@ from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, 
 )
 class FolderViewSet(viewsets.ModelViewSet):
     serializer_class = FolderSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
 
     def get_queryset(self):
         user = self.request.user
@@ -74,7 +74,7 @@ class FolderViewSet(viewsets.ModelViewSet):
 )
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
     search_fields = ['name']
     ordering_fields = ['name', 'file_size', 'created_at']
 
@@ -124,7 +124,7 @@ class FileViewSet(viewsets.ModelViewSet):
 )
 class FileShareViewSet(viewsets.ModelViewSet):
     serializer_class = FileShareSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
     http_method_names = ['get', 'post', 'delete']
 
     def get_queryset(self):
@@ -146,7 +146,7 @@ class FileShareViewSet(viewsets.ModelViewSet):
     },
 )
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsCompanyMember])
 def storage_usage(request):
     user = request.user
     if user.company_id:

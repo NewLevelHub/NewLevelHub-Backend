@@ -1,9 +1,77 @@
-from rest_framework import serializers
+import io
+import os
+
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from rest_framework import serializers
+
 from .models import User
 
+
+# ── Constants ─────────────────────────────────────────────────────────
+
+AVATAR_ALLOWED_CONTENT_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+AVATAR_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+AVATAR_SIZE = (400, 400)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+def _delete_file(field):
+    """Delete the physical file referenced by an ImageField / FileField."""
+    if field and hasattr(field, 'path'):
+        try:
+            if os.path.isfile(field.path):
+                os.remove(field.path)
+        except (OSError, ValueError):
+            pass
+
+
+def _resize_avatar(image_file):
+    """
+    Resize the uploaded file in-place to exactly 400×400 px.
+    Uses thumbnail (preserves aspect ratio) then pads with black to fill.
+    Saves back as JPEG regardless of original format.
+    """
+    from PIL import Image
+
+    pil_img = Image.open(image_file)
+
+    if pil_img.mode not in ('RGB', 'RGBA'):
+        pil_img = pil_img.convert('RGB')
+
+    pil_img.thumbnail(AVATAR_SIZE, Image.LANCZOS)
+
+    canvas = Image.new('RGB', AVATAR_SIZE, (0, 0, 0))
+    offset = (
+        (AVATAR_SIZE[0] - pil_img.width) // 2,
+        (AVATAR_SIZE[1] - pil_img.height) // 2,
+    )
+    canvas.paste(pil_img.convert('RGB'), offset)
+
+    output = io.BytesIO()
+    canvas.save(output, format='JPEG', quality=85, optimize=True)
+    output.seek(0)
+
+    # Mutate the in-memory uploaded file so Django stores the resized bytes.
+    image_file.file = output
+    image_file.content_type = 'image/jpeg'
+    image_file.size = output.getbuffer().nbytes
+    if getattr(image_file, 'name', None):
+        base = os.path.splitext(image_file.name)[0]
+        image_file.name = base + '.jpg'
+
+
+# ── Nested serializers ────────────────────────────────────────────────
+
+class CompanyBriefSerializer(serializers.Serializer):
+    """Minimal company snapshot embedded in the user profile response."""
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
+# ── Auth ──────────────────────────────────────────────────────────────
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
@@ -59,26 +127,74 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
+# ── Profile ───────────────────────────────────────────────────────────
+
 class UserProfileSerializer(serializers.ModelSerializer):
+    """
+    Read-only profile returned by GET /me/ and embedded in auth responses.
+
+    Returns:
+      id, email, first_name, last_name, full_name, phone, position,
+      avatar (absolute URL), role, company {id, name},
+      is_email_verified, date_joined
+    """
     full_name = serializers.CharField(read_only=True)
-    company_name = serializers.CharField(source='company.name', read_only=True, default=None)
+    company = CompanyBriefSerializer(read_only=True)
+    avatar = serializers.ImageField(read_only=True)
 
     class Meta:
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'full_name',
             'phone', 'position', 'avatar', 'role',
-            'company', 'company_name',
-            'is_email_verified', 'date_joined', 'last_login',
+            'company',
+            'is_email_verified', 'date_joined',
         ]
-        read_only_fields = ['id', 'email', 'role', 'company', 'is_email_verified', 'date_joined', 'last_login']
+        read_only_fields = fields
 
 
 class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    """
+    PATCH /me/update/ — writable fields only.
+    email, role, company are deliberately excluded and cannot be changed here.
+    Avatar is validated for type (JPEG/PNG/WebP) and size (max 5 MB),
+    then resized to 400×400 px before saving.
+    """
+    avatar = serializers.ImageField(required=False, allow_null=True)
+
     class Meta:
         model = User
         fields = ['first_name', 'last_name', 'phone', 'position', 'avatar']
 
+    def validate_avatar(self, image):
+        if image is None:
+            return image
+
+        content_type = getattr(image, 'content_type', None)
+        if content_type not in AVATAR_ALLOWED_CONTENT_TYPES:
+            raise serializers.ValidationError(
+                'Unsupported image type. Allowed types: JPEG, PNG, WebP.'
+            )
+
+        if image.size > AVATAR_MAX_BYTES:
+            raise serializers.ValidationError(
+                'Avatar file too large. Maximum allowed size is 5 MB.'
+            )
+
+        return image
+
+    def update(self, instance, validated_data):
+        new_avatar = validated_data.get('avatar')
+
+        if new_avatar is not None:
+            # Remove old file from disk before Django writes the new one.
+            _delete_file(instance.avatar)
+            _resize_avatar(new_avatar)
+
+        return super().update(instance, validated_data)
+
+
+# ── Password & verification ───────────────────────────────────────────
 
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField()
@@ -110,10 +226,39 @@ class EmailVerifySerializer(serializers.Serializer):
     token = serializers.UUIDField()
 
 
+class CompanyBriefSerializer(serializers.Serializer):
+    """Краткое представление компании для вложенных сериализаторов."""
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
 class UserListSerializer(serializers.ModelSerializer):
     """Для списков пользователей (суперадмин)."""
     full_name = serializers.CharField(read_only=True)
+    company = CompanyBriefSerializer(read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'full_name', 'role', 'company', 'is_active', 'date_joined', 'last_login']
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name',
+            'role', 'company', 'is_active', 'date_joined', 'last_login', 'avatar',
+        ]
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Полная информация о пользователе для суперадмина."""
+    full_name = serializers.CharField(read_only=True)
+    company = CompanyBriefSerializer(read_only=True)
+    bookings_count = serializers.IntegerField(read_only=True)
+    tasks_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name',
+            'phone', 'position', 'avatar', 'role',
+            'company',
+            'is_active', 'is_email_verified',
+            'date_joined', 'last_login',
+            'bookings_count', 'tasks_count',
+        ]

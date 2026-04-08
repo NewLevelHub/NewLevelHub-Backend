@@ -3,19 +3,25 @@ from datetime import timedelta
 import logging
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
+from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
+from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 import rest_framework.fields as fields
 
+from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
+from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
@@ -28,6 +34,8 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     EmailVerifySerializer,
     UserListSerializer,
+    UserDetailSerializer,
+    _delete_file,
 )
 from .tasks import send_verification_email, create_email_verification_token
 from .throttles import PasswordResetRateThrottle
@@ -38,6 +46,11 @@ logger = logging.getLogger(__name__)
 def _get_tokens(user):
     refresh = RefreshToken.for_user(user)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+
+
+def _profile_response(user, request):
+    """Return a UserProfileSerializer response with request context for avatar URL."""
+    return Response(UserProfileSerializer(user, context={'request': request}).data)
 
 
 # ── Auth ──────────────────────────────────────────────────────────────
@@ -63,7 +76,7 @@ def register(request):
     token = create_email_verification_token(user)
     send_verification_email.delay(user.id, str(token.token))
     return Response(
-        {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
     )
 
@@ -88,7 +101,7 @@ def register_by_invite(request):
     user = serializer.save()
     # TODO: привязка к компании из инвайта, email верификация
     return Response(
-        {'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)},
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
         status=status.HTTP_201_CREATED,
     )
 
@@ -111,7 +124,9 @@ def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.validated_data['user']
-    return Response({'user': UserProfileSerializer(user).data, 'tokens': _get_tokens(user)})
+    return Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)}
+    )
 
 
 @extend_schema(
@@ -334,26 +349,55 @@ def password_reset_confirm(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def me(request):
-    return Response(UserProfileSerializer(request.user).data)
+    return _profile_response(request.user, request)
 
 
 @extend_schema(
     tags=['Users'],
-    summary='Update current user profile',
-    request=UserProfileUpdateSerializer,
+    summary='Update current user profile (multipart/form-data)',
+    description=(
+        'Updates writable profile fields. '
+        'Send as multipart/form-data when uploading an avatar. '
+        'Allowed avatar formats: JPEG, PNG, WebP; max 5 MB. '
+        'Avatar is resized to 400×400 px server-side. '
+        'Fields email, role, and company are ignored even if supplied.'
+    ),
+    request={'multipart/form-data': UserProfileUpdateSerializer},
     responses={
         200: UserProfileSerializer,
-        400: OpenApiResponse(description='Validation error'),
+        400: OpenApiResponse(description='Validation error (bad file type, size, etc.)'),
         401: OpenApiResponse(description='Not authenticated'),
     },
 )
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def update_profile(request):
     serializer = UserProfileUpdateSerializer(request.user, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
     serializer.save()
-    return Response(UserProfileSerializer(request.user).data)
+    # Re-fetch to ensure avatar field reflects the saved path.
+    request.user.refresh_from_db()
+    return _profile_response(request.user, request)
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Delete current user avatar',
+    description='Removes the avatar file from storage and sets avatar=null on the user profile.',
+    responses={
+        200: UserProfileSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_avatar(request):
+    user = request.user
+    _delete_file(user.avatar)
+    user.avatar = None
+    user.save(update_fields=['avatar'])
+    return _profile_response(user, request)
 
 
 @extend_schema(
@@ -381,6 +425,14 @@ def change_password(request):
 @extend_schema(
     tags=['Users'],
     summary='List all users (superadmin)',
+    parameters=[
+        OpenApiParameter(name='role', type=str,
+                         description='Filter by role (superadmin, company_admin, employee, guest)'),
+        OpenApiParameter(name='company_id', type=int, description='Filter by company ID'),
+        OpenApiParameter(name='is_active', type=bool, description='Filter by active status'),
+        OpenApiParameter(name='search', type=str, description='Search by email, first_name, last_name'),
+        OpenApiParameter(name='ordering', type=str, description='Order by date_joined or last_login'),
+    ],
     responses={
         200: UserListSerializer(many=True),
         401: OpenApiResponse(description='Not authenticated'),
@@ -388,26 +440,34 @@ def change_password(request):
     },
 )
 class UserListView(ListAPIView):
-    queryset = User.objects.all()
+    queryset = User.objects.select_related('company').all()
     serializer_class = UserListSerializer
     permission_classes = [IsSuperAdmin]
-    filterset_fields = ['role', 'is_active', 'company']
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = UserFilter
     search_fields = ['email', 'first_name', 'last_name']
-    ordering_fields = ['date_joined', 'last_login', 'email']
+    ordering_fields = ['date_joined', 'last_login']
+    ordering = ['-date_joined']
 
 
 @extend_schema(
     tags=['Users'],
-    summary='Get / update user by id (superadmin)',
+    summary='Get user detail by id (superadmin)',
     responses={
-        200: UserProfileSerializer,
+        200: UserDetailSerializer,
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Superadmin only'),
         404: OpenApiResponse(description='User not found'),
     },
 )
-class UserDetailView(RetrieveUpdateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserProfileSerializer
+class UserDetailView(RetrieveAPIView):
+    serializer_class = UserDetailSerializer
     permission_classes = [IsSuperAdmin]
     lookup_field = 'pk'
+
+    def get_queryset(self):
+        return User.objects.select_related('company').annotate(
+            bookings_count=Count('bookings', distinct=True),
+            tasks_count=Count('assigned_tasks', distinct=True),
+        )

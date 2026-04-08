@@ -17,6 +17,7 @@ urlpatterns = [
     # Profile
     path('me/', views.me, name='me'),
     path('me/update/', views.update_profile, name='update-profile'),
+    path('me/avatar/', views.delete_avatar, name='delete-avatar'),
     path('me/password/', views.change_password, name='change-password'),
 
     # Admin: user management

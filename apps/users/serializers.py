@@ -110,10 +110,39 @@ class EmailVerifySerializer(serializers.Serializer):
     token = serializers.UUIDField()
 
 
+class CompanyBriefSerializer(serializers.Serializer):
+    """Краткое представление компании для вложенных сериализаторов."""
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+
+
 class UserListSerializer(serializers.ModelSerializer):
     """Для списков пользователей (суперадмин)."""
     full_name = serializers.CharField(read_only=True)
+    company = CompanyBriefSerializer(read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'full_name', 'role', 'company', 'is_active', 'date_joined', 'last_login']
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name',
+            'role', 'company', 'is_active', 'date_joined', 'last_login', 'avatar',
+        ]
+
+
+class UserDetailSerializer(serializers.ModelSerializer):
+    """Полная информация о пользователе для суперадмина."""
+    full_name = serializers.CharField(read_only=True)
+    company = CompanyBriefSerializer(read_only=True)
+    bookings_count = serializers.IntegerField(read_only=True)
+    tasks_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'first_name', 'last_name', 'full_name',
+            'phone', 'position', 'avatar', 'role',
+            'company',
+            'is_active', 'is_email_verified',
+            'date_joined', 'last_login',
+            'bookings_count', 'tasks_count',
+        ]

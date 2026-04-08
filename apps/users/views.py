@@ -4,19 +4,24 @@ import logging
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
-from rest_framework.generics import ListAPIView, RetrieveUpdateAPIView
+from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.core.cache import cache
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
 import rest_framework.fields as fields
 
+from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
+from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
@@ -29,6 +34,7 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     EmailVerifySerializer,
     UserListSerializer,
+    UserDetailSerializer,
     _delete_file,
 )
 from .tasks import send_verification_email, create_email_verification_token
@@ -419,6 +425,14 @@ def change_password(request):
 @extend_schema(
     tags=['Users'],
     summary='List all users (superadmin)',
+    parameters=[
+        OpenApiParameter(name='role', type=str,
+                         description='Filter by role (superadmin, company_admin, employee, guest)'),
+        OpenApiParameter(name='company_id', type=int, description='Filter by company ID'),
+        OpenApiParameter(name='is_active', type=bool, description='Filter by active status'),
+        OpenApiParameter(name='search', type=str, description='Search by email, first_name, last_name'),
+        OpenApiParameter(name='ordering', type=str, description='Order by date_joined or last_login'),
+    ],
     responses={
         200: UserListSerializer(many=True),
         401: OpenApiResponse(description='Not authenticated'),
@@ -426,26 +440,34 @@ def change_password(request):
     },
 )
 class UserListView(ListAPIView):
-    queryset = User.objects.all()
+    queryset = User.objects.select_related('company').all()
     serializer_class = UserListSerializer
     permission_classes = [IsSuperAdmin]
-    filterset_fields = ['role', 'is_active', 'company']
+    pagination_class = StandardPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = UserFilter
     search_fields = ['email', 'first_name', 'last_name']
-    ordering_fields = ['date_joined', 'last_login', 'email']
+    ordering_fields = ['date_joined', 'last_login']
+    ordering = ['-date_joined']
 
 
 @extend_schema(
     tags=['Users'],
-    summary='Get / update user by id (superadmin)',
+    summary='Get user detail by id (superadmin)',
     responses={
-        200: UserProfileSerializer,
+        200: UserDetailSerializer,
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Superadmin only'),
         404: OpenApiResponse(description='User not found'),
     },
 )
-class UserDetailView(RetrieveUpdateAPIView):
-    queryset = User.objects.all()
-    serializer_class = UserProfileSerializer
+class UserDetailView(RetrieveAPIView):
+    serializer_class = UserDetailSerializer
     permission_classes = [IsSuperAdmin]
     lookup_field = 'pk'
+
+    def get_queryset(self):
+        return User.objects.select_related('company').annotate(
+            bookings_count=Count('bookings', distinct=True),
+            tasks_count=Count('assigned_tasks', distinct=True),
+        )

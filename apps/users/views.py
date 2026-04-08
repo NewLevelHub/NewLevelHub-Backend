@@ -53,6 +53,17 @@ def _profile_response(user, request):
     return Response(UserProfileSerializer(user, context={'request': request}).data)
 
 
+def _blacklist_user_refresh_tokens(user):
+    """Blacklist all outstanding refresh tokens for a user."""
+    outstanding = OutstandingToken.objects.filter(user=user).exclude(
+        blacklistedtoken__isnull=False
+    )
+    BlacklistedToken.objects.bulk_create(
+        [BlacklistedToken(token=t) for t in outstanding],
+        ignore_conflicts=True,
+    )
+
+
 # ── Auth ──────────────────────────────────────────────────────────────
 
 @extend_schema(
@@ -324,14 +335,7 @@ def password_reset_confirm(request):
     user.set_password(new_password)
     user.save(update_fields=['password'])
 
-    # Bulk-blacklist all outstanding refresh tokens for this user without N+1 queries.
-    outstanding = OutstandingToken.objects.filter(user=user).exclude(
-        blacklistedtoken__isnull=False
-    )
-    BlacklistedToken.objects.bulk_create(
-        [BlacklistedToken(token=t) for t in outstanding],
-        ignore_conflicts=True,
-    )
+    _blacklist_user_refresh_tokens(user)
 
     return Response({'detail': 'Password has been reset'})
 
@@ -471,3 +475,44 @@ class UserDetailView(RetrieveAPIView):
             bookings_count=Count('bookings', distinct=True),
             tasks_count=Count('assigned_tasks', distinct=True),
         )
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Block user by id (superadmin)',
+    description='Sets is_active=false and invalidates all user refresh sessions.',
+    responses={
+        200: OpenApiResponse(description='User blocked and sessions invalidated'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+        404: OpenApiResponse(description='User not found'),
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin])
+def block_user(request, pk):
+    user = get_object_or_404(User, pk=pk)
+    user.is_active = False
+    user.save(update_fields=['is_active'])
+    _blacklist_user_refresh_tokens(user)
+    return Response({'detail': 'User blocked'})
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Unblock user by id (superadmin)',
+    description='Sets is_active=true so the user can authenticate again.',
+    responses={
+        200: OpenApiResponse(description='User unblocked'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+        404: OpenApiResponse(description='User not found'),
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin])
+def unblock_user(request, pk):
+    user = get_object_or_404(User, pk=pk)
+    user.is_active = True
+    user.save(update_fields=['is_active'])
+    return Response({'detail': 'User unblocked'})

@@ -39,12 +39,18 @@ from .serializers import (
 )
 from .tasks import send_verification_email, create_email_verification_token
 from .throttles import PasswordResetRateThrottle
+from .jwt import (
+    REFRESH_COOKIE_NAME,
+    clear_refresh_cookie,
+    issue_refresh_token,
+    set_refresh_cookie,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _get_tokens(user):
-    refresh = RefreshToken.for_user(user)
+def _get_tokens(user, remember_me=False):
+    refresh = issue_refresh_token(user, remember_me=remember_me)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
@@ -75,10 +81,13 @@ def register(request):
     user = serializer.save()
     token = create_email_verification_token(user)
     send_verification_email.delay(user.id, str(token.token))
-    return Response(
-        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
+    tokens = _get_tokens(user, remember_me=False)
+    response = Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
         status=status.HTTP_201_CREATED,
     )
+    set_refresh_cookie(response, tokens['refresh'], remember_me=False)
+    return response
 
 
 @extend_schema(
@@ -100,10 +109,13 @@ def register_by_invite(request):
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
     # TODO: привязка к компании из инвайта, email верификация
-    return Response(
-        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
+    tokens = _get_tokens(user, remember_me=False)
+    response = Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
         status=status.HTTP_201_CREATED,
     )
+    set_refresh_cookie(response, tokens['refresh'], remember_me=False)
+    return response
 
 
 @extend_schema(
@@ -124,6 +136,11 @@ def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.validated_data['user']
+    remember_me = serializer.validated_data.get('remember_me', False)
+    tokens = _get_tokens(user, remember_me=remember_me)
+    response = Response({'user': UserProfileSerializer(user).data, 'tokens': tokens})
+    set_refresh_cookie(response, tokens['refresh'], remember_me=remember_me)
+    return response
     return Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)}
     )
@@ -139,13 +156,12 @@ def login(request):
     responses={
         200: OpenApiResponse(description='Logged out successfully'),
         400: OpenApiResponse(description='Missing or invalid refresh token'),
-        401: OpenApiResponse(description='Not authenticated'),
     },
 )
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def logout(request):
-    refresh_token = request.data.get('refresh')
+    refresh_token = request.data.get('refresh') or request.COOKIES.get(REFRESH_COOKIE_NAME)
     if not refresh_token:
         return Response({'detail': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -153,7 +169,9 @@ def logout(request):
         token.blacklist()
     except Exception:
         return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
-    return Response({'detail': 'Logged out'})
+    response = Response({'detail': 'Logged out'})
+    clear_refresh_cookie(response)
+    return response
 
 
 @extend_schema(

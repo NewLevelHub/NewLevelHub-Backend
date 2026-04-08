@@ -14,6 +14,11 @@ class Company(TimeStampedModel, SoftDeleteModel):
         ('standard', 'Standard'),
         ('premium', 'Premium'),
     ]
+    PLAN_DEFAULT_LIMITS = {
+        'basic': {'max_employees': 10, 'max_boards': 1, 'storage_limit_gb': 5},
+        'standard': {'max_employees': 30, 'max_boards': 5, 'storage_limit_gb': 20},
+        'premium': {'max_employees': 9999, 'max_boards': 9999, 'storage_limit_gb': 100},
+    }
 
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
@@ -36,6 +41,26 @@ class Company(TimeStampedModel, SoftDeleteModel):
     class Meta:
         db_table = 'companies'
         verbose_name_plural = 'companies'
+
+    def save(self, *args, **kwargs):
+        """
+        Apply plan-based defaults on create for flows that bypass DRF serializers
+        (e.g. Django admin / direct ORM create).
+        """
+        if self._state.adding:
+            basic_defaults = self.PLAN_DEFAULT_LIMITS['basic']
+            plan_defaults = self.PLAN_DEFAULT_LIMITS.get(self.plan, basic_defaults)
+
+            # Model field defaults are "basic". If company is created with another
+            # plan and limit fields were left untouched, switch them to plan defaults.
+            if self.max_employees == basic_defaults['max_employees']:
+                self.max_employees = plan_defaults['max_employees']
+            if self.max_boards == basic_defaults['max_boards']:
+                self.max_boards = plan_defaults['max_boards']
+            if self.storage_limit_gb == basic_defaults['storage_limit_gb']:
+                self.storage_limit_gb = plan_defaults['storage_limit_gb']
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

@@ -7,6 +7,11 @@ from django.utils import timezone
 from apps.core.models import TimeStampedModel
 
 
+def _avatar_upload_path(instance, filename):
+    """Store avatars under avatars/<user_id>/<filename>."""
+    return f'avatars/{instance.pk}/{filename}'
+
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra_fields):
         if not email:
@@ -47,7 +52,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     )
 
     position = models.CharField(max_length=100, blank=True, default='')
-    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    avatar = models.ImageField(upload_to=_avatar_upload_path, null=True, blank=True)
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)

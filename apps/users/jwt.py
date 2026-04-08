@@ -18,12 +18,32 @@ def _refresh_lifetime(remember_me: bool):
 
 def _sync_outstanding_exp(refresh: RefreshToken):
     """
-    Keep OutstandingToken.expires_at aligned with JWT `exp` after custom set_exp().
+    Keep OutstandingToken aligned with JWT after custom set_exp().
+    In some environments rotated refresh tokens may not have an OutstandingToken row yet.
     """
     jti = str(refresh['jti'])
     exp_ts = int(refresh['exp'])
     expires_at = timezone.datetime.fromtimestamp(exp_ts, tz=timezone.utc)
-    OutstandingToken.objects.filter(jti=jti).update(expires_at=expires_at)
+    token_str = str(refresh)
+    user_id = refresh.get('user_id')
+
+    if user_id is None:
+        OutstandingToken.objects.filter(jti=jti).update(expires_at=expires_at, token=token_str)
+        return
+
+    obj, created = OutstandingToken.objects.get_or_create(
+        jti=jti,
+        defaults={
+            'user_id': user_id,
+            'token': token_str,
+            'created_at': timezone.now(),
+            'expires_at': expires_at,
+        },
+    )
+    if not created:
+        obj.expires_at = expires_at
+        obj.token = token_str
+        obj.save(update_fields=['expires_at', 'token'])
 
 
 def issue_refresh_token(user, remember_me: bool = False) -> RefreshToken:

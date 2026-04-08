@@ -2,6 +2,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
@@ -56,9 +57,12 @@ def clear_refresh_cookie(response: Response):
 
 class RememberMeTokenRefreshSerializer(TokenRefreshSerializer):
     def validate(self, attrs):
-        incoming_refresh = RefreshToken(attrs['refresh'])
-        remember_me = bool(incoming_refresh.get('remember_me', False))
-        data = super().validate(attrs)
+        try:
+            incoming_refresh = RefreshToken(attrs['refresh'])
+            remember_me = bool(incoming_refresh.get('remember_me', False))
+            data = super().validate(attrs)
+        except TokenError as exc:
+            raise InvalidToken(str(exc)) from exc
 
         if 'refresh' in data:
             rotated_refresh = RefreshToken(data['refresh'])

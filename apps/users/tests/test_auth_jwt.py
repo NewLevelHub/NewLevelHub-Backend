@@ -103,6 +103,20 @@ class TestAuthJWT:
         assert logout_response.status_code == status.HTTP_200_OK
         assert BlacklistedToken.objects.filter(token__jti=jti).exists()
 
+    def test_refresh_with_blacklisted_token_returns_401(self, api_client, user):
+        login_response = api_client.post(
+            LOGIN_URL,
+            {'email': user.email, 'password': 'StrongPass123!', 'remember_me': False},
+            format='json',
+        )
+        refresh = login_response.data['tokens']['refresh']
+
+        logout_response = api_client.post(LOGOUT_URL, {'refresh': refresh}, format='json')
+        assert logout_response.status_code == status.HTTP_200_OK
+
+        refresh_response = api_client.post(REFRESH_URL, {'refresh': refresh}, format='json')
+        assert refresh_response.status_code == status.HTTP_401_UNAUTHORIZED
+
     def test_authenticated_request_updates_last_login(self, api_client, user):
         login_response = api_client.post(
             LOGIN_URL,

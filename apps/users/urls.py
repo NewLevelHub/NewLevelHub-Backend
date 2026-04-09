@@ -23,4 +23,5 @@ urlpatterns = [
     # Admin: user management
     path('users/', views.UserListView.as_view(), name='users-list'),
     path('users/<int:pk>/', views.UserDetailView.as_view(), name='users-detail'),
+    path('users/<int:id>/impersonate/', views.impersonate_user, name='impersonate-user'),
 ]

@@ -471,6 +471,63 @@ class UserListView(ListAPIView):
 
 @extend_schema(
     tags=['Users'],
+    summary='Impersonate user (superadmin)',
+    description=(
+        'Issues JWT tokens on behalf of the target user for support/debug. '
+        'The returned access token contains an `impersonated_by` claim with '
+        'the superadmin\'s ID for audit purposes. Cannot impersonate self, '
+        'another superadmin, or an inactive user.'
+    ),
+    request=None,
+    responses={
+        200: OpenApiResponse(description='Returns access, refresh, and target user data.'),
+        400: OpenApiResponse(description='Cannot impersonate self, another superadmin, or inactive user.'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+        404: OpenApiResponse(description='User not found'),
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin])
+def impersonate_user(request, id):
+    target = get_object_or_404(User, pk=id)
+
+    if target.id == request.user.id:
+        return Response(
+            {'detail': 'Cannot impersonate yourself'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if target.role == 'superadmin':
+        return Response(
+            {'detail': 'Cannot impersonate another superadmin'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not target.is_active:
+        return Response(
+            {'detail': 'Cannot impersonate an inactive user'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    refresh = RefreshToken.for_user(target)
+    access = refresh.access_token
+    access['impersonated_by'] = request.user.id
+
+    logger.info(
+        'impersonation: superadmin_id=%s impersonating user_id=%s (%s)',
+        request.user.id,
+        target.id,
+        target.email,
+    )
+
+    return Response({
+        'access': str(access),
+        'refresh': str(refresh),
+        'user': UserListSerializer(target).data,
+    })
+
+
+@extend_schema(
+    tags=['Users'],
     summary='Get user detail by id (superadmin)',
     responses={
         200: UserDetailSerializer,

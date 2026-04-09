@@ -15,6 +15,8 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.companies.models import Company, CompanySettings
+from apps.crm.models import Board
+from apps.storage.models import File
 from apps.users.models import User
 
 
@@ -147,6 +149,60 @@ class TestCompanyCreate:
         response = api_client.post(COMPANIES_LIST_URL, {'plan': 'basic'}, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_create_uses_basic_defaults_when_limits_not_provided(self, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            COMPANIES_LIST_URL,
+            {'name': 'Basic Defaults Co', 'plan': 'basic'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['max_employees'] == 10
+        assert response.data['max_boards'] == 1
+        assert response.data['storage_limit_gb'] == 5
+
+    def test_create_uses_standard_defaults_when_limits_not_provided(self, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            COMPANIES_LIST_URL,
+            {'name': 'Standard Defaults Co', 'plan': 'standard'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['max_employees'] == 30
+        assert response.data['max_boards'] == 5
+        assert response.data['storage_limit_gb'] == 20
+
+    def test_create_uses_premium_defaults_when_limits_not_provided(self, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            COMPANIES_LIST_URL,
+            {'name': 'Premium Defaults Co', 'plan': 'premium'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['max_employees'] == 9999
+        assert response.data['max_boards'] == 9999
+        assert response.data['storage_limit_gb'] == 100
+
+    def test_create_keeps_explicit_limits(self, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            COMPANIES_LIST_URL,
+            {
+                'name': 'Custom Limits Co',
+                'plan': 'basic',
+                'max_employees': 77,
+                'max_boards': 9,
+                'storage_limit_gb': 44,
+            },
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['max_employees'] == 77
+        assert response.data['max_boards'] == 9
+        assert response.data['storage_limit_gb'] == 44
+
 
 # ---------------------------------------------------------------------------
 # AC2 — CompanySettings auto-created via signal
@@ -175,6 +231,12 @@ class TestCompanySettingsAutoCreate:
         company_a.description = 'Updated'
         company_a.save()
         assert CompanySettings.objects.filter(company=company_a).count() == 1
+
+    def test_model_create_applies_plan_defaults_for_non_basic_plan(self, db):
+        company = Company.objects.create(name='ORM Premium Co', plan='premium')
+        assert company.max_employees == 9999
+        assert company.max_boards == 9999
+        assert company.storage_limit_gb == 100
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +346,7 @@ class TestCompanyUpdate:
             'name': 'Renamed',
             'plan': 'premium',
             'max_employees': 99,
+            'max_boards': 13,
             'storage_limit_gb': 50,
         }
         response = api_client.patch(company_detail_url(company_a.id), payload, format='json')
@@ -292,6 +355,7 @@ class TestCompanyUpdate:
         assert company_a.name == 'Renamed'
         assert company_a.plan == 'premium'
         assert company_a.max_employees == 99
+        assert company_a.max_boards == 13
 
     def test_company_admin_can_patch_allowed_fields(self, api_client, company_admin, company_a):
         auth(api_client, company_admin)
@@ -341,6 +405,25 @@ class TestCompanyUpdate:
             company_detail_url(company_a.id), {'name': 'Hack'}, format='json'
         )
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_patch_updates_existing_company_without_creating_new_one(
+        self, api_client, superadmin, company_a
+    ):
+        auth(api_client, superadmin)
+        before_count = Company.objects.count()
+        response = api_client.patch(
+            company_detail_url(company_a.id),
+            {'max_employees': 123, 'max_boards': 7, 'storage_limit_gb': 15},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_200_OK
+        after_count = Company.objects.count()
+        company_a.refresh_from_db()
+
+        assert before_count == after_count
+        assert company_a.max_employees == 123
+        assert company_a.max_boards == 7
+        assert company_a.storage_limit_gb == 15
 
 
 # ---------------------------------------------------------------------------
@@ -465,3 +548,60 @@ class TestCompanyFilters:
         assert response.status_code == status.HTTP_200_OK
         ids = [c['id'] for c in response.data['results']]
         assert company_a.id in ids
+
+
+@pytest.mark.django_db
+class TestCompanyLimitsEndpoint:
+
+    def test_superadmin_can_view_company_limits(self, api_client, superadmin, company_a, employee):
+        auth(api_client, superadmin)
+        owner = User.objects.create_user(
+            email='owner@alpha.com',
+            password='pass',
+            first_name='Owner',
+            last_name='One',
+            role='employee',
+            company=company_a,
+        )
+        Board.objects.create(company=company_a, name='Board 1', created_by=owner)
+        File.objects.create(
+            name='f1.txt',
+            file='storage/2026/01/f1.txt',
+            file_size=1024,
+            owner=owner,
+            company=company_a,
+        )
+        File.objects.create(
+            name='f2.txt',
+            file='storage/2026/01/f2.txt',
+            file_size=1024,
+            owner=owner,
+            company=company_a,
+        )
+
+        response = api_client.get(f'/api/v1/companies/{company_a.id}/limits/')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['employees']['current'] >= 2
+        assert response.data['employees']['max'] == company_a.max_employees
+        assert response.data['boards']['current'] == 1
+        assert response.data['boards']['max'] == company_a.max_boards
+        assert response.data['storage']['used_gb'] == 0.0
+        assert response.data['storage']['limit_gb'] == company_a.storage_limit_gb
+
+    def test_company_admin_can_view_own_company_limits(self, api_client, company_admin, company_a):
+        auth(api_client, company_admin)
+        response = api_client.get(f'/api/v1/companies/{company_a.id}/limits/')
+        assert response.status_code == status.HTTP_200_OK
+        assert set(response.data.keys()) == {'employees', 'boards', 'storage'}
+
+    def test_company_admin_cannot_view_other_company_limits(
+        self, api_client, company_admin, company_b
+    ):
+        auth(api_client, company_admin)
+        response = api_client.get(f'/api/v1/companies/{company_b.id}/limits/')
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_guest_cannot_view_company_limits(self, api_client, guest, company_a):
+        auth(api_client, guest)
+        response = api_client.get(f'/api/v1/companies/{company_a.id}/limits/')
+        assert response.status_code == status.HTTP_403_FORBIDDEN

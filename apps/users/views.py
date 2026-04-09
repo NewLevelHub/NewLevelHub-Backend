@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import logging
 
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -23,6 +23,7 @@ from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
 from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
+from apps.companies.models import Invitation
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
@@ -47,6 +48,10 @@ from .jwt import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class InviteTokenQuerySerializer(serializers.Serializer):
+    token = serializers.UUIDField()
 
 
 def _get_tokens(user, remember_me=False):
@@ -104,22 +109,51 @@ def register(request):
 @extend_schema(
     tags=['Auth'],
     summary='Register via invite link',
+    parameters=[
+        OpenApiParameter(
+            name='token',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Invitation token (UUID), required for GET.',
+        ),
+    ],
     request=InviteRegistrationSerializer,
     responses={
         201: OpenApiResponse(
             response=UserProfileSerializer,
             description='User registered via invite. Returns profile and JWT tokens.',
         ),
+        200: OpenApiResponse(description='Invite data returned for valid token'),
         400: OpenApiResponse(description='Validation error or invalid invite token'),
     },
 )
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def register_by_invite(request):
+    if request.method == 'GET':
+        query_serializer = InviteTokenQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        invitation = (
+            Invitation.objects.select_related('company')
+            .filter(token=query_serializer.validated_data['token'])
+            .first()
+        )
+        if not invitation or invitation.is_used or invitation.is_expired:
+            return Response({'detail': 'Invalid or expired invitation token'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                'company_name': invitation.company.name,
+                'email': invitation.email,
+                'role': invitation.role,
+            }
+        )
+
     serializer = InviteRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    # TODO: привязка к компании из инвайта, email верификация
+    token = create_email_verification_token(user)
+    send_verification_email.delay(user.id, str(token.token))
     tokens = _get_tokens(user, remember_me=False)
     response = Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},

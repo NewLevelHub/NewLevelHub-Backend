@@ -1,8 +1,18 @@
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from rest_framework.exceptions import ValidationError
+from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiResponse,
+    OpenApiParameter,
+    OpenApiTypes,
+)
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.users.models import User
@@ -19,6 +29,7 @@ from .serializers import (
     InvitationListSerializer,
     CompanyMemberSerializer,
 )
+from .tasks import send_invitation_email
 
 
 @extend_schema_view(
@@ -234,6 +245,22 @@ class CompanyViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Companies'],
         summary='List invitations',
+        parameters=[
+            OpenApiParameter(
+                name='is_used',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter invitations by used status (true/false).',
+            ),
+            OpenApiParameter(
+                name='is_expired',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter invitations by expiration status (true/false).',
+            ),
+        ],
         responses={
             200: InvitationListSerializer(many=True),
             401: OpenApiResponse(description='Not authenticated'),
@@ -255,19 +282,56 @@ class CompanyViewSet(viewsets.ModelViewSet):
 class InvitationViewSet(viewsets.ModelViewSet):
     serializer_class = InvitationListSerializer
     permission_classes = [IsCompanyAdmin]
+    filter_backends = []
+    http_method_names = ['get', 'post']
+    lookup_url_kwarg = 'id'
+
+    @staticmethod
+    def _parse_bool_param(raw_value, field_name):
+        if raw_value is None:
+            return None
+        normalized = str(raw_value).strip().lower()
+        if normalized in ('true', '1'):
+            return True
+        if normalized in ('false', '0'):
+            return False
+        raise ValidationError({field_name: 'Must be a boolean: true/false.'})
+
+    def _get_company(self):
+        company_id = self.kwargs.get('company_id')
+        if company_id is None:
+            raise ValidationError({'company': 'company_id is required in URL.'})
+
+        base_qs = Company.objects.all()
+        if self.request.user.role != 'superadmin':
+            base_qs = base_qs.filter(id=self.request.user.company_id)
+        return get_object_or_404(base_qs, id=company_id)
 
     def get_queryset(self):
-        user = self.request.user
-        if user.role == 'superadmin':
-            return Invitation.objects.all()
-        if user.company_id:
-            return Invitation.objects.filter(company=user.company)
-        return Invitation.objects.none()
+        company = self._get_company()
+        qs = Invitation.objects.filter(company=company).select_related('invited_by')
+
+        is_used = self._parse_bool_param(self.request.query_params.get('is_used'), 'is_used')
+        if is_used is not None:
+            qs = qs.filter(is_used=is_used)
+
+        is_expired = self._parse_bool_param(self.request.query_params.get('is_expired'), 'is_expired')
+        if is_expired is not None:
+            if is_expired:
+                qs = qs.filter(expires_at__lte=timezone.now())
+            else:
+                qs = qs.filter(expires_at__gt=timezone.now())
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'create':
             return InvitationCreateSerializer
         return InvitationListSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['company'] = self._get_company()
+        return context
 
     @extend_schema(
         tags=['Companies'],
@@ -281,10 +345,11 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='revoke')
-    def revoke(self, request, pk=None):
+    def revoke(self, request, id=None, company_id=None):
         invitation = self.get_object()
         invitation.is_used = True
-        invitation.save(update_fields=['is_used'])
+        invitation.used_at = timezone.now()
+        invitation.save(update_fields=['is_used', 'used_at'])
         return Response({'detail': 'Invitation revoked'})
 
     @extend_schema(
@@ -299,7 +364,22 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
-    def resend(self, request, pk=None):
-        self.get_object()
-        # TODO: отправить повторный email
+    def resend(self, request, id=None, company_id=None):
+        old_invitation = self.get_object()
+        if old_invitation.is_used:
+            raise ValidationError({'detail': 'Used/revoked invitation cannot be resent.'})
+
+        with transaction.atomic():
+            old_invitation.is_used = True
+            old_invitation.used_at = timezone.now()
+            old_invitation.save(update_fields=['is_used', 'used_at'])
+
+            new_invitation = Invitation.objects.create(
+                company=old_invitation.company,
+                email=old_invitation.email,
+                invited_by=request.user,
+                role=old_invitation.role,
+            )
+
+        send_invitation_email.delay(new_invitation.id)
         return Response({'detail': 'Invitation resent'})

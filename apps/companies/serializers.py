@@ -1,6 +1,9 @@
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import serializers
+from apps.users.models import User
 from .models import Company, CompanySettings, Invitation
+from .tasks import send_invitation_email
 
 
 class CompanySerializer(serializers.ModelSerializer):
@@ -87,15 +90,41 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):
+    role = serializers.ChoiceField(choices=['employee', 'company_admin'])
+
     class Meta:
         model = Invitation
         fields = ['email', 'role']
 
+    def validate_email(self, value):
+        email = value.strip().lower()
+        company = self.context['company']
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError('User with this email is already registered.')
+
+        has_active_invitation = Invitation.objects.filter(
+            company=company,
+            email__iexact=email,
+            is_used=False,
+            expires_at__gt=timezone.now(),
+        ).exists()
+        if has_active_invitation:
+            raise serializers.ValidationError('Active invitation for this email already exists.')
+
+        return email
+
+    def validate_role(self, value):
+        request = self.context['request']
+        if value == 'company_admin' and request.user.role != 'superadmin':
+            raise serializers.ValidationError('Only superadmin can invite company_admin.')
+        return value
+
     def create(self, validated_data):
-        validated_data['company'] = self.context['request'].user.company
+        validated_data['company'] = self.context['company']
         validated_data['invited_by'] = self.context['request'].user
         invitation = super().create(validated_data)
-        # TODO: отправить email с инвайт-ссылкой (Celery task)
+        send_invitation_email.delay(invitation.id)
         return invitation
 
 

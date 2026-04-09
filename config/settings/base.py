@@ -143,6 +143,7 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
+    'USER_AUTHENTICATION_RULE': 'apps.users.authentication.active_user_authentication_rule',
 }
 
 SPECTACULAR_SETTINGS = {

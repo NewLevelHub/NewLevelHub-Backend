@@ -119,6 +119,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         if value == 'company_admin' and request.user.role != 'superadmin':
             raise serializers.ValidationError('Only superadmin can invite company_admin.')
         return value
+
     def validate(self, attrs):
         request = self.context['request']
         company = self.context['company']
@@ -154,7 +155,6 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         invitation = super().create(validated_data)
         send_invitation_email.delay(invitation.id)
         return invitation
-        return super().create(validated_data)
 
 
 class InvitationListSerializer(serializers.ModelSerializer):

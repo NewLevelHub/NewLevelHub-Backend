@@ -4,10 +4,8 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
-from django.shortcuts import get_object_or_404
+from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
@@ -19,7 +17,7 @@ from drf_spectacular.utils import (
 from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.users.models import User
-from .filters import CompanyFilter, InvitationFilter
+from .filters import CompanyFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
     CompanySerializer,
@@ -372,32 +370,6 @@ class InvitationViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(expires_at__gt=timezone.now())
         return qs
-    filter_backends = [DjangoFilterBackend]
-    filterset_class = InvitationFilter
-
-    def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
-        company_pk = self.kwargs.get('company_pk')
-        if company_pk is None:
-            return
-        user = request.user
-        if not user.is_authenticated:
-            return
-        if user.role == 'superadmin':
-            return
-        if user.company_id != int(company_pk):
-            raise PermissionDenied()
-
-    def get_queryset(self):
-        company_pk = self.kwargs['company_pk']
-        return Invitation.objects.filter(company_id=company_pk)
-
-    def get_serializer_context(self):
-        ctx = super().get_serializer_context()
-        company_pk = self.kwargs.get('company_pk')
-        if company_pk is not None:
-            ctx['company'] = get_object_or_404(Company, pk=company_pk)
-        return ctx
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -408,9 +380,9 @@ class InvitationViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context['company'] = self._get_company()
         return context
+
     def perform_create(self, serializer):
         serializer.save()
-        send_invitation_email.delay(serializer.instance.id)
 
     @extend_schema(
         tags=['Companies'],

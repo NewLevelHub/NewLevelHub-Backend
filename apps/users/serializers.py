@@ -4,9 +4,12 @@ import os
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
+from apps.companies.models import Invitation
 from .models import User
 
 
@@ -95,23 +98,58 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 class InviteRegistrationSerializer(serializers.ModelSerializer):
     """Регистрация сотрудника по инвайт-токену."""
     password = serializers.CharField(write_only=True, min_length=8)
-    password_confirm = serializers.CharField(write_only=True)
-    invite_token = serializers.CharField(write_only=True)
+    token = serializers.UUIDField(write_only=True)
 
     class Meta:
         model = User
-        fields = ['email', 'first_name', 'last_name', 'phone', 'password', 'password_confirm', 'invite_token']
+        fields = ['token', 'first_name', 'last_name', 'phone', 'password']
 
     def validate(self, attrs):
-        if attrs['password'] != attrs.pop('password_confirm'):
-            raise serializers.ValidationError({'password_confirm': 'Passwords do not match'})
-        # TODO: валидация invite_token — проверить существование, срок, одноразовость
+        invitation = Invitation.objects.select_related('company').filter(token=attrs['token']).first()
+        if not invitation:
+            raise serializers.ValidationError({'token': 'Invalid invitation token'})
+        if invitation.is_used:
+            raise serializers.ValidationError({'token': 'Invitation already used'})
+        if invitation.is_expired:
+            raise serializers.ValidationError({'token': 'Invitation expired'})
+        if User.objects.filter(email__iexact=invitation.email).exists():
+            raise serializers.ValidationError({'email': 'A user with this email is already registered.'})
+        if invitation.company.is_employee_limit_reached:
+            raise serializers.ValidationError('Employee limit reached')
+
+        attrs['invitation'] = invitation
+        attrs['email'] = invitation.email
         return attrs
 
     def create(self, validated_data):
-        validated_data.pop('invite_token', None)
-        # TODO: привязать пользователя к company из инвайта, проставить role='employee'
-        return User.objects.create_user(**validated_data)
+        invitation = validated_data.pop('invitation')
+        validated_data.pop('token', None)
+        with transaction.atomic():
+            invitation = Invitation.objects.select_for_update().select_related('company').get(pk=invitation.pk)
+            if invitation.is_used:
+                raise serializers.ValidationError({'token': 'Invitation already used'})
+            if invitation.is_expired:
+                raise serializers.ValidationError({'token': 'Invitation expired'})
+            if User.objects.filter(email__iexact=invitation.email).exists():
+                raise serializers.ValidationError({'email': 'A user with this email is already registered.'})
+            if invitation.company.is_employee_limit_reached:
+                raise serializers.ValidationError('Employee limit reached')
+
+            user = User.objects.create_user(
+                email=invitation.email,
+                first_name=validated_data['first_name'],
+                last_name=validated_data['last_name'],
+                phone=validated_data.get('phone', ''),
+                password=validated_data['password'],
+                company=invitation.company,
+                role=invitation.role,
+                is_email_verified=False,
+            )
+
+            invitation.is_used = True
+            invitation.used_at = timezone.now()
+            invitation.save(update_fields=['is_used', 'used_at', 'updated_at'])
+            return user
 
 
 class LoginSerializer(serializers.Serializer):

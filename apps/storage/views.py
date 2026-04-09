@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.exceptions import ValidationError
+from rest_framework import status
 from rest_framework.response import Response
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
@@ -96,7 +96,7 @@ class FileViewSet(viewsets.ModelViewSet):
         current_storage_used = get_company_storage_used_bytes(company)
         storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
         if current_storage_used >= storage_limit_bytes:
-            raise ValidationError('Storage limit reached')
+            return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
 
         response = super().create(request, *args, **kwargs)
         uploaded_file = request.FILES.get('file')

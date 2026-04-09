@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework import status
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
@@ -64,7 +64,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         company = request.user.company
         current_boards = company.boards.count()
         if current_boards >= company.max_boards:
-            raise ValidationError('Board limit reached')
+            return Response({'detail': 'Board limit reached'}, status=status.HTTP_400_BAD_REQUEST)
 
         response = super().create(request, *args, **kwargs)
         notify_company_admins_limit_thresholds(

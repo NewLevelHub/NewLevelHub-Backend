@@ -143,11 +143,11 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         validated_data['company'] = company
         validated_data['invited_by'] = self.context['request'].user
         invitation = super().create(validated_data)
-        projected_employees = company.members.filter(is_active=True).count() + 1
+        current_employees = company.members.filter(is_active=True).count()
         notify_company_admins_limit_thresholds(
             company=company,
             metric='employees',
-            current_value=projected_employees,
+            current_value=current_employees,
             limit_value=company.max_employees,
         )
         return invitation

@@ -7,6 +7,7 @@ from django.db import transaction
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework import status
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
 
@@ -379,6 +380,12 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save()
         send_invitation_email.delay(serializer.instance.id)
+
+    def create(self, request, *args, **kwargs):
+        company = self.get_serializer_context()['company']
+        if company.members.filter(is_active=True).count() >= company.max_employees:
+            return Response({'detail': 'Employee limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().create(request, *args, **kwargs)
 
     @extend_schema(
         tags=['Companies'],

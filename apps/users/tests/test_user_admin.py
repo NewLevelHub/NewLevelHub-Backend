@@ -8,12 +8,23 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.users.models import User
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 
 LIST_URL = '/api/v1/auth/users/'
+LOGIN_URL = '/api/v1/auth/login/'
+ME_URL = '/api/v1/auth/me/'
 
 
 def detail_url(pk):
     return f'/api/v1/auth/users/{pk}/'
+
+
+def block_url(pk):
+    return f'/api/v1/auth/users/{pk}/block/'
+
+
+def unblock_url(pk):
+    return f'/api/v1/auth/users/{pk}/unblock/'
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -305,3 +316,71 @@ class TestUserDetailResponse:
         response = auth_client.get(detail_url(employee.id))
         assert response.status_code == status.HTTP_200_OK
         assert response.data['tasks_count'] == 2
+
+
+class TestUserBlockUnblock:
+    def test_superadmin_can_block_user_and_invalidate_sessions(self, auth_client, employee):
+        login_client = APIClient()
+        login_response = login_client.post(
+            LOGIN_URL,
+            {'email': employee.email, 'password': 'Pass123!'},
+            format='json',
+        )
+        assert login_response.status_code == status.HTTP_200_OK
+        refresh = login_response.data['tokens']['refresh']
+        access = login_response.data['tokens']['access']
+
+        response = auth_client.post(block_url(employee.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['detail'] == 'User blocked'
+
+        employee.refresh_from_db()
+        assert employee.is_active is False
+        assert BlacklistedToken.objects.filter(token__user=employee).exists()
+
+        login_again = login_client.post(
+            LOGIN_URL,
+            {'email': employee.email, 'password': 'Pass123!'},
+            format='json',
+        )
+        assert login_again.status_code == status.HTTP_403_FORBIDDEN
+        assert login_again.data['detail']['detail'] == 'Account is blocked'
+
+        token_client = APIClient()
+        token_client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+        me_response = token_client.get(ME_URL)
+        assert me_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+        refresh_response = APIClient().post(
+            '/api/v1/auth/token/refresh/',
+            {'refresh': refresh},
+            format='json',
+        )
+        assert refresh_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_superadmin_can_unblock_user(self, auth_client, employee):
+        employee.is_active = False
+        employee.save(update_fields=['is_active'])
+
+        response = auth_client.post(unblock_url(employee.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['detail'] == 'User unblocked'
+
+        employee.refresh_from_db()
+        assert employee.is_active is True
+
+    def test_only_superadmin_can_block_or_unblock(self, api_client, company_admin, employee):
+        api_client.force_authenticate(user=company_admin)
+
+        block_response = api_client.post(block_url(employee.id))
+        assert block_response.status_code == status.HTTP_403_FORBIDDEN
+
+        unblock_response = api_client.post(unblock_url(employee.id))
+        assert unblock_response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unauthenticated_cannot_block_or_unblock(self, api_client, employee):
+        block_response = api_client.post(block_url(employee.id))
+        assert block_response.status_code == status.HTTP_401_UNAUTHORIZED
+
+        unblock_response = api_client.post(unblock_url(employee.id))
+        assert unblock_response.status_code == status.HTTP_401_UNAUTHORIZED

@@ -306,7 +306,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='revoke')
-    def revoke(self, request, pk=None):
+    def revoke(self, request, *args, **kwargs):
         invitation = self.get_object()
         invitation.is_used = True
         invitation.save(update_fields=['is_used'])
@@ -324,7 +324,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
-    def resend(self, request, pk=None):
+    def resend(self, request, *args, **kwargs):
         invitation = self.get_object()
         if invitation.is_used:
             raise ValidationError('This invitation cannot be resent.')

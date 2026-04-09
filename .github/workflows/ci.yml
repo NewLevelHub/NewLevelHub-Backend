@@ -124,14 +124,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy compose template to server
+      - name: Copy compose template and nginx config to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          source: "docker-compose.preview.yml"
+          source: "docker-compose.preview.yml,nginx/preview.conf"
           target: ${{ secrets.DEPLOY_PATH }}
 
       - name: Deploy preview via SSH

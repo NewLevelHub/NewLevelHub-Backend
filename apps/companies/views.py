@@ -1,11 +1,13 @@
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db import transaction
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
 
+from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.users.models import User
 from .filters import CompanyFilter, InvitationFilter
@@ -87,9 +89,19 @@ from .tasks import send_invitation_email
     ),
     destroy=extend_schema(
         tags=['Companies'],
-        summary='Delete company (superadmin)',
+        summary='Delete company (superadmin) — requires ?confirm=true',
+        parameters=[
+            OpenApiParameter(
+                name='confirm',
+                location=OpenApiParameter.QUERY,
+                description='Must be "true" to confirm hard deletion.',
+                required=False,
+                type=str,
+            ),
+        ],
         responses={
             204: OpenApiResponse(description='Deleted'),
+            400: OpenApiResponse(description='Confirmation required'),
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Superadmin only'),
             404: OpenApiResponse(description='Company not found'),
@@ -104,7 +116,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'created_at', 'plan']
 
     def get_permissions(self):
-        if self.action in ('create', 'destroy'):
+        if self.action in ('create', 'destroy', 'deactivate', 'activate'):
             return [IsSuperAdmin()]
         if self.action in ('update', 'partial_update'):
             # Both superadmin and company_admin may update; field-level
@@ -214,10 +226,10 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Companies'],
-        summary='Deactivate company (superadmin)',
+        summary='Deactivate company and all its members (superadmin)',
         request=None,
         responses={
-            200: OpenApiResponse(description='Company deactivated'),
+            200: CompanySerializer,
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Superadmin only'),
             404: OpenApiResponse(description='Company not found'),
@@ -227,10 +239,47 @@ class CompanyViewSet(viewsets.ModelViewSet):
             permission_classes=[IsSuperAdmin])
     def deactivate(self, request, pk=None):
         company = self.get_object()
-        company.is_active = False
-        company.save(update_fields=['is_active'])
-        # TODO: деактивировать всех сотрудников компании
-        return Response({'detail': 'Company deactivated'})
+        with transaction.atomic():
+            company_qs = Company.objects.select_for_update().filter(pk=company.pk)
+            company_qs.update(is_active=False)
+
+            User.objects.select_for_update().filter(company=company).update(is_active=False)
+
+            Booking.objects.select_for_update().filter(
+                company=company,
+                status='confirmed',
+            ).update(status='cancelled')
+
+        company.refresh_from_db()
+        return Response(CompanySerializer(company).data)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Activate company and all its members (superadmin)',
+        request=None,
+        responses={
+            200: CompanySerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Company not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='activate')
+    def activate(self, request, pk=None):
+        company = self.get_object()
+        with transaction.atomic():
+            Company.objects.select_for_update().filter(pk=company.pk).update(is_active=True)
+            User.objects.select_for_update().filter(company=company).update(is_active=True)
+
+        company.refresh_from_db()
+        return Response(CompanySerializer(company).data)
+
+    def destroy(self, request, *args, **kwargs):
+        if request.query_params.get('confirm') != 'true':
+            raise ValidationError(
+                'Confirmation required. Pass ?confirm=true to proceed.'
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 @extend_schema_view(

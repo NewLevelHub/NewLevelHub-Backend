@@ -1,5 +1,9 @@
 from django.db.models import Sum
+from django.utils import timezone
 from rest_framework import serializers
+
+from apps.users.models import User
+
 from .models import Company, CompanySettings, Invitation
 
 
@@ -101,12 +105,39 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         model = Invitation
         fields = ['email', 'role']
 
+    def validate(self, attrs):
+        request = self.context['request']
+        company = self.context['company']
+        email = attrs['email'].strip()
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError(
+                {'email': 'A user with this email is already registered.'},
+            )
+
+        active_exists = Invitation.objects.filter(
+            company=company,
+            email__iexact=email,
+            is_used=False,
+            expires_at__gte=timezone.now(),
+        ).exists()
+        if active_exists:
+            raise serializers.ValidationError(
+                {'email': 'An active invitation already exists for this email.'},
+            )
+
+        role = attrs.get('role', 'employee')
+        if request.user.role == 'company_admin' and role == 'company_admin':
+            raise serializers.ValidationError(
+                {'role': 'Company admins cannot invite other company admins.'},
+            )
+
+        return attrs
+
     def create(self, validated_data):
-        validated_data['company'] = self.context['request'].user.company
+        validated_data['company'] = self.context['company']
         validated_data['invited_by'] = self.context['request'].user
-        invitation = super().create(validated_data)
-        # TODO: отправить email с инвайт-ссылкой (Celery task)
-        return invitation
+        return super().create(validated_data)
 
 
 class InvitationListSerializer(serializers.ModelSerializer):

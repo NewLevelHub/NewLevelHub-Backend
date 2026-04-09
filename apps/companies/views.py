@@ -1,15 +1,17 @@
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Sum
+from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.users.models import User
-from .filters import CompanyFilter
+from .filters import CompanyFilter, InvitationFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
     CompanySerializer,
@@ -22,6 +24,7 @@ from .serializers import (
     InvitationListSerializer,
     CompanyMemberSerializer,
 )
+from .tasks import send_invitation_email
 
 
 @extend_schema_view(
@@ -292,19 +295,41 @@ class CompanyViewSet(viewsets.ModelViewSet):
 class InvitationViewSet(viewsets.ModelViewSet):
     serializer_class = InvitationListSerializer
     permission_classes = [IsCompanyAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = InvitationFilter
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        company_pk = self.kwargs.get('company_pk')
+        if company_pk is None:
+            return
+        user = request.user
+        if not user.is_authenticated:
+            return
+        if user.role == 'superadmin':
+            return
+        if user.company_id != int(company_pk):
+            raise PermissionDenied()
 
     def get_queryset(self):
-        user = self.request.user
-        if user.role == 'superadmin':
-            return Invitation.objects.all()
-        if user.company_id:
-            return Invitation.objects.filter(company=user.company)
-        return Invitation.objects.none()
+        company_pk = self.kwargs['company_pk']
+        return Invitation.objects.filter(company_id=company_pk)
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        company_pk = self.kwargs.get('company_pk')
+        if company_pk is not None:
+            ctx['company'] = get_object_or_404(Company, pk=company_pk)
+        return ctx
 
     def get_serializer_class(self):
         if self.action == 'create':
             return InvitationCreateSerializer
         return InvitationListSerializer
+
+    def perform_create(self, serializer):
+        serializer.save()
+        send_invitation_email.delay(serializer.instance.id)
 
     @extend_schema(
         tags=['Companies'],
@@ -318,7 +343,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='revoke')
-    def revoke(self, request, pk=None):
+    def revoke(self, request, *args, **kwargs):
         invitation = self.get_object()
         invitation.is_used = True
         invitation.save(update_fields=['is_used'])
@@ -336,7 +361,17 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
-    def resend(self, request, pk=None):
-        self.get_object()
-        # TODO: отправить повторный email
+    def resend(self, request, *args, **kwargs):
+        invitation = self.get_object()
+        if invitation.is_used:
+            raise ValidationError('This invitation cannot be resent.')
+        invitation.is_used = True
+        invitation.save(update_fields=['is_used'])
+        fresh = Invitation.objects.create(
+            company=invitation.company,
+            email=invitation.email,
+            invited_by=request.user,
+            role=invitation.role,
+        )
+        send_invitation_email.delay(fresh.id)
         return Response({'detail': 'Invitation resent'})

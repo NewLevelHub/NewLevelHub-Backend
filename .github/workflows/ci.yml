@@ -124,14 +124,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Copy compose template to server
+      - name: Copy compose template and nginx config to server
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          source: "docker-compose.preview.yml"
+          source: "docker-compose.preview.yml,nginx/preview.conf"
           target: ${{ secrets.DEPLOY_PATH }}
 
       - name: Deploy preview via SSH
@@ -312,6 +312,10 @@ jobs:
       - name: Destroy preview via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BRANCH_NAME: ${{ github.head_ref }}
@@ -320,46 +324,65 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          envs: DEPLOY_PATH,PR_NUMBER,BRANCH_NAME
+          envs: DOCKER_REGISTRY,DOCKER_USERNAME,DOCKER_PASSWORD,DOCKER_REPOSITORY,DEPLOY_PATH,PR_NUMBER,BRANCH_NAME
           script: |
+            set -e
+
             TICKET=$(echo "$BRANCH_NAME" | grep -oE 'dev-[0-9]+' | head -1)
             if [ -z "$TICKET" ]; then TICKET="noticket"; fi
             PR_SLUG="be-${TICKET}-pr${PR_NUMBER}"
+            PREVIEW_PORT=$((10000 + PR_NUMBER))
+            PREVIEW_DB_NAME="nlh_pr${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
+
+            IMAGE_PATH="$DOCKER_REPOSITORY"
+            if [[ "$IMAGE_PATH" != */* ]]; then
+              IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
+            fi
+            BACKEND_IMAGE="${DOCKER_REGISTRY}/${IMAGE_PATH}:pr-${PR_NUMBER}"
 
             COMPOSE_FILE="$DEPLOY_PATH/docker-compose.${PR_SLUG}.yml"
 
-            echo "--- [1/3] Stopping Docker containers ---"
+            echo "--- [1/5] Stopping Docker containers ---"
             cd "$DEPLOY_PATH"
             if [ -f "$COMPOSE_FILE" ]; then
+              export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT
               docker compose \
                 --project-name "$PR_SLUG" \
+                --env-file .env.staging \
                 -f "$COMPOSE_FILE" \
                 down -v --remove-orphans \
-                2>/dev/null || true
+                || echo "WARNING: compose down failed, proceeding with fallback"
               rm -f "$COMPOSE_FILE"
             fi
 
-            # Fallback: remove any leftover resources by project label
+            echo "--- [2/5] Fallback: remove leftover resources ---"
             CONTAINERS=$(docker ps -a --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
             if [ -n "$CONTAINERS" ]; then
               docker stop $CONTAINERS 2>/dev/null || true
-              docker rm $CONTAINERS 2>/dev/null || true
+              docker rm -f $CONTAINERS 2>/dev/null || true
             fi
             VOLUMES=$(docker volume ls --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
             if [ -n "$VOLUMES" ]; then
-              docker volume rm $VOLUMES 2>/dev/null || true
+              docker volume rm -f $VOLUMES 2>/dev/null || true
+            fi
+            NETWORKS=$(docker network ls --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
+            if [ -n "$NETWORKS" ]; then
+              docker network rm $NETWORKS 2>/dev/null || true
             fi
 
-            echo "--- [2/3] Removing nginx config ---"
+            echo "--- [3/5] Removing nginx config ---"
             sudo rm -f "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [3/3] Deleting SSL certificate ---"
+            echo "--- [4/5] Deleting SSL certificate ---"
             sudo certbot delete \
               --cert-name "${PR_SLUG}.staging.newlevelhub.kz" \
               --non-interactive \
               2>/dev/null || echo "Cert not found or already deleted."
+
+            echo "--- [5/5] Cleaning up Docker image ---"
+            docker rmi "$BACKEND_IMAGE" 2>/dev/null || echo "Image not found or already removed."
 
             echo ""
             echo "=== Preview destroyed: ${PR_SLUG} ==="

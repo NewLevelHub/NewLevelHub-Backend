@@ -5,6 +5,7 @@ from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 from .models import User
 
@@ -116,13 +117,19 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
+    remember_me = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
-        user = authenticate(email=attrs['email'], password=attrs['password'])
+        email = attrs['email']
+        password = attrs['password']
+        user_qs = User.objects.filter(email__iexact=email)
+        blocked_user = user_qs.filter(is_active=False).first()
+        if blocked_user and blocked_user.check_password(password):
+            raise PermissionDenied('Account is blocked')
+
+        user = authenticate(email=email, password=password)
         if not user:
             raise serializers.ValidationError('Invalid credentials')
-        if not user.is_active:
-            raise serializers.ValidationError('Account is deactivated')
         attrs['user'] = user
         return attrs
 

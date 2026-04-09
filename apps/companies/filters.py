@@ -1,5 +1,7 @@
 import django_filters
-from .models import Company
+from django.utils import timezone
+
+from .models import Company, Invitation
 
 
 class CompanyFilter(django_filters.FilterSet):
@@ -10,3 +12,18 @@ class CompanyFilter(django_filters.FilterSet):
     class Meta:
         model = Company
         fields = ['plan', 'is_active', 'name']
+
+
+class InvitationFilter(django_filters.FilterSet):
+    is_used = django_filters.BooleanFilter()
+    is_expired = django_filters.BooleanFilter(method='filter_is_expired')
+
+    class Meta:
+        model = Invitation
+        fields = ['is_used']
+
+    def filter_is_expired(self, queryset, name, value):
+        now = timezone.now()
+        if value:
+            return queryset.filter(expires_at__lt=now)
+        return queryset.filter(expires_at__gte=now)

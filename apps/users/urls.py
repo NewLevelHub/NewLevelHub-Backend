@@ -1,6 +1,6 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView
 from . import views
+from .jwt import CookieTokenRefreshView
 
 urlpatterns = [
     # Auth
@@ -8,7 +8,7 @@ urlpatterns = [
     path('register/invite/', views.register_by_invite, name='register-by-invite'),
     path('login/', views.login, name='login'),
     path('logout/', views.logout, name='logout'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('token/refresh/', CookieTokenRefreshView.as_view(), name='token-refresh'),
     path('email/verify/', views.verify_email, name='email-verify'),
     path('email/resend/', views.resend_verification_email, name='email-resend'),
     path('password/reset/', views.password_reset_request, name='password-reset-request'),
@@ -23,4 +23,7 @@ urlpatterns = [
     # Admin: user management
     path('users/', views.UserListView.as_view(), name='users-list'),
     path('users/<int:pk>/', views.UserDetailView.as_view(), name='users-detail'),
+    path('users/<int:pk>/block/', views.block_user, name='users-block'),
+    path('users/<int:pk>/unblock/', views.unblock_user, name='users-unblock'),
+    path('users/<int:id>/impersonate/', views.impersonate_user, name='impersonate-user'),
 ]

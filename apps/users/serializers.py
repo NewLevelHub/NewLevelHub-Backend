@@ -117,6 +117,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField()
+    remember_me = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         email = attrs['email']

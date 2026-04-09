@@ -54,6 +54,24 @@ class MyViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, ModelViewSet):
 - Tests use `pytest` with `pytest-django`; fixtures in `conftest.py`
 - No inline permission logic — always use permission classes from `apps.core.permissions`
 
+## Running tests
+
+The project runs inside Docker. The backend service is named `backend`. Always run tests with:
+
+```bash
+docker-compose -f docker-compose.local.yml exec -T backend pytest apps/<app>/ -v 2>&1 | tail -60
+```
+
+**Never run `pytest` directly** — it will fail with "command not found" outside the container. The `-T` flag is required for non-interactive execution.
+
+Always run flake8 before tests to catch lint errors first:
+
+```bash
+docker-compose -f docker-compose.local.yml exec -T backend flake8 apps/<app>/ 2>&1
+```
+
+Fix all flake8 errors before running tests. The project config: ignores E203, W503; max line length 120.
+
 ## Your responsibilities
 
 1. Read existing code before modifying anything
@@ -61,3 +79,4 @@ class MyViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, ModelViewSet):
 3. Write tests for every new endpoint or permission change
 4. Keep serializers thin — business logic belongs in model methods or service functions
 5. Always check that guests get 403 and unauthenticated users get 401 on protected endpoints
+6. After implementing, always run tests via Docker as shown above and fix any failures before finishing

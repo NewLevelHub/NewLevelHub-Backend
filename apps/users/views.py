@@ -39,12 +39,18 @@ from .serializers import (
 )
 from .tasks import send_verification_email, create_email_verification_token
 from .throttles import PasswordResetRateThrottle
+from .jwt import (
+    REFRESH_COOKIE_NAME,
+    clear_refresh_cookie,
+    issue_refresh_token,
+    set_refresh_cookie,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _get_tokens(user):
-    refresh = RefreshToken.for_user(user)
+def _get_tokens(user, remember_me=False):
+    refresh = issue_refresh_token(user, remember_me=remember_me)
     return {'access': str(refresh.access_token), 'refresh': str(refresh)}
 
 
@@ -86,10 +92,13 @@ def register(request):
     user = serializer.save()
     token = create_email_verification_token(user)
     send_verification_email.delay(user.id, str(token.token))
-    return Response(
-        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
+    tokens = _get_tokens(user, remember_me=False)
+    response = Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
         status=status.HTTP_201_CREATED,
     )
+    set_refresh_cookie(response, tokens['refresh'], remember_me=False)
+    return response
 
 
 @extend_schema(
@@ -111,10 +120,13 @@ def register_by_invite(request):
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
     # TODO: привязка к компании из инвайта, email верификация
-    return Response(
-        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)},
+    tokens = _get_tokens(user, remember_me=False)
+    response = Response(
+        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
         status=status.HTTP_201_CREATED,
     )
+    set_refresh_cookie(response, tokens['refresh'], remember_me=False)
+    return response
 
 
 @extend_schema(
@@ -135,6 +147,11 @@ def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.validated_data['user']
+    remember_me = serializer.validated_data.get('remember_me', False)
+    tokens = _get_tokens(user, remember_me=remember_me)
+    response = Response({'user': UserProfileSerializer(user).data, 'tokens': tokens})
+    set_refresh_cookie(response, tokens['refresh'], remember_me=remember_me)
+    return response
     return Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': _get_tokens(user)}
     )
@@ -150,13 +167,12 @@ def login(request):
     responses={
         200: OpenApiResponse(description='Logged out successfully'),
         400: OpenApiResponse(description='Missing or invalid refresh token'),
-        401: OpenApiResponse(description='Not authenticated'),
     },
 )
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def logout(request):
-    refresh_token = request.data.get('refresh')
+    refresh_token = request.data.get('refresh') or request.COOKIES.get(REFRESH_COOKIE_NAME)
     if not refresh_token:
         return Response({'detail': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
     try:
@@ -164,7 +180,9 @@ def logout(request):
         token.blacklist()
     except Exception:
         return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
-    return Response({'detail': 'Logged out'})
+    response = Response({'detail': 'Logged out'})
+    clear_refresh_cookie(response)
+    return response
 
 
 @extend_schema(
@@ -453,6 +471,63 @@ class UserListView(ListAPIView):
     search_fields = ['email', 'first_name', 'last_name']
     ordering_fields = ['date_joined', 'last_login']
     ordering = ['-date_joined']
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Impersonate user (superadmin)',
+    description=(
+        'Issues JWT tokens on behalf of the target user for support/debug. '
+        'The returned access token contains an `impersonated_by` claim with '
+        'the superadmin\'s ID for audit purposes. Cannot impersonate self, '
+        'another superadmin, or an inactive user.'
+    ),
+    request=None,
+    responses={
+        200: OpenApiResponse(description='Returns access, refresh, and target user data.'),
+        400: OpenApiResponse(description='Cannot impersonate self, another superadmin, or inactive user.'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+        404: OpenApiResponse(description='User not found'),
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsSuperAdmin])
+def impersonate_user(request, id):
+    target = get_object_or_404(User, pk=id)
+
+    if target.id == request.user.id:
+        return Response(
+            {'detail': 'Cannot impersonate yourself'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if target.role == 'superadmin':
+        return Response(
+            {'detail': 'Cannot impersonate another superadmin'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not target.is_active:
+        return Response(
+            {'detail': 'Cannot impersonate an inactive user'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    refresh = RefreshToken.for_user(target)
+    access = refresh.access_token
+    access['impersonated_by'] = request.user.id
+
+    logger.info(
+        'impersonation: superadmin_id=%s impersonating user_id=%s (%s)',
+        request.user.id,
+        target.id,
+        target.email,
+    )
+
+    return Response({
+        'access': str(access),
+        'refresh': str(refresh),
+        'user': UserListSerializer(target).data,
+    })
 
 
 @extend_schema(

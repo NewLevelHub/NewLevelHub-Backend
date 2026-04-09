@@ -1,8 +1,10 @@
+from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import viewsets, filters
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
@@ -14,9 +16,10 @@ from drf_spectacular.utils import (
     OpenApiTypes,
 )
 
+from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.users.models import User
-from .filters import CompanyFilter
+from .filters import CompanyFilter, InvitationFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
     CompanySerializer,
@@ -95,9 +98,19 @@ from .tasks import send_invitation_email
     ),
     destroy=extend_schema(
         tags=['Companies'],
-        summary='Delete company (superadmin)',
+        summary='Delete company (superadmin) — requires ?confirm=true',
+        parameters=[
+            OpenApiParameter(
+                name='confirm',
+                location=OpenApiParameter.QUERY,
+                description='Must be "true" to confirm hard deletion.',
+                required=False,
+                type=str,
+            ),
+        ],
         responses={
             204: OpenApiResponse(description='Deleted'),
+            400: OpenApiResponse(description='Confirmation required'),
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Superadmin only'),
             404: OpenApiResponse(description='Company not found'),
@@ -112,7 +125,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'created_at', 'plan']
 
     def get_permissions(self):
-        if self.action in ('create', 'destroy'):
+        if self.action in ('create', 'destroy', 'deactivate', 'activate'):
             return [IsSuperAdmin()]
         if self.action in ('update', 'partial_update'):
             # Both superadmin and company_admin may update; field-level
@@ -222,10 +235,10 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Companies'],
-        summary='Deactivate company (superadmin)',
+        summary='Deactivate company and all its members (superadmin)',
         request=None,
         responses={
-            200: OpenApiResponse(description='Company deactivated'),
+            200: CompanySerializer,
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Superadmin only'),
             404: OpenApiResponse(description='Company not found'),
@@ -235,10 +248,47 @@ class CompanyViewSet(viewsets.ModelViewSet):
             permission_classes=[IsSuperAdmin])
     def deactivate(self, request, pk=None):
         company = self.get_object()
-        company.is_active = False
-        company.save(update_fields=['is_active'])
-        # TODO: деактивировать всех сотрудников компании
-        return Response({'detail': 'Company deactivated'})
+        with transaction.atomic():
+            company_qs = Company.objects.select_for_update().filter(pk=company.pk)
+            company_qs.update(is_active=False)
+
+            User.objects.select_for_update().filter(company=company).update(is_active=False)
+
+            Booking.objects.select_for_update().filter(
+                company=company,
+                status='confirmed',
+            ).update(status='cancelled')
+
+        company.refresh_from_db()
+        return Response(CompanySerializer(company).data)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Activate company and all its members (superadmin)',
+        request=None,
+        responses={
+            200: CompanySerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Company not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='activate')
+    def activate(self, request, pk=None):
+        company = self.get_object()
+        with transaction.atomic():
+            Company.objects.select_for_update().filter(pk=company.pk).update(is_active=True)
+            User.objects.select_for_update().filter(company=company).update(is_active=True)
+
+        company.refresh_from_db()
+        return Response(CompanySerializer(company).data)
+
+    def destroy(self, request, *args, **kwargs):
+        if request.query_params.get('confirm') != 'true':
+            raise ValidationError(
+                'Confirmation required. Pass ?confirm=true to proceed.'
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 @extend_schema_view(
@@ -322,6 +372,32 @@ class InvitationViewSet(viewsets.ModelViewSet):
             else:
                 qs = qs.filter(expires_at__gt=timezone.now())
         return qs
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = InvitationFilter
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        company_pk = self.kwargs.get('company_pk')
+        if company_pk is None:
+            return
+        user = request.user
+        if not user.is_authenticated:
+            return
+        if user.role == 'superadmin':
+            return
+        if user.company_id != int(company_pk):
+            raise PermissionDenied()
+
+    def get_queryset(self):
+        company_pk = self.kwargs['company_pk']
+        return Invitation.objects.filter(company_id=company_pk)
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        company_pk = self.kwargs.get('company_pk')
+        if company_pk is not None:
+            ctx['company'] = get_object_or_404(Company, pk=company_pk)
+        return ctx
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -332,6 +408,9 @@ class InvitationViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         context['company'] = self._get_company()
         return context
+    def perform_create(self, serializer):
+        serializer.save()
+        send_invitation_email.delay(serializer.instance.id)
 
     @extend_schema(
         tags=['Companies'],
@@ -345,7 +424,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='revoke')
-    def revoke(self, request, id=None, company_id=None):
+    def revoke(self, request, *args, **kwargs):
         invitation = self.get_object()
         invitation.is_used = True
         invitation.used_at = timezone.now()
@@ -364,7 +443,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
-    def resend(self, request, id=None, company_id=None):
+    def resend(self, request, *args, **kwargs):
         old_invitation = self.get_object()
         if old_invitation.is_used:
             raise ValidationError({'detail': 'Used/revoked invitation cannot be resent.'})

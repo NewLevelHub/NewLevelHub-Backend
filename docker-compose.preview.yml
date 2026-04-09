@@ -47,8 +47,8 @@ services:
       SECURE_SSL_REDIRECT: "False"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
-    ports:
-      - "${PREVIEW_PORT}:8000"
+    expose:
+      - "8000"
     volumes:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
@@ -57,6 +57,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/preview.conf:/etc/nginx/nginx.conf:ro
+      - static_volume:/app/staticfiles:ro
+      - media_volume:/app/media:ro
+    ports:
+      - "${PREVIEW_PORT}:80"
+    depends_on:
+      - backend
     restart: unless-stopped
 
   celery:

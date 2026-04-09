@@ -119,6 +119,34 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         if value == 'company_admin' and request.user.role != 'superadmin':
             raise serializers.ValidationError('Only superadmin can invite company_admin.')
         return value
+    def validate(self, attrs):
+        request = self.context['request']
+        company = self.context['company']
+        email = attrs['email'].strip()
+
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError(
+                {'email': 'A user with this email is already registered.'},
+            )
+
+        active_exists = Invitation.objects.filter(
+            company=company,
+            email__iexact=email,
+            is_used=False,
+            expires_at__gte=timezone.now(),
+        ).exists()
+        if active_exists:
+            raise serializers.ValidationError(
+                {'email': 'An active invitation already exists for this email.'},
+            )
+
+        role = attrs.get('role', 'employee')
+        if request.user.role == 'company_admin' and role == 'company_admin':
+            raise serializers.ValidationError(
+                {'role': 'Company admins cannot invite other company admins.'},
+            )
+
+        return attrs
 
     def create(self, validated_data):
         validated_data['company'] = self.context['company']
@@ -126,6 +154,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         invitation = super().create(validated_data)
         send_invitation_email.delay(invitation.id)
         return invitation
+        return super().create(validated_data)
 
 
 class InvitationListSerializer(serializers.ModelSerializer):

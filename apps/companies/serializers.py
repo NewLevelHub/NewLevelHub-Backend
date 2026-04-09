@@ -55,9 +55,19 @@ class CompanyCreateSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'logo', 'floor', 'office_number',
             'contact_email', 'contact_phone',
-            'plan', 'max_employees', 'storage_limit_gb',
+            'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
         ]
         read_only_fields = ['id']
+
+    def create(self, validated_data):
+        plan = validated_data.get('plan', 'basic')
+        plan_defaults = Company.PLAN_DEFAULT_LIMITS.get(plan, Company.PLAN_DEFAULT_LIMITS['basic'])
+
+        for field_name in ('max_employees', 'max_boards', 'storage_limit_gb'):
+            if field_name not in validated_data:
+                validated_data[field_name] = plan_defaults[field_name]
+
+        return super().create(validated_data)
 
 
 class CompanyUpdateSerializer(serializers.ModelSerializer):
@@ -68,7 +78,7 @@ class CompanyUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'name', 'description', 'logo', 'floor', 'office_number',
             'contact_email', 'contact_phone',
-            'plan', 'max_employees', 'storage_limit_gb',
+            'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
         ]
 
 

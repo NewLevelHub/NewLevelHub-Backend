@@ -1,3 +1,6 @@
+from decimal import Decimal, ROUND_HALF_UP
+
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
@@ -233,6 +236,41 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Companies'],
+        summary='Get company plan limits and current usage',
+        responses={
+            200: OpenApiResponse(description='Company limits with usage'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Company not found'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='limits',
+            permission_classes=[IsCompanyMember])
+    def limits(self, request, pk=None):
+        company = self.get_object()
+        storage_used_bytes = company.files.aggregate(total=Sum('file_size'))['total'] or 0
+        used_gb = (Decimal(storage_used_bytes) / Decimal(1024 ** 3)).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        )
+
+        return Response({
+            'employees': {
+                'current': company.members.filter(is_active=True).count(),
+                'max': company.max_employees,
+            },
+            'boards': {
+                'current': company.boards.count(),
+                'max': company.max_boards,
+            },
+            'storage': {
+                'used_gb': float(used_gb),
+                'limit_gb': company.storage_limit_gb,
+            },
+        })
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Deactivate company (superadmin)',
         summary='Deactivate company and all its members (superadmin)',
         request=None,
         responses={

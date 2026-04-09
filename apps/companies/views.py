@@ -270,7 +270,6 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Companies'],
-        summary='Deactivate company (superadmin)',
         summary='Deactivate company and all its members (superadmin)',
         request=None,
         responses={

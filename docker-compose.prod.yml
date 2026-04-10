@@ -17,10 +17,25 @@ services:
     networks:
       - nlh_network
 
+  redis:
+    image: redis:7-alpine
+    container_name: nlh_redis_prod
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nlh_network
+
   backend:
     image: ${BACKEND_IMAGE}
     container_name: nlh_backend_prod
-    command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+             python manage.py migrate --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application"
     labels:
       - "com.newlevelhub.test=prod-scp-verified"
     volumes:
@@ -35,6 +50,8 @@ services:
       - DEBUG=False
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: always
     networks:
@@ -51,6 +68,8 @@ services:
       - DEBUG=False
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: always
     networks:

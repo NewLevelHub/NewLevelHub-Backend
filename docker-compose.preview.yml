@@ -31,14 +31,16 @@ services:
 
   backend:
     image: ${BACKEND_IMAGE}
-    command: gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 config.wsgi:application
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+             python manage.py migrate --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 config.wsgi:application"
     labels:
       - "com.newlevelhub.test=compose-scp-verified"
     env_file:
       - .env.staging
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
-      DEBUG: "True"
       POSTGRES_DB: ${PREVIEW_DB_NAME}
       POSTGRES_HOST: db
       ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz"
@@ -79,7 +81,6 @@ services:
       - .env.staging
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.production
-      DEBUG: "True"
       POSTGRES_DB: ${PREVIEW_DB_NAME}
       POSTGRES_HOST: db
       FRONTEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"

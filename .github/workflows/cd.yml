@@ -99,7 +99,7 @@ jobs:
               IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
             fi
             SHORT_SHA="${COMMIT_SHA::7}"
-            BACKEND_IMAGE="${DOCKER_REGISTRY}/${IMAGE_PATH}:sha-${SHORT_SHA}"
+            export BACKEND_IMAGE="${DOCKER_REGISTRY}/${IMAGE_PATH}:sha-${SHORT_SHA}"
 
             if [ ! -f ".env.production" ]; then
               echo "ERROR: .env.production not found in $DEPLOY_PATH"

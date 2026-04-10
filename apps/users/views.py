@@ -5,6 +5,7 @@ import uuid
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -28,6 +29,7 @@ from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
+    _user_exists_for_invite_email,
     LoginSerializer,
     UserProfileSerializer,
     UserProfileUpdateSerializer,
@@ -125,7 +127,9 @@ def register(request):
     ],
     responses={
         200: OpenApiResponse(description='Returns invitation company_name, email and role'),
-        400: OpenApiResponse(description='Invalid/expired/used invitation token'),
+        400: OpenApiResponse(
+            description='Invalid/expired/used token, or invite email already registered',
+        ),
     },
     methods=['GET'],
 )
@@ -157,6 +161,9 @@ def register_by_invite(request):
         invitation = Invitation.objects.select_related('company').filter(token=token).first()
         if not invitation or invitation.is_used or invitation.is_expired:
             return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if _user_exists_for_invite_email(invitation.email):
+            raise ValidationError({'email': 'A user with this email is already registered.'})
 
         return Response(
             {

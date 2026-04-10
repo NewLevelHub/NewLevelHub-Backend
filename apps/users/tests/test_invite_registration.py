@@ -64,6 +64,18 @@ class TestInviteRegistration:
         response_expired = api_client.get(REGISTER_INVITE_URL, {'token': str(invitation.token)})
         assert response_expired.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_get_invite_fails_if_email_already_registered(self, api_client, invitation):
+        User.objects.create_user(
+            email=invitation.email,
+            password='StrongPass123!',
+            first_name='Existing',
+            last_name='User',
+        )
+        response = api_client.get(REGISTER_INVITE_URL, {'token': str(invitation.token)})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error'] is True
+        assert 'email' in response.data['detail']
+
     @patch('apps.users.views.send_verification_email.delay')
     def test_post_register_by_invite_creates_user_marks_invite_used_and_returns_tokens(
         self, mock_send_email, api_client, invitation
@@ -129,6 +141,36 @@ class TestInviteRegistration:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error'] is True
+        assert 'email' in response.data['detail']
+
+    def test_post_register_by_invite_fails_if_email_normalized_match(self, api_client, company, inviter):
+        invitation = Invitation.objects.create(
+            company=company,
+            email='new.user@EXAMPLE.COM',
+            invited_by=inviter,
+            role='employee',
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+        User.objects.create_user(
+            email='new.user@example.com',
+            password='StrongPass123!',
+            first_name='Existing',
+            last_name='User',
+        )
+        response = api_client.post(
+            REGISTER_INVITE_URL,
+            {
+                'token': str(invitation.token),
+                'first_name': 'New',
+                'last_name': 'Employee',
+                'password': 'StrongPass123!',
+            },
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['error'] is True
+        assert 'email' in response.data['detail']
 
     def test_post_register_by_invite_fails_if_employee_limit_reached(self, api_client, invitation):
         company = invitation.company

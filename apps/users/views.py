@@ -264,12 +264,12 @@ def resend_verification_email(request):
     try:
         send_verification_email.delay(request.user.id, str(token.token))
     except Exception:
-            logger.error(
-                'resend_email_verification: failed to enqueue send_verification_email '
-                'for user_id=%s — broker may be unreachable',
-                request.user.id,
-                exc_info=True,
-            )
+        logger.error(
+            'resend_email_verification: failed to enqueue send_verification_email '
+            'for user_id=%s — broker may be unreachable',
+            request.user.id,
+            exc_info=True,
+        )
     return Response({'detail': 'Verification email sent'})
 
 

@@ -96,26 +96,6 @@ services:
     stdin_open: true
     tty: true
 
-  celery:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    pull_policy: if_not_present
-    command: celery -A config.celery worker --loglevel=info
-    volumes:
-      - .:/app
-    env_file:
-      - .env
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.local
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
 volumes:
   postgres_data_local:
     driver: local

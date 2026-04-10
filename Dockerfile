@@ -30,9 +30,10 @@ COPY . .
 
 # Create directory for static files
 RUN mkdir -p /app/staticfiles
+RUN mkdir -p /app/static
 
 # Collect static files (will run during build)
-# RUN python manage.py collectstatic --noinput || true
+RUN DJANGO_SETTINGS_MODULE=config.settings.production SECRET_KEY=collectstatic-build-key python manage.py collectstatic --noinput
 
 # Expose port
 EXPOSE 8000

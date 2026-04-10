@@ -158,6 +158,18 @@ jobs:
             if [ -z "$TICKET" ]; then TICKET="noticket"; fi
             PR_SLUG="be-${TICKET}-pr${PR_NUMBER}"
             PREVIEW_PORT=$((10000 + PR_NUMBER))
+            if [ "$PREVIEW_PORT" -gt 10999 ]; then
+              echo "ERROR: PR number ${PR_NUMBER} exceeds port range (max port 10999). Refusing to deploy."
+              exit 1
+            fi
+            if ss -tlnp 2>/dev/null | grep -q ":${PREVIEW_PORT} " || \
+               ss -tlnp 2>/dev/null | grep -q ":${PREVIEW_PORT}$"; then
+              echo "WARNING: port ${PREVIEW_PORT} appears to be in use — checking if it belongs to this PR..."
+              if ! docker compose --project-name "$PR_SLUG" ps 2>/dev/null | grep -q "Up"; then
+                echo "ERROR: port ${PREVIEW_PORT} is occupied by another process. Refusing to deploy."
+                exit 1
+              fi
+            fi
             PREVIEW_DB_NAME="nlh_pr${PR_NUMBER}"
             NGINX_CONF="/etc/nginx/sites-available/${PR_SLUG}.staging.newlevelhub.kz"
 
@@ -176,6 +188,7 @@ jobs:
 
             echo "--- [1/5] Docker: pull & deploy containers ---"
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+            unset DOCKER_PASSWORD
             cd "$DEPLOY_PATH"
 
             if [ ! -f ".env.staging" ]; then
@@ -193,22 +206,37 @@ jobs:
               up -d --force-recreate
 
             echo "--- [2/5] Waiting for DB to be healthy ---"
-            sleep 10
+            BACKEND_CONTAINER="${PR_SLUG}-backend-1"
+            DB_CONTAINER="${PR_SLUG}-db-1"
+            for i in $(seq 1 30); do
+              if docker exec "$DB_CONTAINER" pg_isready -U "${POSTGRES_USER:-nlh_user}" -d "$PREVIEW_DB_NAME" >/dev/null 2>&1; then
+                echo "DB is ready after ${i}s"
+                break
+              fi
+              echo "Waiting for DB... (${i}/30)"
+              sleep 2
+            done
 
-            echo "--- [3/5] Running migrations ---"
+            echo "--- [3/6] Running migrations ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
             if docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null | grep -q true; then
               timeout 120 docker compose \
                 --project-name "$PR_SLUG" \
                 -f "$COMPOSE_FILE" \
-                exec -T backend python manage.py migrate --noinput \
-                || echo "WARNING: migrate failed or timed out — continuing"
+                exec -T backend python manage.py migrate --noinput
             else
-              echo "WARNING: backend container is not running, skipping migrate"
+              echo "ERROR: backend container is not running, cannot run migrations"
               docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -20
+              exit 1
             fi
 
-            echo "--- [4/5] Writing nginx config ---"
+            echo "--- [4/6] Collecting static files ---"
+            timeout 120 docker compose \
+              --project-name "$PR_SLUG" \
+              -f "$COMPOSE_FILE" \
+              exec -T backend python manage.py collectstatic --noinput
+
+            echo "--- [5/6] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
@@ -229,7 +257,7 @@ jobs:
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [5/5] Getting SSL certificate ---"
+            echo "--- [6/6] Getting SSL certificate ---"
             sleep 2
             sudo certbot --nginx \
               -d "${PR_SLUG}.staging.newlevelhub.kz" \
@@ -387,6 +415,38 @@ jobs:
             echo ""
             echo "=== Preview destroyed: ${PR_SLUG} ==="
 
+      - name: Delete PR image from registry
+        env:
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DOCKER_REPOSITORY: ${{ secrets.DOCKER_REPOSITORY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          IMAGE_PATH="$DOCKER_REPOSITORY"
+          if [[ "$IMAGE_PATH" != */* ]]; then
+            IMAGE_PATH="${DOCKER_USERNAME}/${IMAGE_PATH}"
+          fi
+          TAG="pr-${PR_NUMBER}"
+
+          # Docker Hub API delete (works for hub.docker.com registry)
+          if [[ "$DOCKER_REGISTRY" == "docker.io" ]] || [[ -z "$DOCKER_REGISTRY" ]] || [[ "$DOCKER_REGISTRY" == "registry-1.docker.io" ]]; then
+            TOKEN=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"username\": \"${DOCKER_USERNAME}\", \"password\": \"${DOCKER_PASSWORD}\"}" \
+              "https://hub.docker.com/v2/users/login/" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+            if [ -n "$TOKEN" ]; then
+              HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: JWT ${TOKEN}" \
+                "https://hub.docker.com/v2/repositories/${IMAGE_PATH}/tags/${TAG}/")
+              echo "Registry delete status: ${HTTP_STATUS}"
+            else
+              echo "WARNING: Could not obtain registry token — image tag not deleted from registry"
+            fi
+          else
+            echo "Non-Docker Hub registry detected — skipping automated tag deletion (manual cleanup required)"
+          fi
+
       - name: Update PR comment on destroy
         uses: actions/github-script@v7
         with:
@@ -447,7 +507,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.quality.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Tests passed (fork — no preview)' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

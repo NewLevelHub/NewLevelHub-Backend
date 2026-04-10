@@ -30,12 +30,13 @@ COPY . .
 
 # Create directory for static files
 RUN mkdir -p /app/staticfiles
+RUN mkdir -p /app/static
 
 # Collect static files (will run during build)
-# RUN python manage.py collectstatic --noinput || true
+RUN DJANGO_SETTINGS_MODULE=config.settings.production SECRET_KEY=collectstatic-build-key python manage.py collectstatic --noinput
 
 # Expose port
 EXPOSE 8000
 
-# Run gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "3", "config.wsgi:application"]
+# Default command (overridden by docker-compose command in all environments)
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "config.wsgi:application"]

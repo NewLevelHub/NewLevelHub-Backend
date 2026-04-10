@@ -423,15 +423,6 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
-        try:
-            send_invitation_email.delay(serializer.instance.id)
-        except Exception:
-            logger.error(
-                'InvitationViewSet.perform_create: failed to enqueue send_invitation_email '
-                'for invitation_id=%s — broker may be unreachable',
-                serializer.instance.id,
-                exc_info=True,
-            )
 
     @extend_schema(
         tags=['Companies'],

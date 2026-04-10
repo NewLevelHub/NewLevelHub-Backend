@@ -31,6 +31,7 @@ services:
 
   backend:
     image: ${BACKEND_IMAGE}
+    mem_limit: 512m
     command: >
       sh -c "python manage.py collectstatic --noinput &&
              python manage.py migrate --noinput &&
@@ -76,7 +77,8 @@ services:
 
   celery:
     image: ${BACKEND_IMAGE}
-    command: celery -A config.celery worker --loglevel=info --concurrency=2
+    mem_limit: 256m
+    command: celery -A config.celery worker --loglevel=info --concurrency=1
     env_file:
       - .env.staging
     environment:

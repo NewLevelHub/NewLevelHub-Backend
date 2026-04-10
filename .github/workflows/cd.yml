@@ -114,7 +114,8 @@ jobs:
 
             docker pull "$BACKEND_IMAGE"
 
-            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate backend nginx
+            docker compose --env-file .env.production -f docker-compose.prod.yml rm -sf backend nginx || true
+            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate --remove-orphans backend nginx
             sleep 15
 
             docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python manage.py migrate --noinput

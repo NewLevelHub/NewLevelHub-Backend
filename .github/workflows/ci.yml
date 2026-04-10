@@ -205,38 +205,27 @@ jobs:
               -f "$COMPOSE_FILE" \
               up -d --force-recreate
 
-            echo "--- [2/5] Waiting for DB to be healthy ---"
+            echo "--- [2/4] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
             DB_CONTAINER="${PR_SLUG}-db-1"
-            for i in $(seq 1 30); do
-              if docker exec "$DB_CONTAINER" pg_isready -U "${POSTGRES_USER:-nlh_user}" -d "$PREVIEW_DB_NAME" >/dev/null 2>&1; then
-                echo "DB is ready after ${i}s"
+            for i in $(seq 1 60); do
+              STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "none")
+              IS_RUNNING=$(docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "false")
+              # backend has no healthcheck — poll gunicorn port instead
+              if docker exec "$BACKEND_CONTAINER" sh -c 'nc -z localhost 8000' >/dev/null 2>&1; then
+                echo "Backend is ready after ${i}s"
                 break
               fi
-              echo "Waiting for DB... (${i}/30)"
-              sleep 2
+              if [ "$IS_RUNNING" != "true" ]; then
+                echo "ERROR: backend container stopped unexpectedly"
+                docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -30
+                exit 1
+              fi
+              echo "Waiting for backend... (${i}/60)"
+              sleep 3
             done
 
-            echo "--- [3/6] Running migrations ---"
-            BACKEND_CONTAINER="${PR_SLUG}-backend-1"
-            if docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null | grep -q true; then
-              timeout 120 docker compose \
-                --project-name "$PR_SLUG" \
-                -f "$COMPOSE_FILE" \
-                exec -T backend python manage.py migrate --noinput
-            else
-              echo "ERROR: backend container is not running, cannot run migrations"
-              docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -20
-              exit 1
-            fi
-
-            echo "--- [4/6] Collecting static files ---"
-            timeout 120 docker compose \
-              --project-name "$PR_SLUG" \
-              -f "$COMPOSE_FILE" \
-              exec -T backend python manage.py collectstatic --noinput
-
-            echo "--- [5/6] Writing nginx config ---"
+            echo "--- [3/4] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
@@ -257,7 +246,7 @@ jobs:
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [6/6] Getting SSL certificate ---"
+            echo "--- [4/4] Getting SSL certificate ---"
             sleep 2
             sudo certbot --nginx \
               -d "${PR_SLUG}.staging.newlevelhub.kz" \

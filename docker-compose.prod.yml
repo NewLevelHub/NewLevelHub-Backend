@@ -35,7 +35,7 @@ services:
     command: >
       sh -c "python manage.py collectstatic --noinput &&
              python manage.py migrate --noinput &&
-             gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application"
+             gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 config.wsgi:application"
     labels:
       - "com.newlevelhub.test=prod-scp-verified"
     volumes:

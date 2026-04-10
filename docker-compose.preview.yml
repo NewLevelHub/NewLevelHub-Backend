@@ -43,6 +43,7 @@ services:
       POSTGRES_HOST: db
       ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz"
       CORS_ALLOWED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
+      CSRF_TRUSTED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
       FRONTEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       SECURE_SSL_REDIRECT: "False"
       CELERY_BROKER_URL: "redis://redis:6379/0"

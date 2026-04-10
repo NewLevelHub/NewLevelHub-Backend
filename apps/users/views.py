@@ -91,7 +91,14 @@ def register(request):
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
     token = create_email_verification_token(user)
-    send_verification_email.delay(user.id, str(token.token))
+    try:
+        send_verification_email.delay(user.id, str(token.token))
+    except Exception:
+        logger.error(
+            'register: failed to enqueue send_verification_email for user_id=%s — broker may be unreachable',
+            user.id,
+            exc_info=True,
+        )
     tokens = _get_tokens(user, remember_me=False)
     response = Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
@@ -254,7 +261,15 @@ def resend_verification_email(request):
         cache.incr(throttle_key)
 
     token = create_email_verification_token(request.user, invalidate_existing=True)
-    send_verification_email.delay(request.user.id, str(token.token))
+    try:
+        send_verification_email.delay(request.user.id, str(token.token))
+    except Exception:
+        logger.error(
+            'resend_email_verification: failed to enqueue send_verification_email '
+            'for user_id=%s — broker may be unreachable',
+            request.user.id,
+            exc_info=True,
+        )
     return Response({'detail': 'Verification email sent'})
 
 

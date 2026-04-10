@@ -2,6 +2,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 from apps.users.models import User
+from .limits import notify_company_admins_limit_thresholds
 from .models import Company, CompanySettings, Invitation
 from .tasks import send_invitation_email
 
@@ -135,6 +136,9 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         company = self.context['company']
         email = attrs['email'].strip()
 
+        if company.members.filter(is_active=True).count() >= company.max_employees:
+            raise serializers.ValidationError('Employee limit reached')
+
         if User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError(
                 {'email': 'A user with this email is already registered.'},
@@ -160,10 +164,18 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        validated_data['company'] = self.context['company']
+        company = self.context['company']
+        validated_data['company'] = company
         validated_data['invited_by'] = self.context['request'].user
         invitation = super().create(validated_data)
         send_invitation_email.delay(invitation.id)
+        current_employees = company.members.filter(is_active=True).count()
+        notify_company_admins_limit_thresholds(
+            company=company,
+            metric='employees',
+            current_value=current_employees,
+            limit_value=company.max_employees,
+        )
         return invitation
 
 

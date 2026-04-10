@@ -1,8 +1,10 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework import status
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
+from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Board, Column, Label, Task, Comment, TaskHistory
@@ -57,6 +59,21 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if self.action == 'list':
             return BoardListSerializer
         return BoardSerializer
+
+    def create(self, request, *args, **kwargs):
+        company = request.user.company
+        current_boards = company.boards.count()
+        if current_boards >= company.max_boards:
+            return Response({'detail': 'Board limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = super().create(request, *args, **kwargs)
+        notify_company_admins_limit_thresholds(
+            company=company,
+            metric='boards',
+            current_value=current_boards + 1,
+            limit_value=company.max_boards,
+        )
+        return response
 
     def perform_create(self, serializer):
         board = serializer.save(company=self.request.user.company, created_by=self.request.user)

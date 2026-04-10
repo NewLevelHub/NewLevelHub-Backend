@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 from django.utils import timezone
-from rest_framework import viewsets, filters
+from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -423,6 +423,12 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save()
+
+    def create(self, request, *args, **kwargs):
+        company = self.get_serializer_context()['company']
+        if company.members.filter(is_active=True).count() >= company.max_employees:
+            return Response({'detail': 'Employee limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().create(request, *args, **kwargs)
 
     @extend_schema(
         tags=['Companies'],

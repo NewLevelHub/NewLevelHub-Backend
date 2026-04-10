@@ -1,8 +1,13 @@
 from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework import status
 from rest_framework.response import Response
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from apps.companies.limits import (
+    get_company_storage_used_bytes,
+    notify_company_admins_limit_thresholds,
+)
 from apps.core.permissions import IsCompanyMember
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
@@ -85,6 +90,25 @@ class FileViewSet(viewsets.ModelViewSet):
         own = File.objects.filter(owner=user)
         shared = File.objects.filter(company=user.company)
         return (own | shared).distinct()
+
+    def create(self, request, *args, **kwargs):
+        company = request.user.company
+        current_storage_used = get_company_storage_used_bytes(company)
+        storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
+        if current_storage_used >= storage_limit_bytes:
+            return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+
+        response = super().create(request, *args, **kwargs)
+        uploaded_file = request.FILES.get('file')
+        uploaded_size = uploaded_file.size if uploaded_file else 0
+        projected_used_gb = (current_storage_used + uploaded_size) / (1024 ** 3)
+        notify_company_admins_limit_thresholds(
+            company=company,
+            metric='storage',
+            current_value=round(projected_used_gb, 2),
+            limit_value=company.storage_limit_gb,
+        )
+        return response
 
     def perform_create(self, serializer):
         f = self.request.FILES.get('file')

@@ -9,6 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.companies.models import Company, Invitation
+from apps.notifications.models import Notification
 from apps.users.models import User
 
 
@@ -145,6 +146,88 @@ class TestInvitationCreate:
         invitation = Invitation.objects.get(company=company, email='new.admin@example.com')
         assert invitation.role == 'company_admin'
         mock_delay.assert_called_once_with(invitation.id)
+
+    @patch('apps.companies.views.send_invitation_email.delay')
+    def test_employee_limit_reached_returns_400(self, _mock_delay, api_client, company_admin, company):
+        company.max_employees = 2
+        company.save(update_fields=['max_employees'])
+        User.objects.create_user(
+            email='employee-2@invite.co',
+            password='pass',
+            first_name='Emp2',
+            last_name='User',
+            role='employee',
+            company=company,
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': 'blocked@example.com', 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['detail'] == 'Employee limit reached'
+
+    @patch('apps.companies.views.send_invitation_email.delay')
+    def test_create_invitation_at_80_percent_creates_admin_notification(
+        self, _mock_delay, api_client, company_admin, company
+    ):
+        company.max_employees = 5
+        company.save(update_fields=['max_employees'])
+        for idx in range(3):
+            User.objects.create_user(
+                email=f'emp-{idx}@invite.co',
+                password='pass',
+                first_name=f'Emp{idx}',
+                last_name='User',
+                role='employee',
+                company=company,
+            )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': 'threshold@example.com', 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=company_admin,
+            notification_type='announcement_company',
+            title='System limit warning',
+            body='Employee usage reached 80% (4/5 employees).',
+        ).exists()
+
+    @patch('apps.companies.views.send_invitation_email.delay')
+    def test_create_invitation_at_95_percent_creates_admin_notification(
+        self, _mock_delay, api_client, company_admin, company
+    ):
+        company.max_employees = 20
+        company.save(update_fields=['max_employees'])
+        for idx in range(18):
+            User.objects.create_user(
+                email=f'emp95-{idx}@invite.co',
+                password='pass',
+                first_name=f'Emp95{idx}',
+                last_name='User',
+                role='employee',
+                company=company,
+            )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': 'threshold95@example.com', 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=company_admin,
+            notification_type='announcement_company',
+            title='System limit warning',
+            body='Employee usage reached 95% (19/20 employees).',
+        ).exists()
 
 
 @pytest.mark.django_db

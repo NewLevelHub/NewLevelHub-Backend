@@ -69,7 +69,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: 22
-          source: "docker-compose.prod.yml"
+          source: "docker-compose.prod.yml,nginx/nginx.conf"
           target: ${{ secrets.DEPLOY_PATH }}
 
       - name: Deploy via SSH

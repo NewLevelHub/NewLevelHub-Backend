@@ -162,7 +162,7 @@ class TestInvitationCreate:
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(
-            _url(company.id),
+            invitations_url(company.id),
             {'email': 'blocked@example.com', 'role': 'employee'},
             format='json',
         )
@@ -187,7 +187,7 @@ class TestInvitationCreate:
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(
-            _url(company.id),
+            invitations_url(company.id),
             {'email': 'threshold@example.com', 'role': 'employee'},
             format='json',
         )
@@ -217,7 +217,7 @@ class TestInvitationCreate:
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(
-            _url(company.id),
+            invitations_url(company.id),
             {'email': 'threshold95@example.com', 'role': 'employee'},
             format='json',
         )

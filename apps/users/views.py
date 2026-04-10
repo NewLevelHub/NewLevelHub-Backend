@@ -1,9 +1,11 @@
 from datetime import timedelta
 
 import logging
+import uuid
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -21,11 +23,13 @@ import rest_framework.fields as fields
 
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
+from apps.companies.models import Invitation
 from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
+    _user_exists_for_invite_email,
     LoginSerializer,
     UserProfileSerializer,
     UserProfileUpdateSerializer,
@@ -110,6 +114,27 @@ def register(request):
 
 @extend_schema(
     tags=['Auth'],
+    summary='Get invitation details by token',
+    request=None,
+    parameters=[
+        OpenApiParameter(
+            name='token',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            required=True,
+            description='Invitation token (UUID)',
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(description='Returns invitation company_name, email and role'),
+        400: OpenApiResponse(
+            description='Invalid/expired/used token, or invite email already registered',
+        ),
+    },
+    methods=['GET'],
+)
+@extend_schema(
+    tags=['Auth'],
     summary='Register via invite link',
     request=InviteRegistrationSerializer,
     responses={
@@ -119,14 +144,40 @@ def register(request):
         ),
         400: OpenApiResponse(description='Validation error or invalid invite token'),
     },
+    methods=['POST'],
 )
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def register_by_invite(request):
+    if request.method == 'GET':
+        token = request.query_params.get('token')
+        if not token:
+            return Response({'detail': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            token = uuid.UUID(str(token))
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
+
+        invitation = Invitation.objects.select_related('company').filter(token=token).first()
+        if not invitation or invitation.is_used or invitation.is_expired:
+            return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if _user_exists_for_invite_email(invitation.email):
+            raise ValidationError({'email': 'A user with this email is already registered.'})
+
+        return Response(
+            {
+                'company_name': invitation.company.name,
+                'email': invitation.email,
+                'role': invitation.role,
+            }
+        )
+
     serializer = InviteRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    # TODO: привязка к компании из инвайта, email верификация
+    token = create_email_verification_token(user)
+    send_verification_email.delay(user.id, str(token.token))
     tokens = _get_tokens(user, remember_me=False)
     response = Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},

@@ -24,7 +24,7 @@ def api_client():
 @pytest.fixture
 def user(db):
     return User.objects.create_user(
-        email='test@example.com',
+        email=f'test-{uuid.uuid4().hex[:8]}@example.com',
         password='OldPass123!',
         first_name='Test',
         last_name='User',
@@ -34,7 +34,7 @@ def user(db):
 @pytest.fixture
 def inactive_user(db):
     return User.objects.create_user(
-        email='inactive@example.com',
+        email=f'inactive-{uuid.uuid4().hex[:8]}@example.com',
         password='OldPass123!',
         first_name='Inactive',
         last_name='User',

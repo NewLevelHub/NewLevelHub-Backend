@@ -217,20 +217,26 @@ jobs:
               sleep 2
             done
 
-            echo "--- [3/5] Running migrations ---"
+            echo "--- [3/6] Running migrations ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
             if docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null | grep -q true; then
               timeout 120 docker compose \
                 --project-name "$PR_SLUG" \
                 -f "$COMPOSE_FILE" \
-                exec -T backend python manage.py migrate --noinput \
-                || echo "WARNING: migrate failed or timed out — continuing"
+                exec -T backend python manage.py migrate --noinput
             else
-              echo "WARNING: backend container is not running, skipping migrate"
+              echo "ERROR: backend container is not running, cannot run migrations"
               docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -20
+              exit 1
             fi
 
-            echo "--- [4/5] Writing nginx config ---"
+            echo "--- [4/6] Collecting static files ---"
+            timeout 120 docker compose \
+              --project-name "$PR_SLUG" \
+              -f "$COMPOSE_FILE" \
+              exec -T backend python manage.py collectstatic --noinput
+
+            echo "--- [5/6] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
@@ -251,7 +257,7 @@ jobs:
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [5/5] Getting SSL certificate ---"
+            echo "--- [6/6] Getting SSL certificate ---"
             sleep 2
             sudo certbot --nginx \
               -d "${PR_SLUG}.staging.newlevelhub.kz" \

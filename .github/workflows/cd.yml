@@ -78,11 +78,7 @@ jobs:
       - name: Build image ref
         id: img
         run: |
-          IMAGE_PATH="${{ secrets.DOCKER_REPOSITORY }}"
-          if [[ "$IMAGE_PATH" != */* ]]; then
-            IMAGE_PATH="${{ secrets.DOCKER_USERNAME }}/${IMAGE_PATH}"
-          fi
-          echo "ref=${{ secrets.DOCKER_REGISTRY }}/${IMAGE_PATH}:latest" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ needs.build_and_push.outputs.image_sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -102,6 +98,7 @@ jobs:
             set -e
 
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
+            unset DOCKER_PASSWORD
             cd "$DEPLOY_PATH"
 
             if [ ! -f ".env.production" ]; then
@@ -121,8 +118,11 @@ jobs:
             docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate backend nginx
             sleep 5
 
-            docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python manage.py migrate --noinput || echo "WARNING: migrate failed"
+            docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python manage.py migrate --noinput
             docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python manage.py collectstatic --noinput || echo "WARNING: collectstatic failed"
+
+            echo "Restarting celery worker..."
+            docker compose --env-file .env.production -f docker-compose.prod.yml restart celery
 
             echo "=== Production deploy complete ==="
             echo "Image: $BACKEND_IMAGE"

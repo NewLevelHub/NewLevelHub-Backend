@@ -27,5 +27,10 @@ urlpatterns = [
         invitation_resend,
         name='company-invitation-resend',
     ),
+    path(
+        '<int:company_id>/members/<int:user_id>/activity/',
+        views.CompanyMemberActivityView.as_view(),
+        name='company-member-activity',
+    ),
     path('', include(router.urls)),
 ]

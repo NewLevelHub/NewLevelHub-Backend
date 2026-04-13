@@ -24,6 +24,7 @@ from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Task
 from apps.users.models import User
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from .filters import CompanyFilter, CompanyMemberFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
@@ -37,10 +38,23 @@ from .serializers import (
     InvitationListSerializer,
     CompanyMemberSerializer,
     CompanyMemberActivitySerializer,
+    MemberDeactivateSerializer,
+    MemberRemoveSerializer,
 )
 from .tasks import send_invitation_email
 
 logger = logging.getLogger(__name__)
+
+
+def _blacklist_user_tokens(user):
+    """Blacklist all outstanding refresh tokens for the given user."""
+    outstanding = OutstandingToken.objects.filter(user=user).exclude(
+        blacklistedtoken__isnull=False
+    )
+    BlacklistedToken.objects.bulk_create(
+        [BlacklistedToken(token=t) for t in outstanding],
+        ignore_conflicts=True,
+    )
 
 
 @extend_schema_view(
@@ -135,9 +149,11 @@ class CompanyViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ('create', 'destroy', 'deactivate', 'activate'):
             return [IsSuperAdmin()]
-        if self.action in ('update', 'partial_update'):
-            # Both superadmin and company_admin may update; field-level
-            # restriction is enforced via get_serializer_class below.
+        if self.action in ('update', 'partial_update',
+                           'deactivate_member', 'activate_member', 'remove_member'):
+            # Both superadmin and company_admin may perform these actions; the
+            # views themselves enforce additional role-based checks (e.g.
+            # only superadmin can remove another company_admin).
             return [IsCompanyAdmin()]
         if self.action == 'members':
             # company_admin (own company) and superadmin; employees/guests blocked
@@ -383,7 +399,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             404: OpenApiResponse(description='Company not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='activate')
+    @action(detail=True, methods=['post'], url_path='activate',
+            permission_classes=[IsSuperAdmin])
     def activate(self, request, pk=None):
         company = self.get_object()
         with transaction.atomic():
@@ -392,6 +409,180 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
         company.refresh_from_db()
         return Response(CompanySerializer(company).data)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Deactivate a company member (company_admin / superadmin)',
+        request=MemberDeactivateSerializer,
+        responses={
+            200: OpenApiResponse(description='User deactivated successfully'),
+            400: OpenApiResponse(description='Cannot deactivate yourself / not a member'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company or user not found'),
+        },
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.INT,
+                description='ID of the user to deactivate.',
+            ),
+        ],
+    )
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='members/(?P<user_id>[0-9]+)/deactivate',
+        url_name='member-deactivate',
+    )
+    def deactivate_member(self, request, pk=None, user_id=None):
+        company = self.get_object()
+        target = get_object_or_404(User, pk=user_id, company=company)
+
+        if target.pk == request.user.pk:
+            return Response(
+                {'detail': 'Cannot deactivate yourself'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            target.is_active = False
+            target.save(update_fields=['is_active'])
+            _blacklist_user_tokens(target)
+
+        return Response({'detail': 'User deactivated successfully'}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Activate a company member (company_admin / superadmin)',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='User activated successfully'),
+            400: OpenApiResponse(description='Not a member of this company'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company or user not found'),
+        },
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.INT,
+                description='ID of the user to activate.',
+            ),
+        ],
+    )
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='members/(?P<user_id>[0-9]+)/activate',
+        url_name='member-activate',
+    )
+    def activate_member(self, request, pk=None, user_id=None):
+        company = self.get_object()
+        # Allow inactive members to be looked up so they can be re-activated.
+        target = get_object_or_404(User.objects.filter(company=company), pk=user_id)
+
+        with transaction.atomic():
+            target.is_active = True
+            target.save(update_fields=['is_active'])
+
+        return Response({'detail': 'User activated successfully'}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Remove a member from the company (company_admin / superadmin)',
+        request=MemberRemoveSerializer,
+        responses={
+            200: OpenApiResponse(description='User removed from company'),
+            400: OpenApiResponse(
+                description='Cannot remove yourself / reassign_to is invalid'
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Only superadmin can remove a company admin'),
+            404: OpenApiResponse(description='Company or user not found'),
+        },
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.INT,
+                description='ID of the user to remove.',
+            ),
+            OpenApiParameter(
+                name='reassign_to',
+                location=OpenApiParameter.QUERY,
+                type=OpenApiTypes.INT,
+                required=False,
+                description='User ID to reassign tasks to. Omit to leave tasks unassigned.',
+            ),
+        ],
+    )
+    @action(
+        detail=True,
+        methods=['delete'],
+        url_path='members/(?P<user_id>[0-9]+)',
+        url_name='member-remove',
+    )
+    def remove_member(self, request, pk=None, user_id=None):
+        company = self.get_object()
+        target = get_object_or_404(User, pk=user_id, company=company)
+
+        if target.pk == request.user.pk:
+            return Response(
+                {'detail': 'Cannot remove yourself'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Only superadmin may remove a company_admin.
+        if target.role == 'company_admin' and request.user.role != 'superadmin':
+            return Response(
+                {'detail': 'Only superadmin can remove a company admin'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Validate optional reassign_to parameter.
+        reassign_to_id = request.query_params.get('reassign_to')
+        reassign_to_user = None
+        if reassign_to_id is not None:
+            try:
+                reassign_to_id = int(reassign_to_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'detail': 'reassign_to must be a valid user ID'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            reassign_to_user = User.objects.filter(
+                pk=reassign_to_id, company=company, is_active=True,
+            ).first()
+            if reassign_to_user is None:
+                return Response(
+                    {'detail': 'reassign_to must be an active member of the same company'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        with transaction.atomic():
+            # Reassign or unassign tasks in this company's boards.
+            tasks_qs = Task.objects.filter(
+                assignee=target,
+                column__board__company=company,
+            )
+            tasks_count = tasks_qs.count()
+            tasks_qs.update(assignee=reassign_to_user)
+
+            # Strip the user from the company.
+            target.company = None
+            target.is_active = False
+            target.role = 'guest'
+            target.save(update_fields=['company', 'is_active', 'role'])
+
+            _blacklist_user_tokens(target)
+
+        return Response(
+            {'detail': 'User removed from company', 'tasks_reassigned': tasks_count},
+            status=status.HTTP_200_OK,
+        )
 
     def destroy(self, request, *args, **kwargs):
         if request.query_params.get('confirm') != 'true':

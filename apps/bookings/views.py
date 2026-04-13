@@ -16,6 +16,7 @@ from .models import Resource, Booking, RecurringBooking, ResourceBlock
 from .serializers import (
     ResourceSerializer,
     ResourceListSerializer,
+    ResourceBulkCreateSerializer,
     BookingSerializer,
     BookingCreateSerializer,
     RecurringBookingSerializer,

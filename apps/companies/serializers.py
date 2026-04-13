@@ -190,14 +190,22 @@ class InvitationListSerializer(serializers.ModelSerializer):
         ]
 
 
-class CompanyMemberSerializer(serializers.Serializer):
-    """Сотрудник компании (read-only представление)."""
-    id = serializers.IntegerField()
-    email = serializers.EmailField()
-    full_name = serializers.CharField()
-    role = serializers.CharField()
-    position = serializers.CharField()
-    avatar = serializers.ImageField()
-    is_active = serializers.BooleanField()
-    date_joined = serializers.DateTimeField()
-    last_login = serializers.DateTimeField()
+class CompanyMemberSerializer(serializers.ModelSerializer):
+    """Company member — read-only list representation."""
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'full_name', 'role', 'position',
+            'avatar', 'is_active', 'date_joined', 'last_login',
+        ]
+        read_only_fields = fields
+
+
+class CompanyMemberActivitySerializer(serializers.Serializer):
+    """Activity summary for a single company member."""
+    last_login = serializers.DateTimeField(allow_null=True)
+    active_tasks_count = serializers.IntegerField()
+    completed_tasks_count = serializers.IntegerField()
+    bookings_last_30_days = serializers.IntegerField()

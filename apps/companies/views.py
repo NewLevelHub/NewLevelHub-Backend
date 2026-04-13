@@ -1,15 +1,17 @@
 import logging
+from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
@@ -20,8 +22,9 @@ from drf_spectacular.utils import (
 
 from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
+from apps.crm.models import Task
 from apps.users.models import User
-from .filters import CompanyFilter
+from .filters import CompanyFilter, CompanyMemberFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
     CompanySerializer,
@@ -33,6 +36,7 @@ from .serializers import (
     InvitationCreateSerializer,
     InvitationListSerializer,
     CompanyMemberSerializer,
+    CompanyMemberActivitySerializer,
 )
 from .tasks import send_invitation_email
 
@@ -135,6 +139,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             # Both superadmin and company_admin may update; field-level
             # restriction is enforced via get_serializer_class below.
             return [IsCompanyAdmin()]
+        if self.action == 'members':
+            # company_admin (own company) and superadmin; employees/guests blocked
+            return [IsCompanyAdmin()]
         # list / retrieve / custom actions — company members only; guests get 403
         return [IsCompanyMember()]
 
@@ -222,6 +229,37 @@ class CompanyViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=['Companies'],
         summary='List company members',
+        parameters=[
+            OpenApiParameter(
+                name='role',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by role: superadmin, company_admin, employee, guest.',
+            ),
+            OpenApiParameter(
+                name='is_active',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by active status.',
+            ),
+            OpenApiParameter(
+                name='search',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Search by name or email.',
+            ),
+            OpenApiParameter(
+                name='ordering',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Order by: date_joined, last_login, full_name '
+                            '(prefix with - for descending).',
+            ),
+        ],
         responses={
             200: CompanyMemberSerializer(many=True),
             401: OpenApiResponse(description='Not authenticated'),
@@ -230,10 +268,44 @@ class CompanyViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['get'], url_path='members',
-            permission_classes=[IsCompanyMember])
+            permission_classes=[IsCompanyAdmin])
     def members(self, request, pk=None):
-        company = self.get_object()
-        qs = User.objects.filter(company=company, is_active=True)
+        # Resolve the company without letting global filter_backends interfere.
+        # get_object() calls filter_queryset() which would apply SearchFilter
+        # to the company queryset using the ?search= param intended for members.
+        company_qs = Company.objects.all()
+        if request.user.role == 'company_admin':
+            if request.user.company_id != int(pk):
+                raise PermissionDenied('You can only view members of your own company.')
+            company_qs = company_qs.filter(id=request.user.company_id)
+        company = get_object_or_404(company_qs, pk=pk)
+
+        qs = User.objects.filter(company=company)
+
+        # Apply filters
+        member_filter = CompanyMemberFilter(request.query_params, queryset=qs)
+        qs = member_filter.qs
+
+        # Ordering: support date_joined, last_login; full_name requires annotation
+        ordering_param = request.query_params.get('ordering', '')
+        allowed_ordering = {
+            'date_joined': 'date_joined',
+            '-date_joined': '-date_joined',
+            'last_login': 'last_login',
+            '-last_login': '-last_login',
+        }
+        if ordering_param in allowed_ordering:
+            qs = qs.order_by(allowed_ordering[ordering_param])
+        elif ordering_param in ('full_name', '-full_name'):
+            # Approximate ordering by first name then last name
+            prefix = '-' if ordering_param.startswith('-') else ''
+            qs = qs.order_by(f'{prefix}first_name', f'{prefix}last_name')
+
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = CompanyMemberSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
         serializer = CompanyMemberSerializer(qs, many=True)
         return Response(serializer.data)
 
@@ -480,3 +552,63 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
         send_invitation_email.delay(new_invitation.id)
         return Response({'detail': 'Invitation resent'})
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='Get member activity summary',
+    responses={
+        200: CompanyMemberActivitySerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Company or user not found'),
+    },
+)
+class CompanyMemberActivityView(APIView):
+    """
+    GET /api/v1/companies/<company_id>/members/<user_id>/activity/
+
+    Returns last_login, active task count, completed task count, and
+    bookings in the last 30 days for the given member.
+
+    Access: company_admin (own company only) and superadmin.
+    """
+
+    permission_classes = [IsCompanyAdmin]
+
+    def get(self, request, company_id, user_id):
+        # Resolve company with company isolation
+        company_qs = Company.objects.all()
+        if request.user.role == 'company_admin':
+            if request.user.company_id != company_id:
+                raise PermissionDenied('You can only view members of your own company.')
+            company_qs = company_qs.filter(id=request.user.company_id)
+
+        company = get_object_or_404(company_qs, id=company_id)
+        member = get_object_or_404(User, id=user_id, company=company)
+
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+
+        # Tasks: active = not archived; completed = archived.
+        # Tasks are scoped to the company via board.company.
+        assigned_tasks = Task.objects.filter(
+            assignee=member,
+            column__board__company=company,
+        )
+        active_tasks_count = assigned_tasks.filter(is_archived=False).count()
+        completed_tasks_count = assigned_tasks.filter(is_archived=True).count()
+
+        bookings_count = Booking.objects.filter(
+            user=member,
+            company=company,
+            start_time__gte=thirty_days_ago,
+        ).count()
+
+        data = {
+            'last_login': member.last_login,
+            'active_tasks_count': active_tasks_count,
+            'completed_tasks_count': completed_tasks_count,
+            'bookings_last_30_days': bookings_count,
+        }
+        serializer = CompanyMemberActivitySerializer(data)
+        return Response(serializer.data)

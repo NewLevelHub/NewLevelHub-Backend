@@ -372,6 +372,15 @@ class TestResourceCatalogFilters:
         assert len(_list_results(r4)) == 1
         assert _list_results(r4)[0]['name'] == 'Байтерек зал'
 
+        r2_body = r2.json()
+        assert 'meeting_room_equipment_keys' in r2_body
+        assert {'projector', 'tv'}.issubset(set(r2_body['meeting_room_equipment_keys']))
+
+        r3_body = r3.json()
+        assert set(r3_body['meeting_room_equipment_keys']) >= {'projector', 'tv'}
+
+        assert api_client.get(RESOURCES_URL, {'type': 'desk'}).json()['meeting_room_equipment_keys'] == []
+
     def test_search_does_not_match_zone_only(self, api_client, superadmin, employee):
         api_client.force_authenticate(user=superadmin)
         api_client.post(
@@ -388,6 +397,26 @@ class TestResourceCatalogFilters:
         api_client.force_authenticate(user=employee)
         r = api_client.get(RESOURCES_URL, {'search': 'байтерек'})
         assert _list_results(r) == []
+
+
+@pytest.mark.django_db
+class TestResourceCatalogOrdering:
+    def test_ordering_name_lexicographic(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        tag = 'OrderNameDEV71'
+        created = []
+        for n in [f'Z_{tag}', f'A_{tag}', f'M_{tag}']:
+            c = api_client.post(
+                RESOURCES_URL,
+                {'type': 'desk', 'name': n, 'floor': 1},
+                format='json',
+            )
+            assert c.status_code == status.HTTP_201_CREATED
+            created.append(n)
+        r = api_client.get(RESOURCES_URL, {'ordering': 'name', 'page_size': 100})
+        assert r.status_code == status.HTTP_200_OK
+        ours = [x['name'] for x in _list_results(r) if tag in x['name']]
+        assert ours == sorted(created)
 
 
 @pytest.mark.django_db

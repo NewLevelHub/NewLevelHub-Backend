@@ -1,9 +1,10 @@
 import django_filters
 from .models import Resource, Booking
+from .serializers import _EQUIPMENT_KEYS
 
 
 class ResourceFilter(django_filters.FilterSet):
-    """Каталог: type и resource_type — одно поле модели; equipment — projector и/или tv."""
+    """Каталог: type и resource_type — одно поле модели; equipment — ключи как в карточке переговорки."""
 
     type = django_filters.CharFilter(field_name='resource_type')
     resource_type = django_filters.CharFilter()
@@ -28,11 +29,10 @@ class ResourceFilter(django_filters.FilterSet):
         for part in raw:
             tokens.extend(str(part).replace(',', ' ').split())
         for token in tokens:
-            key = token.strip().lower()
-            if key == 'projector':
-                queryset = queryset.filter(has_projector=True)
-            elif key == 'tv':
-                queryset = queryset.filter(has_tv=True)
+            key = token.strip().lower().replace('-', '_')
+            field = _EQUIPMENT_KEYS.get(key)
+            if field:
+                queryset = queryset.filter(**{field: True})
         return queryset
 
 

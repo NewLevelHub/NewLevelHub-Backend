@@ -19,6 +19,7 @@ from .serializers import (
     BookingCreateSerializer,
     RecurringBookingSerializer,
     ResourceBlockSerializer,
+    _EQUIPMENT_KEYS,
 )
 from .filters import ResourceFilter, BookingFilter
 
@@ -71,8 +72,9 @@ class ResourceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filterset_class = ResourceFilter
     search_fields = ['name']
-    ordering_fields = ['name', 'floor', 'capacity']
-    ordering = ['name']
+    ordering_fields = ['name', 'floor', 'capacity', 'id']
+    # Вторичный ключ id — стабильный порядок при одинаковых именах.
+    ordering = ['name', 'id']
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -122,7 +124,42 @@ class ResourceViewSet(viewsets.ModelViewSet):
                     to_attr='_active_blocks_prefetch',
                 ),
             )
-        return qs.order_by('-created_at') if self.action != 'list' else qs
+            # TimeStampedModel задаёт Meta.ordering = -created_at; без сброса БД может
+            # вернуть строки в порядке создания, игнорируя ?ordering=name (QA DEV-71).
+            return qs.order_by()
+        return qs.order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        facet_params = request.query_params.copy()
+        for _key in ('equipment', 'has_projector', 'has_tv', 'has_video_conf'):
+            facet_params.pop(_key, None)
+        facet_filter = ResourceFilter(
+            data=facet_params,
+            queryset=self.get_queryset(),
+            request=request,
+        )
+        facet_mr = facet_filter.qs.filter(resource_type='meeting_room')
+        meeting_room_equipment_keys = [
+            key for key, field in _EQUIPMENT_KEYS.items()
+            if facet_mr.filter(**{field: True}).exists()
+        ]
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data['meeting_room_equipment_keys'] = meeting_room_equipment_keys
+            return response
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            'count': queryset.count(),
+            'next': None,
+            'previous': None,
+            'results': serializer.data,
+            'meeting_room_equipment_keys': meeting_room_equipment_keys,
+        })
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy', 'block'):

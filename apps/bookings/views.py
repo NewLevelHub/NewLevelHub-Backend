@@ -1,10 +1,14 @@
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Resource, Booking, RecurringBooking
 from .serializers import (
@@ -54,12 +58,16 @@ from .filters import ResourceFilter, BookingFilter
     destroy=extend_schema(
         tags=['Bookings'],
         summary='Delete resource (superadmin)',
-        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            400: OpenApiResponse(description='Has future bookings'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
     ),
 )
 class ResourceViewSet(viewsets.ModelViewSet):
-    queryset = Resource.objects.filter(is_active=True)
-    permission_classes = [IsCompanyMember]
+    queryset = Resource.objects.all()
+    permission_classes = [IsAuthenticated]
     filterset_class = ResourceFilter
     search_fields = ['name', 'zone']
     ordering_fields = ['name', 'floor', 'capacity']
@@ -69,10 +77,54 @@ class ResourceViewSet(viewsets.ModelViewSet):
             return ResourceListSerializer
         return ResourceSerializer
 
+    def get_queryset(self):
+        qs = Resource.objects.all().order_by('-created_at')
+        user = self.request.user
+        if not user.is_authenticated:
+            return Resource.objects.none()
+        if getattr(user, 'role', None) == 'superadmin':
+            return qs
+        return qs.filter(is_active=True)
+
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy'):
+        if self.action in ('create', 'update', 'partial_update', 'destroy', 'block'):
             return [IsSuperAdmin()]
-        return [IsCompanyMember()]
+        return [IsAuthenticated()]
+
+    def perform_update(self, serializer):
+        was_active = serializer.instance.is_active
+        resource = serializer.save()
+        if was_active and not resource.is_active:
+            self._cancel_future_bookings(resource)
+
+    def destroy(self, request, *args, **kwargs):
+        resource = self.get_object()
+        now = timezone.now()
+        if resource.bookings.filter(
+            end_time__gt=now,
+            status='confirmed',
+        ).exists():
+            raise ValidationError(
+                {'detail': 'Cannot delete a resource that has future confirmed bookings.'}
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    def _cancel_future_bookings(self, resource):
+        now = timezone.now()
+        qs = resource.bookings.filter(end_time__gt=now, status='confirmed')
+        admin = self.request.user
+        for booking in qs:
+            booking.status = 'cancelled'
+            booking.cancelled_by = admin
+            booking.cancel_reason = 'Resource deactivated'
+            booking.save()
+            Notification.objects.create(
+                user=booking.user,
+                notification_type='booking_cancelled',
+                title=f'Бронирование отменено: {resource.name}',
+                body='Ресурс деактивирован администратором.',
+                url='',
+            )
 
     @extend_schema(
         tags=['Bookings'],
@@ -98,7 +150,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
             403: OpenApiResponse(description='Superadmin only'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='block', permission_classes=[IsSuperAdmin])
+    @action(detail=True, methods=['post'], url_path='block')
     def block(self, request, pk=None):
         resource = self.get_object()
         serializer = ResourceBlockSerializer(data=request.data)

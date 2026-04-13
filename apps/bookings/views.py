@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -18,6 +19,7 @@ from .serializers import (
     BookingCreateSerializer,
     RecurringBookingSerializer,
     ResourceBlockSerializer,
+    ResourceBulkCreateSerializer,
 )
 from .filters import ResourceFilter, BookingFilter
 
@@ -87,7 +89,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         return qs.filter(is_active=True)
 
     def get_permissions(self):
-        if self.action in ('create', 'update', 'partial_update', 'destroy', 'block'):
+        if self.action in ('create', 'update', 'partial_update', 'destroy', 'block', 'bulk_create'):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
 
@@ -139,6 +141,41 @@ class ResourceViewSet(viewsets.ModelViewSet):
             resource=resource, status='confirmed',
         ).order_by('start_time')
         return Response(BookingSerializer(bookings, many=True).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Bulk create resources (superadmin)',
+        request=ResourceBulkCreateSerializer,
+        responses={
+            201: ResourceSerializer(many=True),
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-create')
+    def bulk_create(self, request):
+        bulk_serializer = ResourceBulkCreateSerializer(
+            data=request.data,
+            context={'request': request},
+        )
+        bulk_serializer.is_valid(raise_exception=True)
+
+        template_data = bulk_serializer.validated_data['template_data']
+        count = bulk_serializer.validated_data['count']
+        name_prefix = bulk_serializer.validated_data['name_prefix']
+
+        created_resources = []
+        writer_serializer = ResourceSerializer(context={'request': request})
+        with transaction.atomic():
+            for idx in range(1, count + 1):
+                resource_data = dict(template_data)
+                resource_data['name'] = f'{name_prefix} {idx}'
+                created_resources.append(writer_serializer.create(resource_data))
+
+        return Response(
+            ResourceSerializer(created_resources, many=True).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     @extend_schema(
         tags=['Bookings'],

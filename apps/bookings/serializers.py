@@ -49,6 +49,13 @@ class ResourceSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    availability_start = serializers.TimeField(source='available_from', required=False)
+    availability_end = serializers.TimeField(source='available_until', required=False)
+    availability_days = serializers.ListField(
+        source='available_days',
+        child=serializers.IntegerField(min_value=0, max_value=6),
+        required=False,
+    )
 
     class Meta:
         model = Resource
@@ -70,6 +77,9 @@ class ResourceSerializer(serializers.ModelSerializer):
             'assigned_company',
             'min_duration_minutes',
             'max_duration_minutes',
+            'availability_start',
+            'availability_end',
+            'availability_days',
             'parking_type',
             'capsule_zone',
             'created_at',
@@ -124,6 +134,19 @@ class ResourceSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'equipment': 'Equipment JSON is only used for meeting_room resources.'}
                 )
+
+        availability_start = data.get(
+            'available_from',
+            instance.available_from if instance else None,
+        )
+        availability_end = data.get(
+            'available_until',
+            instance.available_until if instance else None,
+        )
+        if availability_start and availability_end and availability_start >= availability_end:
+            raise serializers.ValidationError(
+                {'availability_start': 'availability_start must be earlier than availability_end.'}
+            )
 
         return data
 
@@ -183,6 +206,20 @@ class ResourceListSerializer(serializers.ModelSerializer):
         if obj.resource_type != 'parking':
             return None
         return 'vip' if obj.is_vip else 'regular'
+
+
+class ResourceBulkCreateSerializer(serializers.Serializer):
+    template = serializers.DictField()
+    count = serializers.IntegerField(min_value=1)
+    name_prefix = serializers.CharField(max_length=255, trim_whitespace=True)
+
+    def validate(self, attrs):
+        template_payload = dict(attrs['template'])
+        template_payload.setdefault('name', f"{attrs['name_prefix']} template")
+        serializer = ResourceSerializer(data=template_payload, context=self.context)
+        serializer.is_valid(raise_exception=True)
+        attrs['template_data'] = serializer.validated_data
+        return attrs
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):

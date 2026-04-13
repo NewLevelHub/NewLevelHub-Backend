@@ -1,6 +1,8 @@
 import django_filters
+from django.db.models import Q
 from django.utils import timezone
 
+from apps.users.models import User
 from .models import Company, Invitation
 
 
@@ -27,3 +29,20 @@ class InvitationFilter(django_filters.FilterSet):
         if value:
             return queryset.filter(expires_at__lt=now)
         return queryset.filter(expires_at__gte=now)
+
+
+class CompanyMemberFilter(django_filters.FilterSet):
+    role = django_filters.ChoiceFilter(choices=User.ROLE_CHOICES)
+    is_active = django_filters.BooleanFilter()
+    search = django_filters.CharFilter(method='filter_search')
+
+    class Meta:
+        model = User
+        fields = ['role', 'is_active']
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(
+            Q(email__icontains=value)
+            | Q(first_name__icontains=value)
+            | Q(last_name__icontains=value)
+        )

@@ -364,8 +364,8 @@ class TestActivityResponseShape:
         assert resp.data['bookings_last_30_days'] == 2
 
     def test_tasks_from_other_company_not_counted(self, api_client, company_a,
-                                                   company_b, admin_a, employee_a,
-                                                   admin_b):
+                                                  company_b, admin_a, employee_a,
+                                                  admin_b):
         # Task assigned to employee_a but on company_b's board
         board_b = Board.objects.create(
             company=company_b,

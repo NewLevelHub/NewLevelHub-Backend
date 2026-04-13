@@ -2,7 +2,7 @@ import logging
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q, Sum
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction

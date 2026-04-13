@@ -209,3 +209,17 @@ class CompanyMemberActivitySerializer(serializers.Serializer):
     active_tasks_count = serializers.IntegerField()
     completed_tasks_count = serializers.IntegerField()
     bookings_last_30_days = serializers.IntegerField()
+
+
+class MemberDeactivateSerializer(serializers.Serializer):
+    """Request body for deactivating a member (currently no required fields)."""
+    pass
+
+
+class MemberRemoveSerializer(serializers.Serializer):
+    """Request body for removing a member from the company."""
+    reassign_to = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        help_text='User ID to reassign tasks to. If omitted, tasks become unassigned.',
+    )

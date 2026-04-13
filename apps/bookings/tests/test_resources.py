@@ -14,6 +14,7 @@ from apps.users.models import User
 
 
 RESOURCES_URL = '/api/v1/bookings/resources/'
+BULK_CREATE_URL = '/api/v1/bookings/resources/bulk-create/'
 
 
 @pytest.fixture
@@ -199,6 +200,99 @@ class TestResourceCreate:
         )
         assert r.status_code == status.HTTP_201_CREATED
         assert r.json()['capsule_zone'] == 'quiet'
+
+    def test_availability_start_must_be_before_end(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Desk Time',
+                'floor': 2,
+                'availability_start': '18:00:00',
+                'availability_end': '09:00:00',
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'availability_start' in r.json()['detail']
+
+    def test_availability_days_values_must_be_0_to_6(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Desk Days',
+                'floor': 2,
+                'availability_days': [1, 2, 7],
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'availability_days' in r.json()['detail']
+
+    def test_create_with_availability_fields(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Desk Schedule',
+                'floor': 2,
+                'availability_start': '09:00:00',
+                'availability_end': '19:00:00',
+                'availability_days': [1, 2, 3, 4, 5],
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_201_CREATED
+        body = r.json()
+        assert body['availability_start'] == '09:00:00'
+        assert body['availability_end'] == '19:00:00'
+        assert body['availability_days'] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.django_db
+class TestResourceBulkCreate:
+    def test_non_superadmin_bulk_create_403(self, api_client, employee):
+        api_client.force_authenticate(user=employee)
+        r = api_client.post(
+            BULK_CREATE_URL,
+            {
+                'template': {
+                    'type': 'desk',
+                    'floor': 3,
+                },
+                'count': 3,
+                'name_prefix': 'Стол',
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_superadmin_bulk_create_resources(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.post(
+            BULK_CREATE_URL,
+            {
+                'template': {
+                    'type': 'desk',
+                    'floor': 3,
+                    'availability_start': '09:00:00',
+                    'availability_end': '18:00:00',
+                    'availability_days': [1, 2, 3, 4, 5],
+                },
+                'count': 3,
+                'name_prefix': 'Стол',
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_201_CREATED
+        body = r.json()
+        assert len(body) == 3
+        assert [item['name'] for item in body] == ['Стол 1', 'Стол 2', 'Стол 3']
+        assert all(item['availability_days'] == [1, 2, 3, 4, 5] for item in body)
 
 
 @pytest.mark.django_db

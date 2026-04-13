@@ -1,13 +1,14 @@
-"""Integration tests for bookings Resource CRUD (DEV-63)."""
+"""Integration tests for bookings Resource CRUD (DEV-63) and catalog (DEV-70)."""
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.bookings.models import Booking, Resource
+from apps.bookings.models import Booking, Resource, ResourceBlock
 from apps.companies.models import Company
 from apps.notifications.models import Notification
 from apps.users.models import User
@@ -24,6 +25,11 @@ def api_client():
 @pytest.fixture
 def company(db):
     return Company.objects.create(name='Tenant Co', plan='basic')
+
+
+@pytest.fixture
+def premium_company(db):
+    return Company.objects.create(name='Premium Co', plan='premium')
 
 
 @pytest.fixture
@@ -46,6 +52,18 @@ def employee(db, company):
         last_name='M',
         role='employee',
         company=company,
+    )
+
+
+@pytest.fixture
+def premium_employee(db, premium_company):
+    return User.objects.create_user(
+        email='prem@resources.test',
+        password='pass',
+        first_name='P',
+        last_name='R',
+        role='employee',
+        company=premium_company,
     )
 
 
@@ -293,3 +311,210 @@ class TestResourceVisibility:
         api_client.force_authenticate(user=superadmin)
         r2 = api_client.get(f'{RESOURCES_URL}{rid}/')
         assert r2.status_code == status.HTTP_200_OK
+
+
+def _list_results(response):
+    data = response.json()
+    if isinstance(data, dict) and 'results' in data:
+        return data['results']
+    return data
+
+
+@pytest.mark.django_db
+class TestResourceCatalogFilters:
+    def test_filter_type_alias_and_capacity(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'Alpha Desk', 'floor': 2},
+            format='json',
+        )
+        api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'meeting_room',
+                'name': 'Байтерек зал',
+                'floor': 3,
+                'zone': 'A',
+                'capacity': 8,
+                'equipment': {'projector': True, 'tv': True},
+            },
+            format='json',
+        )
+        api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'meeting_room',
+                'name': 'Small room',
+                'floor': 3,
+                'capacity': 4,
+                'equipment': {'projector': False, 'tv': True},
+            },
+            format='json',
+        )
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(RESOURCES_URL, {'type': 'desk'})
+        names = {x['name'] for x in _list_results(r)}
+        assert 'Alpha Desk' in names
+        assert 'Байтерек зал' not in names
+
+        r2 = api_client.get(RESOURCES_URL, {'capacity_min': 6, 'capacity_max': 10})
+        names2 = {x['name'] for x in _list_results(r2)}
+        assert 'Байтерек зал' in names2
+        assert 'Small room' not in names2
+
+        r3 = api_client.get(RESOURCES_URL, {'equipment': 'projector,tv'})
+        names3 = {x['name'] for x in _list_results(r3)}
+        assert 'Байтерек зал' in names3
+        assert 'Small room' not in names3
+
+        r4 = api_client.get(RESOURCES_URL, {'search': 'байтерек'})
+        assert len(_list_results(r4)) == 1
+        assert _list_results(r4)[0]['name'] == 'Байтерек зал'
+
+    def test_search_does_not_match_zone_only(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'meeting_room',
+                'name': 'Room X',
+                'floor': 1,
+                'zone': 'Байтерек wing',
+                'capacity': 6,
+            },
+            format='json',
+        )
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(RESOURCES_URL, {'search': 'байтерек'})
+        assert _list_results(r) == []
+
+
+@pytest.mark.django_db
+class TestResourceCatalogAssignedVisibility:
+    def test_basic_hides_assigned_even_own_company(
+        self, api_client, superadmin, employee, company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        c = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Dedicated basic',
+                'floor': 1,
+                'assigned_company': company.id,
+            },
+            format='json',
+        )
+        rid = c.json()['id']
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(RESOURCES_URL)
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+    def test_premium_sees_own_assigned(self, api_client, superadmin, premium_employee, premium_company):
+        api_client.force_authenticate(user=superadmin)
+        c = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Dedicated premium',
+                'floor': 1,
+                'assigned_company': premium_company.id,
+            },
+            format='json',
+        )
+        rid = c.json()['id']
+        api_client.force_authenticate(user=premium_employee)
+        r = api_client.get(RESOURCES_URL)
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid in ids
+
+    def test_premium_does_not_see_other_company_assigned(
+        self, api_client, superadmin, premium_employee, company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        c = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': 'Other co desk',
+                'floor': 1,
+                'assigned_company': company.id,
+            },
+            format='json',
+        )
+        rid = c.json()['id']
+        api_client.force_authenticate(user=premium_employee)
+        r = api_client.get(RESOURCES_URL)
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+
+@pytest.mark.django_db
+class TestResourceCatalogStatus:
+    def test_status_free_and_occupied_and_soon(self, api_client, superadmin, employee, company):
+        api_client.force_authenticate(user=superadmin)
+        d1 = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Free desk', 'floor': 1}, format='json')
+        d2 = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Busy desk', 'floor': 1}, format='json')
+        r1_id = d1.json()['id']
+        r2_id = d2.json()['id']
+        resource2 = Resource.objects.get(pk=r2_id)
+        fixed = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        # Long booking → occupied (ends more than 30 min after "soon" window starts)
+        Booking.objects.create(
+            resource=resource2,
+            user=employee,
+            company=company,
+            start_time=fixed - timedelta(hours=1),
+            end_time=fixed + timedelta(hours=2),
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed):
+            r = api_client.get(RESOURCES_URL)
+        by_id = {x['id']: x for x in _list_results(r)}
+        assert by_id[r1_id]['status'] == 'free'
+        assert by_id[r2_id]['status'] == 'occupied'
+        assert by_id[r2_id]['available_at'] is None
+
+    def test_status_soon_available(self, api_client, superadmin, employee, company):
+        api_client.force_authenticate(user=superadmin)
+        d = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Soon', 'floor': 1}, format='json')
+        rid = d.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        fixed = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        end = fixed + timedelta(minutes=20)
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=fixed - timedelta(hours=1),
+            end_time=end,
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed):
+            r = api_client.get(RESOURCES_URL)
+        row = next(x for x in _list_results(r) if x['id'] == rid)
+        assert row['status'] == 'soon_available'
+        assert row['available_at'] is not None
+
+    def test_block_marks_occupied(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        d = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Blocked', 'floor': 1}, format='json')
+        rid = d.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        fixed = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        ResourceBlock.objects.create(
+            resource=resource,
+            blocked_by=employee,
+            start_time=fixed - timedelta(minutes=30),
+            end_time=fixed + timedelta(hours=1),
+            reason='event',
+        )
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed):
+            r = api_client.get(RESOURCES_URL)
+        row = next(x for x in _list_results(r) if x['id'] == rid)
+        assert row['status'] in ('occupied', 'soon_available')

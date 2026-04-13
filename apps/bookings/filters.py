@@ -3,9 +3,14 @@ from .models import Resource, Booking
 
 
 class ResourceFilter(django_filters.FilterSet):
+    """Каталог: type и resource_type — одно поле модели; equipment — projector и/или tv."""
+
+    type = django_filters.CharFilter(field_name='resource_type')
     resource_type = django_filters.CharFilter()
     floor = django_filters.NumberFilter()
     capacity_min = django_filters.NumberFilter(field_name='capacity', lookup_expr='gte')
+    capacity_max = django_filters.NumberFilter(field_name='capacity', lookup_expr='lte')
+    equipment = django_filters.CharFilter(method='filter_equipment')
     has_projector = django_filters.BooleanFilter()
     has_tv = django_filters.BooleanFilter()
     has_video_conf = django_filters.BooleanFilter()
@@ -14,6 +19,21 @@ class ResourceFilter(django_filters.FilterSet):
     class Meta:
         model = Resource
         fields = ['resource_type', 'floor', 'is_active']
+
+    def filter_equipment(self, queryset, name, value):
+        if value in (None, ''):
+            return queryset
+        raw = value if isinstance(value, (list, tuple)) else [value]
+        tokens = []
+        for part in raw:
+            tokens.extend(str(part).replace(',', ' ').split())
+        for token in tokens:
+            key = token.strip().lower()
+            if key == 'projector':
+                queryset = queryset.filter(has_projector=True)
+            elif key == 'tv':
+                queryset = queryset.filter(has_tv=True)
+        return queryset
 
 
 class BookingFilter(django_filters.FilterSet):

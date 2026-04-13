@@ -1,3 +1,4 @@
+from django.db.models import Prefetch, Q
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -10,7 +11,7 @@ import rest_framework.fields as fields
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from .models import Resource, Booking, RecurringBooking
+from .models import Resource, Booking, RecurringBooking, ResourceBlock
 from .serializers import (
     ResourceSerializer,
     ResourceListSerializer,
@@ -69,22 +70,59 @@ class ResourceViewSet(viewsets.ModelViewSet):
     queryset = Resource.objects.all()
     permission_classes = [IsAuthenticated]
     filterset_class = ResourceFilter
-    search_fields = ['name', 'zone']
+    search_fields = ['name']
     ordering_fields = ['name', 'floor', 'capacity']
+    ordering = ['name']
 
     def get_serializer_class(self):
         if self.action == 'list':
             return ResourceListSerializer
         return ResourceSerializer
 
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        if self.action == 'list':
+            ctx['catalog_now'] = getattr(self, '_catalog_now', timezone.now())
+        return ctx
+
     def get_queryset(self):
-        qs = Resource.objects.all().order_by('-created_at')
+        qs = Resource.objects.all()
         user = self.request.user
         if not user.is_authenticated:
             return Resource.objects.none()
         if getattr(user, 'role', None) == 'superadmin':
-            return qs
-        return qs.filter(is_active=True)
+            pass
+        else:
+            qs = qs.filter(is_active=True)
+            company = getattr(user, 'company', None)
+            if company and getattr(company, 'plan', None) == 'premium':
+                qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
+            else:
+                qs = qs.filter(assigned_company__isnull=True)
+
+        if self.action == 'list':
+            catalog_now = timezone.now()
+            self._catalog_now = catalog_now
+            qs = qs.prefetch_related(
+                Prefetch(
+                    'bookings',
+                    queryset=Booking.objects.filter(
+                        status='confirmed',
+                        start_time__lte=catalog_now,
+                        end_time__gt=catalog_now,
+                    ).order_by('end_time'),
+                    to_attr='_active_bookings_prefetch',
+                ),
+                Prefetch(
+                    'blocks',
+                    queryset=ResourceBlock.objects.filter(
+                        start_time__lte=catalog_now,
+                        end_time__gt=catalog_now,
+                    ).order_by('end_time'),
+                    to_attr='_active_blocks_prefetch',
+                ),
+            )
+        return qs.order_by('-created_at') if self.action != 'list' else qs
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy', 'block'):

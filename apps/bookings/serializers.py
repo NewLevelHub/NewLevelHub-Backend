@@ -1,7 +1,13 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.companies.models import Company
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
+
+# Минут до освобождения, после которых статус «soon_available» вместо «occupied».
+SOON_AVAILABLE_MINUTES = 30
 
 _EQUIPMENT_KEYS = {
     'projector': 'has_projector',
@@ -162,6 +168,10 @@ class ResourceListSerializer(serializers.ModelSerializer):
 
     type = serializers.CharField(source='resource_type', read_only=True)
     parking_type = serializers.SerializerMethodField()
+    photo_url = serializers.SerializerMethodField()
+    equipment = serializers.SerializerMethodField()
+    status = serializers.SerializerMethodField()
+    available_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Resource
@@ -172,17 +182,69 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'floor',
             'zone',
             'photo',
+            'photo_url',
             'capacity',
+            'equipment',
             'is_active',
             'is_hot_desk',
             'parking_type',
             'capsule_zone',
+            'status',
+            'available_at',
         ]
 
     def get_parking_type(self, obj):
         if obj.resource_type != 'parking':
             return None
         return 'vip' if obj.is_vip else 'regular'
+
+    def get_photo_url(self, obj):
+        if not obj.photo:
+            return None
+        request = self.context.get('request')
+        url = obj.photo.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+    def get_equipment(self, obj):
+        if obj.resource_type == 'meeting_room':
+            return equipment_from_resource(obj)
+        return None
+
+    def _availability_window(self, obj):
+        blocks = getattr(obj, '_active_blocks_prefetch', None)
+        bookings = getattr(obj, '_active_bookings_prefetch', None)
+        ends = []
+        if blocks:
+            ends.extend(b.end_time for b in blocks)
+        if bookings:
+            ends.extend(b.end_time for b in bookings)
+        if not ends:
+            return None
+        return max(ends)
+
+    def get_status(self, obj):
+        now = self.context.get('catalog_now') or timezone.now()
+        if not obj.is_active:
+            return 'occupied'
+        window_end = self._availability_window(obj)
+        if window_end is None:
+            return 'free'
+        soon_before = window_end - timedelta(minutes=SOON_AVAILABLE_MINUTES)
+        if now >= soon_before:
+            return 'soon_available'
+        return 'occupied'
+
+    def get_available_at(self, obj):
+        now = self.context.get('catalog_now') or timezone.now()
+        window_end = self._availability_window(obj)
+        if window_end is None:
+            return None
+        soon_before = window_end - timedelta(minutes=SOON_AVAILABLE_MINUTES)
+        if not obj.is_active or now < soon_before:
+            return None
+        return window_end
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):

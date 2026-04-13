@@ -142,11 +142,10 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         ]
 
     def get_working_hours(self, obj):
-        if obj.working_hours_start is None and obj.working_hours_end is None:
-            return None
-        start = obj.working_hours_start.strftime('%H:%M') if obj.working_hours_start else None
-        end = obj.working_hours_end.strftime('%H:%M') if obj.working_hours_end else None
-        return {'start': start, 'end': end}
+        return {
+            'start': obj.working_hours_start.strftime('%H:%M') if obj.working_hours_start else None,
+            'end': obj.working_hours_end.strftime('%H:%M') if obj.working_hours_end else None,
+        }
 
     def validate_custom_labels(self, value):
         """Validate each label has {name: str, color: valid hex}."""

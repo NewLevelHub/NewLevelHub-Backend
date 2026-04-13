@@ -156,14 +156,15 @@ class TestCompanySettingsGet:
         }
         assert expected_fields.issubset(set(response.data.keys()))
 
-    def test_working_hours_is_none_when_not_set(
+    def test_working_hours_is_object_with_null_values_when_not_set(
         self, api_client, employee, company_a
     ):
-        # company_a settings auto-created by signal; working_hours_start/end are null
+        # company_a settings auto-created by signal; working_hours_start/end are null.
+        # The API must always return an object, never bare null.
         auth(api_client, employee)
         response = api_client.get(settings_url(company_a.id))
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['working_hours'] is None
+        assert response.data['working_hours'] == {'start': None, 'end': None}
 
     def test_settings_auto_created_if_missing_on_get(
         self, api_client, superadmin, company_b

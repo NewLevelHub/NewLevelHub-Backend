@@ -161,7 +161,7 @@ class TestResourceCreate:
             {
                 'type': 'parking',
                 'name': 'P-01',
-                'floor': -1,
+                'floor': 1,
                 'parking_type': 'vip',
                 'assigned_company': company.id,
             },
@@ -179,7 +179,7 @@ class TestResourceCreate:
             {
                 'type': 'parking',
                 'name': 'P-02',
-                'floor': -1,
+                'floor': 1,
             },
             format='json',
         )

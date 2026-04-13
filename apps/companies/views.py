@@ -216,14 +216,26 @@ class CompanyViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['get', 'patch'], url_path='settings',
-            permission_classes=[IsCompanyAdmin])
+            permission_classes=[IsCompanyMember])
     def company_settings(self, request, pk=None):
         company = self.get_object()
+
+        if request.method == 'PATCH':
+            # Only company_admin of the same company or superadmin may write.
+            user = request.user
+            if user.role == 'employee':
+                raise PermissionDenied('Employees cannot update company settings.')
+            if user.role == 'company_admin' and user.company_id != int(pk):
+                raise PermissionDenied('You can only update settings for your own company.')
+
         settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
+
         if request.method == 'PATCH':
             serializer = CompanySettingsSerializer(settings_obj, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
             serializer.save()
+            settings_obj.refresh_from_db()
+
         return Response(CompanySettingsSerializer(settings_obj).data)
 
     @extend_schema(

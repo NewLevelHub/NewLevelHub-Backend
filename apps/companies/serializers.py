@@ -91,13 +91,130 @@ class CompanyAdminUpdateSerializer(serializers.ModelSerializer):
         fields = ['name', 'description', 'logo', 'contact_email', 'contact_phone']
 
 
+class WorkingHoursSerializer(serializers.Serializer):
+    """Nested serializer for working_hours: {start, end} as time strings (HH:MM)."""
+    start = serializers.TimeField(format='%H:%M', input_formats=['%H:%M', '%H:%M:%S'])
+    end = serializers.TimeField(format='%H:%M', input_formats=['%H:%M', '%H:%M:%S'])
+
+    def validate(self, attrs):
+        if attrs['start'] >= attrs['end']:
+            raise serializers.ValidationError(
+                'working_hours.start must be earlier than working_hours.end.'
+            )
+        return attrs
+
+
+HEX_COLOR_REGEX = r'^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})$'
+HEX_COLOR_ERROR = 'Must be a valid hex color, e.g. #RGB or #RRGGBB.'
+
+
 class CompanySettingsSerializer(serializers.ModelSerializer):
+    custom_task_categories = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        max_length=50,
+        required=False,
+    )
+    # custom_labels is stored as raw JSON; we validate its shape and colors
+    # in validate_custom_labels rather than using a nested serializer as child,
+    # which avoids attribute-vs-dict access issues during serialization of stored data.
+    custom_labels = serializers.ListField(
+        child=serializers.DictField(),
+        max_length=30,
+        required=False,
+    )
+    vacation_days_per_year = serializers.IntegerField(min_value=0, required=False)
+    onboarding_enabled = serializers.BooleanField(required=False)
+    brand_primary_color = serializers.RegexField(
+        regex=HEX_COLOR_REGEX,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        error_messages={'invalid': HEX_COLOR_ERROR},
+    )
+    working_hours = serializers.SerializerMethodField()
+
     class Meta:
         model = CompanySettings
         fields = [
             'custom_task_categories', 'custom_labels',
             'vacation_days_per_year', 'onboarding_enabled', 'brand_primary_color',
+            'working_hours',
         ]
+
+    def get_working_hours(self, obj):
+        if obj.working_hours_start is None and obj.working_hours_end is None:
+            return None
+        start = obj.working_hours_start.strftime('%H:%M') if obj.working_hours_start else None
+        end = obj.working_hours_end.strftime('%H:%M') if obj.working_hours_end else None
+        return {'start': start, 'end': end}
+
+    def validate_custom_labels(self, value):
+        """Validate each label has {name: str, color: valid hex}."""
+        import re
+        hex_re = re.compile(HEX_COLOR_REGEX)
+        errors = {}
+        for idx, item in enumerate(value):
+            item_errors = {}
+            if 'name' not in item or not isinstance(item.get('name'), str) or not item['name']:
+                item_errors['name'] = 'This field is required.'
+            if 'color' not in item:
+                item_errors['color'] = 'This field is required.'
+            elif not hex_re.match(str(item['color'])):
+                item_errors['color'] = HEX_COLOR_ERROR
+            if item_errors:
+                errors[idx] = item_errors
+        if errors:
+            raise serializers.ValidationError(errors)
+        return value
+
+    def to_representation(self, instance):
+        # Sanitize JSON fields before DRF field-level to_representation runs.
+        # The DB may contain null or items of the wrong type (e.g. strings instead
+        # of dicts in custom_labels) which would cause DictField / CharField to raise
+        # AttributeError.  We normalise here so the read path is always safe.
+        raw_labels = instance.custom_labels
+        if not isinstance(raw_labels, list):
+            instance.custom_labels = []
+        else:
+            instance.custom_labels = [item for item in raw_labels if isinstance(item, dict)]
+
+        raw_categories = instance.custom_task_categories
+        if not isinstance(raw_categories, list):
+            instance.custom_task_categories = []
+        else:
+            instance.custom_task_categories = [
+                item for item in raw_categories if isinstance(item, str)
+            ]
+
+        return super().to_representation(instance)
+
+    def to_internal_value(self, data):
+        # Handle working_hours nested object before the standard field processing.
+        working_hours_data = data.get('working_hours') if hasattr(data, 'get') else None
+        ret = super().to_internal_value(data)
+
+        if working_hours_data is not None:
+            wh_serializer = WorkingHoursSerializer(data=working_hours_data)
+            wh_serializer.is_valid(raise_exception=True)
+            ret['working_hours_start'] = wh_serializer.validated_data['start']
+            ret['working_hours_end'] = wh_serializer.validated_data['end']
+
+        return ret
+
+    def update(self, instance, validated_data):
+        # working_hours_start / working_hours_end are not declared as model fields
+        # on this serializer, so we pop them and set them manually.
+        working_hours_start = validated_data.pop('working_hours_start', None)
+        working_hours_end = validated_data.pop('working_hours_end', None)
+
+        instance = super().update(instance, validated_data)
+
+        if working_hours_start is not None:
+            instance.working_hours_start = working_hours_start
+            instance.working_hours_end = working_hours_end
+            instance.save(update_fields=['working_hours_start', 'working_hours_end'])
+
+        return instance
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):

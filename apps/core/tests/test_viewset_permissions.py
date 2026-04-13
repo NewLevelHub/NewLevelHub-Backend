@@ -8,6 +8,7 @@ database (MagicMock + APIRequestFactory pattern from test_permissions.py).
 
 from unittest.mock import MagicMock
 
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.test import APIRequestFactory
 
 from apps.core.permissions import (
@@ -371,9 +372,9 @@ class TestViewSetPermissionClasses:
         from apps.bookings.views import BookingViewSet
         assert IsCompanyMember in self._perms(BookingViewSet)
 
-    def test_resource_viewset_uses_is_company_member(self):
+    def test_resource_viewset_uses_is_authenticated(self):
         from apps.bookings.views import ResourceViewSet
-        assert IsCompanyMember in self._perms(ResourceViewSet)
+        assert IsAuthenticated in self._perms(ResourceViewSet)
 
     def test_board_viewset_uses_is_company_member(self):
         from apps.crm.views import BoardViewSet

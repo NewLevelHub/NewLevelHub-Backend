@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from apps.companies.models import Company
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
+from .schedule import busy_slots_for_resource, seven_day_range_from_today
 
 # Минут до освобождения, после которых статус «soon_available» вместо «occupied».
 SOON_AVAILABLE_MINUTES = 30
@@ -184,6 +185,32 @@ class ResourceSerializer(serializers.ModelSerializer):
             apply_equipment_to_resource(resource, equipment or {})
             resource.save(update_fields=list(_EQUIPMENT_KEYS.values()))
         return resource
+
+
+class ResourceScheduleSlotSerializer(serializers.Serializer):
+    """Занятый интервал в ответе schedule / поле schedule в карточке ресурса."""
+
+    start = serializers.DateTimeField()
+    end = serializers.DateTimeField()
+    booking_id = serializers.IntegerField(allow_null=True)
+    user_name = serializers.CharField(allow_null=True)
+
+
+class ResourceDetailSerializer(ResourceSerializer):
+    """GET retrieve: поля ресурса + занятые интервалы на 7 календарных дней (локальная дата)."""
+
+    schedule = serializers.SerializerMethodField()
+
+    class Meta(ResourceSerializer.Meta):
+        fields = list(ResourceSerializer.Meta.fields) + ['schedule']
+        read_only_fields = list(ResourceSerializer.Meta.read_only_fields) + ['schedule']
+
+    def get_schedule(self, obj):
+        start, end = seven_day_range_from_today()
+        return ResourceScheduleSlotSerializer(
+            busy_slots_for_resource(obj.pk, start, end),
+            many=True,
+        ).data
 
 
 class ResourceListSerializer(serializers.ModelSerializer):

@@ -24,9 +24,10 @@ class CompanySerializer(serializers.ModelSerializer):
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
-    """Detail serializer — includes employee_count and storage_used (bytes)."""
+    """Detail serializer — includes employee_count, storage_used (bytes), and onboarding_completed."""
     employee_count = serializers.SerializerMethodField()
     storage_used = serializers.SerializerMethodField()
+    onboarding_completed = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -35,7 +36,8 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'contact_email', 'contact_phone',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
             'is_active', 'working_hours_start', 'working_hours_end',
-            'employee_count', 'storage_used', 'created_at', 'updated_at',
+            'employee_count', 'storage_used', 'onboarding_completed',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -46,6 +48,12 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         """Return total file_size (bytes) used by this company's files."""
         result = obj.files.aggregate(total=Sum('file_size'))
         return result['total'] or 0
+
+    def get_onboarding_completed(self, obj):
+        try:
+            return obj.settings.onboarding_completed
+        except CompanySettings.DoesNotExist:
+            return False
 
 
 class CompanyCreateSerializer(serializers.ModelSerializer):

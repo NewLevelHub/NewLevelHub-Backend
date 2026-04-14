@@ -197,6 +197,21 @@ class CompanyViewSet(viewsets.ModelViewSet):
             return CompanyUpdateSerializer(*args, **kwargs)
         return super().get_serializer(*args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        """
+        Override to return CompanyDetailSerializer in the 201 response body
+        instead of the write-only CompanyCreateSerializer.
+        """
+        write_serializer = self.get_serializer(data=request.data)
+        write_serializer.is_valid(raise_exception=True)
+        self.perform_create(write_serializer)
+        instance = write_serializer.instance
+        read_serializer = CompanyDetailSerializer(
+            instance, context=self.get_serializer_context()
+        )
+        headers = self.get_success_headers(read_serializer.data)
+        return Response(read_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
     def update(self, request, *args, **kwargs):
         """
         Override to return CompanyDetailSerializer in the response body regardless
@@ -617,6 +632,13 @@ class CompanyViewSet(viewsets.ModelViewSet):
         company = self._get_company_for_onboarding(request, pk)
         steps = self._compute_onboarding_steps(company)
         settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
+
+        # Auto-complete onboarding when all steps are done and not yet marked.
+        all_done = all(step['completed'] for step in steps)
+        if all_done and not settings_obj.onboarding_completed:
+            settings_obj.onboarding_completed = True
+            settings_obj.save(update_fields=['onboarding_completed'])
+
         data = {
             'completed': settings_obj.onboarding_completed,
             'steps': steps,

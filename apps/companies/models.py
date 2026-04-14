@@ -81,6 +81,7 @@ class CompanySettings(TimeStampedModel):
     custom_labels = models.JSONField(default=list, blank=True)
     vacation_days_per_year = models.PositiveIntegerField(default=24)
     onboarding_enabled = models.BooleanField(default=True)
+    onboarding_completed = models.BooleanField(default=False)
     brand_primary_color = models.CharField(max_length=7, null=True, blank=True, default='')
     working_hours_start = models.TimeField(null=True, blank=True)
     working_hours_end = models.TimeField(null=True, blank=True)

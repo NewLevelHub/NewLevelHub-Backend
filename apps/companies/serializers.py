@@ -339,3 +339,16 @@ class MemberRemoveSerializer(serializers.Serializer):
         allow_null=True,
         help_text='User ID to reassign tasks to. If omitted, tasks become unassigned.',
     )
+
+
+class OnboardingStepSerializer(serializers.Serializer):
+    """A single onboarding step."""
+    key = serializers.CharField()
+    title = serializers.CharField()
+    completed = serializers.BooleanField()
+
+
+class OnboardingStatusSerializer(serializers.Serializer):
+    """Onboarding status for a company."""
+    completed = serializers.BooleanField()
+    steps = OnboardingStepSerializer(many=True)

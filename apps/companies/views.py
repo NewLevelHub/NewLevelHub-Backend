@@ -22,7 +22,7 @@ from drf_spectacular.utils import (
 
 from apps.bookings.models import Booking
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
-from apps.crm.models import Task
+from apps.crm.models import Board, Task
 from apps.users.models import User
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from .filters import CompanyFilter, CompanyMemberFilter
@@ -40,6 +40,7 @@ from .serializers import (
     CompanyMemberActivitySerializer,
     MemberDeactivateSerializer,
     MemberRemoveSerializer,
+    OnboardingStatusSerializer,
 )
 from .tasks import send_invitation_email
 
@@ -155,7 +156,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             # views themselves enforce additional role-based checks (e.g.
             # only superadmin can remove another company_admin).
             return [IsCompanyAdmin()]
-        if self.action == 'members':
+        if self.action in ('members', 'onboarding_status', 'skip_onboarding'):
             # company_admin (own company) and superadmin; employees/guests blocked
             return [IsCompanyAdmin()]
         # list / retrieve / custom actions — company members only; guests get 403
@@ -595,6 +596,85 @@ class CompanyViewSet(viewsets.ModelViewSet):
             {'detail': 'User removed from company', 'tasks_reassigned': tasks_count},
             status=status.HTTP_200_OK,
         )
+
+    # ------------------------------------------------------------------
+    # Onboarding actions
+    # ------------------------------------------------------------------
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Get onboarding status for a company',
+        responses={
+            200: OnboardingStatusSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company not found'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='onboarding-status',
+            url_name='onboarding-status')
+    def onboarding_status(self, request, pk=None):
+        company = self._get_company_for_onboarding(request, pk)
+        steps = self._compute_onboarding_steps(company)
+        settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
+        data = {
+            'completed': settings_obj.onboarding_completed,
+            'steps': steps,
+        }
+        serializer = OnboardingStatusSerializer(data)
+        return Response(serializer.data)
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Skip onboarding (mark as completed)',
+        request=None,
+        responses={
+            200: OnboardingStatusSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='onboarding-status/skip',
+            url_name='onboarding-skip')
+    def skip_onboarding(self, request, pk=None):
+        company = self._get_company_for_onboarding(request, pk)
+        settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
+        settings_obj.onboarding_completed = True
+        settings_obj.save(update_fields=['onboarding_completed'])
+        return Response({'completed': True})
+
+    def _get_company_for_onboarding(self, request, pk):
+        """Resolve company and enforce cross-company access for company_admin."""
+        if request.user.role == 'company_admin' and request.user.company_id != int(pk):
+            raise PermissionDenied('You can only manage onboarding for your own company.')
+        return get_object_or_404(Company, pk=pk)
+
+    @staticmethod
+    def _compute_onboarding_steps(company):
+        """Return the four onboarding step dicts with their completion status."""
+        return [
+            {
+                'key': 'upload_logo',
+                'title': 'Upload company logo',
+                'completed': bool(company.logo),
+            },
+            {
+                'key': 'fill_description',
+                'title': 'Fill company description',
+                'completed': bool(company.description),
+            },
+            {
+                'key': 'create_first_board',
+                'title': 'Create first board',
+                'completed': Board.objects.filter(company=company).exists(),
+            },
+            {
+                'key': 'invite_first_employee',
+                'title': 'Invite first employee',
+                'completed': User.objects.filter(company=company, role='employee').exists(),
+            },
+        ]
 
     def destroy(self, request, *args, **kwargs):
         if request.query_params.get('confirm') != 'true':

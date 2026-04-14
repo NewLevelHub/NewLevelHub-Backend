@@ -186,7 +186,7 @@ jobs:
             mkdir -p "$DEPLOY_PATH"
             cp "$DEPLOY_PATH/docker-compose.preview.yml" "$COMPOSE_FILE"
 
-            echo "--- [1/5] Docker: pull & deploy containers ---"
+            echo "--- [1/5] Docker: pull image ---"
             echo "$DOCKER_PASSWORD" | docker login "$DOCKER_REGISTRY" -u "$DOCKER_USERNAME" --password-stdin
             unset DOCKER_PASSWORD
             cd "$DEPLOY_PATH"
@@ -198,6 +198,30 @@ jobs:
 
             docker pull "$BACKEND_IMAGE"
 
+            echo "--- [2/5] Preparing PR database ---"
+            PG_USER=$(grep -E '^POSTGRES_USER=' .env.staging | head -1 | cut -d= -f2 | tr -d "' \"")
+            PG_USER="${PG_USER:-nlh_user}"
+
+            # Ensure seed database exists (created once, QA fills it with test data)
+            if ! docker exec nlh_staging_postgres psql -U "$PG_USER" -tc \
+                "SELECT 1 FROM pg_database WHERE datname='nlh_seed'" 2>/dev/null | grep -q 1; then
+              echo "Seed database not found — creating nlh_seed..."
+              docker exec nlh_staging_postgres psql -U "$PG_USER" \
+                -c "CREATE DATABASE nlh_seed;"
+            fi
+
+            # Create PR database from seed template if it doesn't exist yet.
+            # On re-deploys (new commits to the same PR) we skip creation to preserve QA data.
+            if ! docker exec nlh_staging_postgres psql -U "$PG_USER" -tc \
+                "SELECT 1 FROM pg_database WHERE datname='$PREVIEW_DB_NAME'" 2>/dev/null | grep -q 1; then
+              echo "Creating database $PREVIEW_DB_NAME from seed template..."
+              docker exec nlh_staging_postgres psql -U "$PG_USER" \
+                -c "CREATE DATABASE $PREVIEW_DB_NAME TEMPLATE nlh_seed;"
+            else
+              echo "Database $PREVIEW_DB_NAME already exists — keeping existing data"
+            fi
+
+            echo "--- [3/5] Docker: deploy containers ---"
             export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT
             docker compose \
               --project-name "$PR_SLUG" \
@@ -205,9 +229,8 @@ jobs:
               -f "$COMPOSE_FILE" \
               up -d --force-recreate
 
-            echo "--- [2/4] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
+            echo "--- [4/5] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
-            DB_CONTAINER="${PR_SLUG}-db-1"
             for i in $(seq 1 60); do
               STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "none")
               IS_RUNNING=$(docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "false")
@@ -225,7 +248,7 @@ jobs:
               sleep 3
             done
 
-            echo "--- [3/4] Writing nginx config ---"
+            echo "--- [5a/5] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
@@ -246,7 +269,7 @@ jobs:
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [4/4] Getting SSL certificate ---"
+            echo "--- [5b/5] Getting SSL certificate ---"
             sleep 2
             sudo certbot --nginx \
               -d "${PR_SLUG}.staging.newlevelhub.kz" \
@@ -360,8 +383,20 @@ jobs:
 
             COMPOSE_FILE="$DEPLOY_PATH/docker-compose.${PR_SLUG}.yml"
 
-            echo "--- [1/5] Stopping Docker containers ---"
+            echo "--- [1/6] Dropping PR database ---"
             cd "$DEPLOY_PATH"
+            PG_USER=$(grep -E '^POSTGRES_USER=' .env.staging | head -1 | cut -d= -f2 | tr -d "' \"")
+            PG_USER="${PG_USER:-nlh_user}"
+
+            # Terminate active connections so DROP DATABASE won't be blocked
+            docker exec nlh_staging_postgres psql -U "$PG_USER" -c \
+              "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$PREVIEW_DB_NAME' AND pid <> pg_backend_pid();" \
+              2>/dev/null || true
+            docker exec nlh_staging_postgres psql -U "$PG_USER" \
+              -c "DROP DATABASE IF EXISTS $PREVIEW_DB_NAME;" \
+              2>/dev/null || echo "WARNING: Could not drop database $PREVIEW_DB_NAME"
+
+            echo "--- [2/6] Stopping Docker containers ---"
             if [ -f "$COMPOSE_FILE" ]; then
               export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT
               docker compose \
@@ -373,7 +408,7 @@ jobs:
               rm -f "$COMPOSE_FILE"
             fi
 
-            echo "--- [2/5] Fallback: remove leftover resources ---"
+            echo "--- [3/6] Fallback: remove leftover resources ---"
             CONTAINERS=$(docker ps -a --filter "label=com.docker.compose.project=${PR_SLUG}" -q 2>/dev/null || true)
             if [ -n "$CONTAINERS" ]; then
               docker stop $CONTAINERS 2>/dev/null || true
@@ -388,17 +423,17 @@ jobs:
               docker network rm $NETWORKS 2>/dev/null || true
             fi
 
-            echo "--- [3/5] Removing nginx config ---"
+            echo "--- [4/6] Removing nginx config ---"
             sudo rm -f "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [4/5] Deleting SSL certificate ---"
+            echo "--- [5/6] Deleting SSL certificate ---"
             sudo certbot delete \
               --cert-name "${PR_SLUG}.staging.newlevelhub.kz" \
               --non-interactive \
               2>/dev/null || echo "Cert not found or already deleted."
 
-            echo "--- [5/5] Cleaning up Docker image ---"
+            echo "--- [6/6] Cleaning up Docker image ---"
             docker rmi "$BACKEND_IMAGE" 2>/dev/null || echo "Image not found or already removed."
 
             echo ""

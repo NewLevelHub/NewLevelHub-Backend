@@ -76,10 +76,14 @@ def run():
     print("\n[2/5] Users")
 
     users_to_create = [
-        dict(email="admin@nlh.test",  password="Admin123!", role="superadmin",    first_name="Super",   last_name="Admin",   company=None),
-        dict(email="ca@nlh.test",     password="Admin123!", role="company_admin", first_name="Company", last_name="Admin",   company=company),
-        dict(email="emp@nlh.test",    password="Admin123!", role="employee",      first_name="Test",    last_name="Employee", company=company),
-        dict(email="guest@nlh.test",  password="Admin123!", role="guest",         first_name="Test",    last_name="Guest",   company=None),
+        dict(email="admin@nlh.test", password="Admin123!", role="superadmin",
+             first_name="Super", last_name="Admin", company=None),
+        dict(email="ca@nlh.test", password="Admin123!", role="company_admin",
+             first_name="Company", last_name="Admin", company=company),
+        dict(email="emp@nlh.test", password="Admin123!", role="employee",
+             first_name="Test", last_name="Employee", company=company),
+        dict(email="guest@nlh.test", password="Admin123!", role="guest",
+             first_name="Test", last_name="Guest", company=None),
     ]
 
     created_users = []

@@ -142,9 +142,10 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         ]
 
     def get_working_hours(self, obj):
+        company = obj.company
         return {
-            'start': obj.working_hours_start.strftime('%H:%M') if obj.working_hours_start else None,
-            'end': obj.working_hours_end.strftime('%H:%M') if obj.working_hours_end else None,
+            'start': company.working_hours_start.strftime('%H:%M') if company.working_hours_start else None,
+            'end': company.working_hours_end.strftime('%H:%M') if company.working_hours_end else None,
         }
 
     def validate_custom_labels(self, value):
@@ -201,17 +202,17 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         return ret
 
     def update(self, instance, validated_data):
-        # working_hours_start / working_hours_end are not declared as model fields
-        # on this serializer, so we pop them and set them manually.
+        # working_hours_start / working_hours_end are stored on Company, not CompanySettings.
+        # Pop them here and persist them directly onto the related Company record.
         working_hours_start = validated_data.pop('working_hours_start', None)
         working_hours_end = validated_data.pop('working_hours_end', None)
 
         instance = super().update(instance, validated_data)
 
         if working_hours_start is not None:
-            instance.working_hours_start = working_hours_start
-            instance.working_hours_end = working_hours_end
-            instance.save(update_fields=['working_hours_start', 'working_hours_end'])
+            instance.company.working_hours_start = working_hours_start
+            instance.company.working_hours_end = working_hours_end
+            instance.company.save(update_fields=['working_hours_start', 'working_hours_end'])
 
         return instance
 

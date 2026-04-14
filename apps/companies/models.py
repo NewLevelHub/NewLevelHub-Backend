@@ -83,8 +83,6 @@ class CompanySettings(TimeStampedModel):
     onboarding_enabled = models.BooleanField(default=True)
     onboarding_completed = models.BooleanField(default=False)
     brand_primary_color = models.CharField(max_length=7, null=True, blank=True, default='')
-    working_hours_start = models.TimeField(null=True, blank=True)
-    working_hours_end = models.TimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'company_settings'

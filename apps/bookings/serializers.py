@@ -1,7 +1,10 @@
 from datetime import timedelta
 
+from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import APIException
 
 from apps.companies.models import Company
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
@@ -285,27 +288,137 @@ class ResourceBulkCreateSerializer(serializers.Serializer):
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):
+    class BookingConflictException(APIException):
+        status_code = 409
+        default_detail = 'Selected time slot is already occupied.'
+        default_code = 'booking_conflict'
+
+    resource_id = serializers.IntegerField(write_only=True, required=False)
     participant_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
 
     class Meta:
         model = Booking
-        fields = ['resource', 'start_time', 'end_time', 'description', 'participant_ids']
+        fields = [
+            'id',
+            'resource',
+            'resource_id',
+            'user',
+            'start_time',
+            'end_time',
+            'status',
+            'description',
+            'participant_ids',
+        ]
+        read_only_fields = ['id', 'user', 'status']
+        extra_kwargs = {'resource': {'required': False}}
+
+    def _resolve_resource(self, attrs):
+        resource = attrs.get('resource')
+        resource_id = attrs.get('resource_id')
+        if resource is not None:
+            return resource
+        if resource_id is None:
+            raise serializers.ValidationError({'resource_id': 'This field is required.'})
+        try:
+            return Resource.objects.get(pk=resource_id)
+        except Resource.DoesNotExist as exc:
+            raise serializers.ValidationError({'resource_id': 'Resource does not exist.'}) from exc
+
+    def _validate_access(self, *, resource, user):
+        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+            raise serializers.ValidationError(
+                {'resource': 'Resource is assigned to another company.'}
+            )
+
+    def _validate_availability_window(self, *, resource, start_time, end_time):
+        local_start = timezone.localtime(start_time)
+        local_end = timezone.localtime(end_time)
+        if local_start.date() != local_end.date():
+            raise serializers.ValidationError(
+                {'detail': 'Booking must be within a single day.'}
+            )
+
+        available_days = resource.available_days or list(range(7))
+        weekday = local_start.weekday()
+        if weekday not in available_days:
+            raise serializers.ValidationError(
+                {'detail': 'Booking is outside resource availability days.'}
+            )
+
+        start_local_time = local_start.time()
+        end_local_time = local_end.time()
+        if start_local_time < resource.available_from or end_local_time > resource.available_until:
+            raise serializers.ValidationError(
+                {'detail': 'Booking is outside resource availability hours.'}
+            )
+
+    def _validate_user_active_limit(self, *, user):
+        active_limit = int(getattr(settings, 'MAX_ACTIVE_BOOKINGS_PER_USER', 5))
+        active_count = Booking.objects.filter(
+            user=user,
+            status='confirmed',
+            end_time__gt=timezone.now(),
+        ).count()
+        if active_count >= active_limit:
+            raise serializers.ValidationError(
+                {'detail': f'Active booking limit exceeded ({active_limit}).'}
+            )
+
+    def _ensure_no_conflicts(self, *, resource, start_time, end_time):
+        has_booking_overlap = Booking.objects.filter(
+            resource=resource,
+            status='confirmed',
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        ).exists()
+        if has_booking_overlap:
+            raise self.BookingConflictException()
+
+        has_block_overlap = ResourceBlock.objects.filter(
+            resource=resource,
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        ).exists()
+        if has_block_overlap:
+            raise self.BookingConflictException()
 
     def validate(self, attrs):
-        # TODO: проверка конфликтов (overlap), рабочее время ресурса,
-        #       advance_booking_days, min/max duration, лимит активных бронирований
+        attrs['resource'] = self._resolve_resource(attrs)
+        attrs.pop('resource_id', None)
         if attrs['start_time'] >= attrs['end_time']:
             raise serializers.ValidationError('start_time must be before end_time')
         return attrs
 
     def create(self, validated_data):
+        validated_data.pop('resource_id', None)
         participant_ids = validated_data.pop('participant_ids', [])
         user = self.context['request'].user
-        validated_data['user'] = user
-        validated_data['company'] = user.company
-        booking = super().create(validated_data)
-        for uid in participant_ids:
-            BookingParticipant.objects.create(booking=booking, user_id=uid)
+        start_time = validated_data['start_time']
+        end_time = validated_data['end_time']
+        resource_id = validated_data['resource'].id
+
+        with transaction.atomic():
+            resource = Resource.objects.select_for_update().get(pk=resource_id)
+            self._validate_access(resource=resource, user=user)
+            self._validate_availability_window(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            self._validate_user_active_limit(user=user)
+            self._ensure_no_conflicts(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            validated_data['resource'] = resource
+            validated_data['user'] = user
+            validated_data['company'] = user.company
+            booking = super().create(validated_data)
+
+            for uid in participant_ids:
+                BookingParticipant.objects.create(booking=booking, user_id=uid)
         # TODO: отправить уведомление участникам
         return booking
 

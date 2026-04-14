@@ -290,6 +290,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         responses={
             201: BookingSerializer,
             400: OpenApiResponse(description='Validation error or scheduling conflict'),
+            409: OpenApiResponse(description='Resource already occupied'),
             401: OpenApiResponse(description='Not authenticated'),
         },
     ),
@@ -306,6 +307,14 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         if self.action == 'create':
             return BookingCreateSerializer
         return BookingSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        booking = serializer.save()
+        output = BookingSerializer(booking, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @extend_schema(
         tags=['Bookings'],

@@ -9,9 +9,9 @@ def django_db_setup():
     host = os.environ.get('POSTGRES_HOST', 'db')
     # Mutate in-place so Django's ConnectionHandler picks up the changes.
     settings.DATABASES['default'].update({
-        'NAME': 'test_newlevelhub',
-        'USER': 'test_user',
-        'PASSWORD': 'test_password',
+        'NAME': os.environ.get('POSTGRES_DB', 'test_newlevelhub'),
+        'USER': os.environ.get('POSTGRES_USER', 'test_user'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'test_password'),
         'HOST': host,
-        'PORT': '5432',
+        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
     })

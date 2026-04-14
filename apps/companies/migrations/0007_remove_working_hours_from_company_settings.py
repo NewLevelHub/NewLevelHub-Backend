@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
     """
 
     dependencies = [
-        ('companies', '0006_add_working_hours_to_company'),
+        ('companies', '0005_add_onboarding_completed_to_company_settings'),
     ]
 
     operations = [

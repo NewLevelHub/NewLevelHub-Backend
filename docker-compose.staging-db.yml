@@ -1,0 +1,38 @@
+# Shared staging infrastructure — one persistent Postgres instance for all PR previews.
+#
+# Run ONCE on the staging server to bring it up:
+#   docker compose -f docker-compose.staging-db.yml up -d
+#
+# After the first start, initialise the seed database (also run once):
+#   docker exec nlh_staging_postgres psql -U <POSTGRES_USER> -c "CREATE DATABASE nlh_seed;"
+#
+# The CI pipeline automatically uses "nlh_seed" as a template for each PR's database,
+# so any test data QA adds to nlh_seed will be cloned into every new PR environment.
+#
+# To add seed data, connect directly:
+#   docker exec -it nlh_staging_postgres psql -U <POSTGRES_USER> -d nlh_seed
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: nlh_staging_postgres
+    env_file:
+      - .env.staging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nlh_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - staging_network
+    restart: unless-stopped
+
+networks:
+  staging_network:
+    name: staging_network
+
+volumes:
+  postgres_data:
+    name: nlh_staging_postgres_data

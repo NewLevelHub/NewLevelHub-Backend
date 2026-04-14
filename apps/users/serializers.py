@@ -85,6 +85,16 @@ class CompanyBriefSerializer(serializers.Serializer):
     """Minimal company snapshot embedded in the user profile response."""
     id = serializers.IntegerField()
     name = serializers.CharField()
+    onboarding_completed = serializers.SerializerMethodField()
+
+    def get_onboarding_completed(self, obj):
+        from apps.companies.models import CompanySettings
+        try:
+            return CompanySettings.objects.values_list(
+                'onboarding_completed', flat=True
+            ).get(company_id=obj.pk)
+        except CompanySettings.DoesNotExist:
+            return False
 
 
 # ── Auth ──────────────────────────────────────────────────────────────
@@ -286,12 +296,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class EmailVerifySerializer(serializers.Serializer):
     token = serializers.UUIDField()
-
-
-class CompanyBriefSerializer(serializers.Serializer):
-    """Краткое представление компании для вложенных сериализаторов."""
-    id = serializers.IntegerField()
-    name = serializers.CharField()
 
 
 class UserListSerializer(serializers.ModelSerializer):

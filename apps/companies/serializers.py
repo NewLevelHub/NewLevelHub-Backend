@@ -24,9 +24,10 @@ class CompanySerializer(serializers.ModelSerializer):
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
-    """Detail serializer — includes employee_count and storage_used (bytes)."""
+    """Detail serializer — includes employee_count, storage_used (bytes), and onboarding_completed."""
     employee_count = serializers.SerializerMethodField()
     storage_used = serializers.SerializerMethodField()
+    onboarding_completed = serializers.SerializerMethodField()
 
     class Meta:
         model = Company
@@ -35,7 +36,8 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'contact_email', 'contact_phone',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
             'is_active', 'working_hours_start', 'working_hours_end',
-            'employee_count', 'storage_used', 'created_at', 'updated_at',
+            'employee_count', 'storage_used', 'onboarding_completed',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -46,6 +48,12 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         """Return total file_size (bytes) used by this company's files."""
         result = obj.files.aggregate(total=Sum('file_size'))
         return result['total'] or 0
+
+    def get_onboarding_completed(self, obj):
+        try:
+            return obj.settings.onboarding_completed
+        except CompanySettings.DoesNotExist:
+            return False
 
 
 class CompanyCreateSerializer(serializers.ModelSerializer):
@@ -142,9 +150,10 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         ]
 
     def get_working_hours(self, obj):
+        company = obj.company
         return {
-            'start': obj.working_hours_start.strftime('%H:%M') if obj.working_hours_start else None,
-            'end': obj.working_hours_end.strftime('%H:%M') if obj.working_hours_end else None,
+            'start': company.working_hours_start.strftime('%H:%M') if company.working_hours_start else None,
+            'end': company.working_hours_end.strftime('%H:%M') if company.working_hours_end else None,
         }
 
     def validate_custom_labels(self, value):
@@ -201,17 +210,17 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         return ret
 
     def update(self, instance, validated_data):
-        # working_hours_start / working_hours_end are not declared as model fields
-        # on this serializer, so we pop them and set them manually.
+        # working_hours_start / working_hours_end are stored on Company, not CompanySettings.
+        # Pop them here and persist them directly onto the related Company record.
         working_hours_start = validated_data.pop('working_hours_start', None)
         working_hours_end = validated_data.pop('working_hours_end', None)
 
         instance = super().update(instance, validated_data)
 
         if working_hours_start is not None:
-            instance.working_hours_start = working_hours_start
-            instance.working_hours_end = working_hours_end
-            instance.save(update_fields=['working_hours_start', 'working_hours_end'])
+            instance.company.working_hours_start = working_hours_start
+            instance.company.working_hours_end = working_hours_end
+            instance.company.save(update_fields=['working_hours_start', 'working_hours_end'])
 
         return instance
 
@@ -339,3 +348,16 @@ class MemberRemoveSerializer(serializers.Serializer):
         allow_null=True,
         help_text='User ID to reassign tasks to. If omitted, tasks become unassigned.',
     )
+
+
+class OnboardingStepSerializer(serializers.Serializer):
+    """A single onboarding step."""
+    key = serializers.CharField()
+    title = serializers.CharField()
+    completed = serializers.BooleanField()
+
+
+class OnboardingStatusSerializer(serializers.Serializer):
+    """Onboarding status for a company."""
+    completed = serializers.BooleanField()
+    steps = OnboardingStepSerializer(many=True)

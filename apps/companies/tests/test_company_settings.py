@@ -156,15 +156,21 @@ class TestCompanySettingsGet:
         }
         assert expected_fields.issubset(set(response.data.keys()))
 
-    def test_working_hours_is_object_with_null_values_when_not_set(
+    def test_working_hours_is_object_with_default_values_when_not_overridden(
         self, api_client, employee, company_a
     ):
-        # company_a settings auto-created by signal; working_hours_start/end are null.
-        # The API must always return an object, never bare null.
+        # working_hours are now stored on Company (not CompanySettings).
+        # Company always has non-null defaults (09:00 / 18:00), so the settings
+        # endpoint must proxy these values — never return null.
         auth(api_client, employee)
         response = api_client.get(settings_url(company_a.id))
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['working_hours'] == {'start': None, 'end': None}
+        wh = response.data['working_hours']
+        assert isinstance(wh, dict)
+        assert 'start' in wh and 'end' in wh
+        # Company defaults are 09:00 / 18:00 unless overridden
+        assert wh['start'] == '09:00'
+        assert wh['end'] == '18:00'
 
     def test_settings_auto_created_if_missing_on_get(
         self, api_client, superadmin, company_b
@@ -465,10 +471,11 @@ class TestCompanySettingsWorkingHoursValidation:
         response = api_client.patch(settings_url(company_a.id), payload, format='json')
         assert response.status_code == status.HTTP_200_OK
 
-        settings_obj = CompanySettings.objects.get(company=company_a)
-        assert settings_obj.working_hours_start is not None
-        assert settings_obj.working_hours_start.strftime('%H:%M') == '08:30'
-        assert settings_obj.working_hours_end.strftime('%H:%M') == '17:30'
+        # working_hours are now persisted on Company, not CompanySettings.
+        company_a.refresh_from_db()
+        assert company_a.working_hours_start is not None
+        assert company_a.working_hours_start.strftime('%H:%M') == '08:30'
+        assert company_a.working_hours_end.strftime('%H:%M') == '17:30'
 
     def test_superadmin_can_set_working_hours_for_any_company(
         self, api_client, superadmin, company_b

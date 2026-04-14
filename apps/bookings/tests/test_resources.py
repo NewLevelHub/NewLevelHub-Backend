@@ -803,3 +803,15 @@ class TestResourceScheduleEndpoints:
         assert isinstance(data['schedule'], list)
         assert len(data['schedule']) >= 1
         assert data['schedule'][0]['booking_id'] is not None
+
+    def test_schedule_for_guest_forbidden(self, api_client, superadmin, guest_user):
+        api_client.force_authenticate(user=superadmin)
+        cr = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'Guest forbidden sched', 'floor': 1},
+            format='json',
+        )
+        rid = cr.json()['id']
+        api_client.force_authenticate(user=guest_user)
+        r = api_client.get(f'{RESOURCES_URL}{rid}/schedule/', {'date': '2031-03-02'})
+        assert r.status_code == status.HTTP_403_FORBIDDEN

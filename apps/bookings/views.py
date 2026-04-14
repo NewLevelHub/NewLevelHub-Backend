@@ -201,6 +201,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
         })
 
     def get_permissions(self):
+        if self.action == 'schedule':
+            return [IsCompanyMember()]
         if self.action in ('create', 'update', 'partial_update', 'destroy', 'block', 'bulk_create'):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]

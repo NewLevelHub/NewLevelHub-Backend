@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.db.models import Prefetch, Q
 from django.utils import timezone
 from django.db import transaction
@@ -6,7 +8,14 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiParameter,
+    OpenApiResponse,
+    inline_serializer,
+)
+from drf_spectacular.types import OpenApiTypes
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
@@ -15,8 +24,10 @@ from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Resource, Booking, RecurringBooking, ResourceBlock
 from .serializers import (
     ResourceSerializer,
+    ResourceDetailSerializer,
     ResourceListSerializer,
     ResourceBulkCreateSerializer,
+    ResourceScheduleSlotSerializer,
     BookingSerializer,
     BookingCreateSerializer,
     RecurringBookingSerializer,
@@ -24,18 +35,35 @@ from .serializers import (
     _EQUIPMENT_KEYS,
 )
 from .filters import ResourceFilter, BookingFilter
+from .schedule import busy_slots_for_resource, day_range_aware, week_range_for_date
 
 
 @extend_schema_view(
     list=extend_schema(
         tags=['Bookings'],
         summary='List resources (catalog)',
+        parameters=[
+            OpenApiParameter(
+                name='available_from',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Свободен с (ISO datetime); вместе с available_to исключает ресурсы с пересечениями.',
+            ),
+            OpenApiParameter(
+                name='available_to',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Свободен до (ISO datetime).',
+            ),
+        ],
         responses={200: ResourceListSerializer(many=True)},
     ),
     retrieve=extend_schema(
         tags=['Bookings'],
-        summary='Get resource details',
-        responses={200: ResourceSerializer, 404: OpenApiResponse(description='Not found')},
+        summary='Get resource details and 7-day busy schedule',
+        responses={200: ResourceDetailSerializer, 404: OpenApiResponse(description='Not found')},
     ),
     create=extend_schema(
         tags=['Bookings'],
@@ -81,6 +109,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return ResourceListSerializer
+        if self.action == 'retrieve':
+            return ResourceDetailSerializer
         return ResourceSerializer
 
     def get_serializer_context(self):
@@ -134,7 +164,14 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
         facet_params = request.query_params.copy()
-        for _key in ('equipment', 'has_projector', 'has_tv', 'has_video_conf'):
+        for _key in (
+            'equipment',
+            'has_projector',
+            'has_tv',
+            'has_video_conf',
+            'available_from',
+            'available_to',
+        ):
             facet_params.pop(_key, None)
         facet_filter = ResourceFilter(
             data=facet_params,
@@ -205,17 +242,58 @@ class ResourceViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Bookings'],
-        summary='Get resource schedule for a day',
-        responses={200: BookingSerializer(many=True), 404: OpenApiResponse(description='Not found')},
+        summary='Resource busy schedule for a calendar day or week',
+        parameters=[
+            OpenApiParameter(
+                name='date',
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='YYYY-MM-DD — один календарный день (локальная таймзона сервера).',
+            ),
+            OpenApiParameter(
+                name='week',
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='YYYY-MM-DD — любой день; возвращается неделя с понедельника по воскресенье.',
+            ),
+        ],
+        responses={
+            200: ResourceScheduleSlotSerializer(many=True),
+            400: OpenApiResponse(description='Bad query'),
+            404: OpenApiResponse(description='Not found'),
+        },
     )
     @action(detail=True, methods=['get'], url_path='schedule')
     def schedule(self, request, pk=None):
-        # TODO: получить дату из query param, вернуть bookings + blocks за этот день
         resource = self.get_object()
-        bookings = Booking.objects.filter(
-            resource=resource, status='confirmed',
-        ).order_by('start_time')
-        return Response(BookingSerializer(bookings, many=True).data)
+        date_s = request.query_params.get('date')
+        week_s = request.query_params.get('week')
+        if date_s and week_s:
+            raise ValidationError({'detail': 'Укажите только один параметр: date или week.'})
+        if not date_s and not week_s:
+            raise ValidationError(
+                {'detail': 'Нужен query-параметр date=YYYY-MM-DD или week=YYYY-MM-DD.'}
+            )
+
+        def _parse_date(label, s):
+            try:
+                return datetime.strptime(s, '%Y-%m-%d').date()
+            except (TypeError, ValueError):
+                raise ValidationError(
+                    {'detail': f'Неверный формат {label}; ожидается YYYY-MM-DD.'}
+                ) from None
+
+        if date_s:
+            d = _parse_date('date', date_s)
+            range_start, range_end = day_range_aware(d)
+        else:
+            d = _parse_date('week', week_s)
+            range_start, range_end = week_range_for_date(d)
+
+        slots = busy_slots_for_resource(resource.id, range_start, range_end)
+        return Response(ResourceScheduleSlotSerializer(slots, many=True).data)
 
     @extend_schema(
         tags=['Bookings'],

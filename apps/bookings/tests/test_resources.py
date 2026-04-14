@@ -1,10 +1,11 @@
-"""Integration tests for bookings Resource CRUD (DEV-63) and catalog (DEV-70)."""
+"""Integration tests for bookings Resource CRUD (DEV-63), catalog (DEV-70), availability (DEV-63+)."""
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
+from django.utils.timezone import make_aware
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -641,3 +642,164 @@ class TestResourceCatalogStatus:
             r = api_client.get(RESOURCES_URL)
         row = next(x for x in _list_results(r) if x['id'] == rid)
         assert row['status'] in ('occupied', 'soon_available')
+
+
+@pytest.mark.django_db
+class TestResourceAvailabilityIntervalFilter:
+    def test_free_interval_excludes_booking_overlap(self, api_client, superadmin, employee, company):
+        api_client.force_authenticate(user=superadmin)
+        a = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Slot A', 'floor': 1}, format='json')
+        b = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Slot B', 'floor': 1}, format='json')
+        id_a = a.json()['id']
+        id_b = b.json()['id']
+        res_b = Resource.objects.get(pk=id_b)
+        slot_start = make_aware(datetime(2030, 6, 10, 10, 0, 0), dt_timezone.utc)
+        slot_end = make_aware(datetime(2030, 6, 10, 11, 0, 0), dt_timezone.utc)
+        Booking.objects.create(
+            resource=res_b,
+            user=employee,
+            company=company,
+            start_time=slot_start,
+            end_time=slot_end,
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-10T09:30:00Z',
+                'available_to': '2030-06-10T11:30:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert id_a in ids
+        assert id_b not in ids
+
+    def test_free_interval_excludes_block_overlap(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        c = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Blocked slot', 'floor': 1}, format='json')
+        rid = c.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        slot_start = make_aware(datetime(2030, 7, 1, 9, 0, 0), dt_timezone.utc)
+        slot_end = make_aware(datetime(2030, 7, 1, 12, 0, 0), dt_timezone.utc)
+        ResourceBlock.objects.create(
+            resource=resource,
+            blocked_by=employee,
+            start_time=slot_start,
+            end_time=slot_end,
+            reason='maintenance',
+        )
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-07-01T09:00:00Z',
+                'available_to': '2030-07-01T10:00:00Z',
+            },
+        )
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+    def test_invalid_interval_returns_empty(self, api_client, employee):
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-08-01T12:00:00Z',
+                'available_to': '2030-08-01T10:00:00Z',
+            },
+        )
+        assert _list_results(r) == []
+
+
+@pytest.mark.django_db
+class TestResourceScheduleEndpoints:
+    def test_schedule_day_returns_booking_and_block(
+        self, api_client, superadmin, employee, company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        cr = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Sched desk', 'floor': 1}, format='json')
+        rid = cr.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        d = date(2031, 3, 2)
+        b_start = make_aware(datetime.combine(d, time(10, 0)))
+        b_end = make_aware(datetime.combine(d, time(11, 0)))
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=b_start,
+            end_time=b_end,
+            status='confirmed',
+        )
+        bl_start = make_aware(datetime.combine(d, time(14, 0)))
+        bl_end = make_aware(datetime.combine(d, time(15, 0)))
+        ResourceBlock.objects.create(
+            resource=resource,
+            blocked_by=employee,
+            start_time=bl_start,
+            end_time=bl_end,
+            reason='event',
+        )
+        api_client.force_authenticate(user=employee)
+        url = f'{RESOURCES_URL}{rid}/schedule/'
+        r = api_client.get(url, {'date': '2031-03-02'})
+        assert r.status_code == status.HTTP_200_OK
+        body = r.json()
+        assert len(body) == 2
+        booking_row = next(x for x in body if x['booking_id'] is not None)
+        block_row = next(x for x in body if x['booking_id'] is None)
+        assert booking_row['user_name'] == employee.full_name
+        assert block_row['user_name'] is None
+
+    def test_schedule_week_requires_single_param(self, api_client, superadmin, employee, company):
+        api_client.force_authenticate(user=superadmin)
+        cr = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Week desk', 'floor': 1}, format='json')
+        rid = cr.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        # Wednesday 2031-03-05; week starts Monday 2031-03-03
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=make_aware(datetime(2031, 3, 5, 9, 0)),
+            end_time=make_aware(datetime(2031, 3, 5, 10, 0)),
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        url = f'{RESOURCES_URL}{rid}/schedule/'
+        r = api_client.get(url, {'week': '2031-03-05'})
+        assert r.status_code == status.HTTP_200_OK
+        assert len(r.json()) == 1
+
+        bad = api_client.get(url, {'date': '2031-03-05', 'week': '2031-03-05'})
+        assert bad.status_code == status.HTTP_400_BAD_REQUEST
+
+        missing = api_client.get(url)
+        assert missing.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_retrieve_includes_schedule_list(self, api_client, superadmin, employee, company):
+        api_client.force_authenticate(user=superadmin)
+        cr = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Detail sched', 'floor': 1}, format='json')
+        rid = cr.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        today = timezone.localdate()
+        b_start = timezone.make_aware(datetime.combine(today, time(10, 0)))
+        b_end = timezone.make_aware(datetime.combine(today, time(10, 30)))
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=b_start,
+            end_time=b_end,
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        r = api_client.get(f'{RESOURCES_URL}{rid}/')
+        assert r.status_code == status.HTTP_200_OK
+        data = r.json()
+        assert 'schedule' in data
+        assert isinstance(data['schedule'], list)
+        assert len(data['schedule']) >= 1
+        assert data['schedule'][0]['booking_id'] is not None

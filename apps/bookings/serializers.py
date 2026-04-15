@@ -409,7 +409,34 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if has_block_overlap:
             raise self.BookingConflictException()
 
+    def _check_timezone_aware(self, field_name):
+        """
+        Reject naive datetimes submitted without timezone info.
+
+        DRF normalises the value before validate() runs, so we inspect
+        the raw ``initial_data`` string instead of the already-parsed value.
+        """
+        raw = self.initial_data.get(field_name, '')
+        if not raw:
+            return
+        raw_str = str(raw)
+        # A tz-aware ISO string contains '+', '-' after the time part, or ends with 'Z'.
+        # Check for tz designator: look for 'Z' at end, or '+'/'-' after 'T...' time component.
+        # Presence of 'T' indicates a datetime; absence of tz offset means naive.
+        if 'T' in raw_str or (' ' in raw_str and len(raw_str) > 10):
+            has_z = raw_str.endswith('Z') or raw_str.upper().endswith('Z')
+            # Find offset: after the time digits there should be +HH:MM or -HH:MM
+            # Simplest heuristic: the string after 'T' (or space) must contain +/- for tz
+            time_part = raw_str.split('T')[-1] if 'T' in raw_str else raw_str.split(' ')[-1]
+            has_offset = '+' in time_part or (time_part.count('-') > 0 and ':' in time_part)
+            if not has_z and not has_offset:
+                raise serializers.ValidationError(
+                    {field_name: 'Datetime must include timezone info (e.g. 2025-04-16T10:00:00+05:00).'}
+                )
+
     def validate(self, attrs):
+        self._check_timezone_aware('start_time')
+        self._check_timezone_aware('end_time')
         attrs['resource'] = self._resolve_resource(attrs)
         attrs.pop('resource_id', None)
         if attrs['start_time'] >= attrs['end_time']:

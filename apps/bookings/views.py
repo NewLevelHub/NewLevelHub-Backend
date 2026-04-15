@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
@@ -412,6 +412,14 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     @action(detail=True, methods=['post'], url_path='cancel')
     def cancel(self, request, pk=None):
         booking = self.get_object()
+        user = request.user
+        # Only the booking owner, a company_admin of the same company, or a superadmin may cancel.
+        if (
+            booking.user != user
+            and not user.is_company_admin()
+            and not user.is_superadmin()
+        ):
+            raise PermissionDenied('You can only cancel your own bookings.')
         # TODO: проверить min_cancel_minutes, отправить уведомление
         booking.status = 'cancelled'
         booking.cancelled_by = request.user

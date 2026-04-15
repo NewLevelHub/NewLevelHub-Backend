@@ -105,6 +105,98 @@ class TestDeskValidation:
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         assert '14 days' in str(resp.json()).lower() or '14' in str(resp.json())
 
+    def test_desk_booking_exactly_14_days_ahead_succeeds(self, api_client, employee):
+        """D-02: boundary is inclusive — exactly now + 14 days must return 201."""
+        # Allow all 7 days so weekend boundary dates are not rejected
+        resource = _make_resource('desk', available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        # Exactly 14 days from now (truncate sub-second so it does not exceed boundary)
+        start = (now + timedelta(days=14)).replace(second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_201_CREATED, resp.json()
+
+    def test_desk_booking_14_days_plus_1_second_returns_400(self, api_client, employee):
+        """D-02 extra: one second past the boundary must return 400."""
+        # Allow all 7 days so weekend boundary dates are not rejected for wrong reason
+        resource = _make_resource('desk', available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now + timedelta(days=14, seconds=2)).replace(microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert '14 days' in str(resp.json()).lower() or '14' in str(resp.json())
+
+
+# ─── Past start_time validation ───────────────────────────────────────
+
+@pytest.mark.django_db
+class TestPastStartTimeValidation:
+    """D-04: booking start_time in the past must return 400 for all resource types."""
+
+    def test_desk_start_in_past_returns_400(self, api_client, employee):
+        # available_days covers all days so weekday is never the rejection reason
+        resource = _make_resource('desk', available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now - timedelta(hours=1)).replace(microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'future' in str(resp.json()).lower()
+
+    def test_desk_start_yesterday_returns_400(self, api_client, employee):
+        resource = _make_resource('desk', available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now - timedelta(days=1)).replace(microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'future' in str(resp.json()).lower()
+
+    def test_meeting_room_start_in_past_returns_400(self, api_client, employee):
+        resource = _make_resource('meeting_room', capacity=4, available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now - timedelta(hours=1)).replace(microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'future' in str(resp.json()).lower()
+
 
 # ─── Meeting room validation ──────────────────────────────────────────
 

@@ -536,6 +536,10 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         attrs.pop('resource_id', None)
         if attrs['start_time'] >= attrs['end_time']:
             raise serializers.ValidationError('start_time must be before end_time')
+        if attrs['start_time'] <= timezone.now():
+            raise serializers.ValidationError(
+                {'start_time': 'Booking start time must be in the future.'}
+            )
         return attrs
 
     def create(self, validated_data):

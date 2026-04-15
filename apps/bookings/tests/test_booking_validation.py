@@ -123,13 +123,13 @@ class TestDeskValidation:
 
         assert resp.status_code == status.HTTP_201_CREATED, resp.json()
 
-    def test_desk_booking_14_days_plus_1_second_returns_400(self, api_client, employee):
-        """D-02 extra: one second past the boundary must return 400."""
-        # Allow all 7 days so weekend boundary dates are not rejected for wrong reason
+    def test_desk_booking_15_days_returns_400(self, api_client, employee):
+        """D-02 extra: one full day past the boundary must return 400 (boundary is date-based)."""
+        # today+14d (any time) is valid; today+15d is not
         resource = _make_resource('desk', available_days=list(range(7)))
         api_client.force_authenticate(user=employee)
         now = timezone.now()
-        start = (now + timedelta(days=14, seconds=2)).replace(microsecond=0)
+        start = (now + timedelta(days=15)).replace(microsecond=0)
         end = start + timedelta(hours=1)
 
         resp = api_client.post(RESERVATIONS_URL, {

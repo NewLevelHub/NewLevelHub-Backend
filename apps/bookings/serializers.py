@@ -407,8 +407,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         local_end = timezone.localtime(end_time)
 
         if rtype == 'desk':
-            max_start = timezone.now() + timedelta(days=_DESK_MAX_ADVANCE_DAYS)
-            if start_time > max_start:
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_DESK_MAX_ADVANCE_DAYS)).date()
+            if timezone.localtime(start_time).date() > max_start_date:
                 raise serializers.ValidationError(
                     {'detail': 'Desk booking must start within 14 days from now.'}
                 )
@@ -438,8 +438,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                     {'detail': 'Parking booking must be whole-day only '
                                '(start 00:00, end 23:59 or next day 00:00).'}
                 )
-            max_start = timezone.now() + timedelta(days=_PARKING_MAX_ADVANCE_DAYS)
-            if start_time > max_start:
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_PARKING_MAX_ADVANCE_DAYS)).date()
+            if timezone.localtime(start_time).date() > max_start_date:
                 raise serializers.ValidationError(
                     {'detail': 'Parking booking must start within 7 days from now.'}
                 )

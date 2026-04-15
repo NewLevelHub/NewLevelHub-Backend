@@ -83,8 +83,25 @@ class BookingFilter(django_filters.FilterSet):
     resource_type = django_filters.CharFilter(field_name='resource__resource_type')
     date_from = django_filters.DateTimeFilter(field_name='start_time', lookup_expr='gte')
     date_to = django_filters.DateTimeFilter(field_name='end_time', lookup_expr='lte')
+    company_id = django_filters.NumberFilter(field_name='company_id')
+    user_id = django_filters.NumberFilter(field_name='user_id')
+    resource_id = django_filters.NumberFilter(field_name='resource_id')
+    # Backward-compatible aliases for older clients.
     company = django_filters.NumberFilter(field_name='company_id')
+    user = django_filters.NumberFilter(field_name='user_id')
+    resource = django_filters.NumberFilter(field_name='resource_id')
 
     class Meta:
         model = Booking
-        fields = ['status', 'resource', 'user', 'company']
+        fields = [
+            'status',
+            'resource_type',
+            'date_from',
+            'date_to',
+            'company_id',
+            'user_id',
+            'resource_id',
+            'company',
+            'user',
+            'resource',
+        ]

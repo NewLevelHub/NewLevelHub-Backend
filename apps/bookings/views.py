@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
@@ -370,6 +370,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         responses={
             201: BookingSerializer,
             400: OpenApiResponse(description='Validation error or scheduling conflict'),
+            409: OpenApiResponse(description='Resource already occupied'),
             401: OpenApiResponse(description='Not authenticated'),
         },
     ),
@@ -387,6 +388,14 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             return BookingCreateSerializer
         return BookingSerializer
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        booking = serializer.save()
+        output = BookingSerializer(booking, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
     @extend_schema(
         tags=['Bookings'],
         summary='Cancel booking',
@@ -403,6 +412,14 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     @action(detail=True, methods=['post'], url_path='cancel')
     def cancel(self, request, pk=None):
         booking = self.get_object()
+        user = request.user
+        # Only the booking owner, a company_admin of the same company, or a superadmin may cancel.
+        if (
+            booking.user != user
+            and not user.is_company_admin()
+            and not user.is_superadmin()
+        ):
+            raise PermissionDenied('You can only cancel your own bookings.')
         # TODO: проверить min_cancel_minutes, отправить уведомление
         booking.status = 'cancelled'
         booking.cancelled_by = request.user
@@ -413,10 +430,23 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     @extend_schema(
         tags=['Bookings'],
         summary='My bookings',
-        responses={200: BookingSerializer(many=True)},
+        description=(
+            'Returns only bookings belonging to the authenticated user. '
+            'The `user` query parameter is not supported on this endpoint; '
+            'use /bookings/reservations/ to filter by user.'
+        ),
+        responses={
+            200: BookingSerializer(many=True),
+            400: OpenApiResponse(description="'user' filter is not supported on this endpoint"),
+        },
     )
     @action(detail=False, methods=['get'], url_path='my')
     def my_bookings(self, request):
+        if 'user' in request.query_params:
+            raise ValidationError(
+                "The 'user' filter is not supported on this endpoint. "
+                "Use /bookings/reservations/ to filter by user."
+            )
         qs = Booking.objects.filter(user=request.user).order_by('-start_time')
         page = self.paginate_queryset(qs)
         if page is not None:

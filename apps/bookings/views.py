@@ -258,19 +258,23 @@ _BOOKING_409_EXAMPLE = OpenApiExample(
 _BOOKING_400_EXAMPLES = [
     OpenApiExample(
         name='Desk — too far in advance',
-        value={'error': True, 'status_code': 400, 'detail': {'detail': 'Desk booking must start within 14 days from now.'}},
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Desk booking must start within 14 days from now.'},
+        },
         response_only=True,
         status_codes=['400'],
     ),
     OpenApiExample(
         name='Meeting room — duration too short',
-            value={
-                'error': True,
-                'status_code': 400,
-                'detail': {
-                    'detail': 'Meeting room booking minimum duration is 30 minutes.'
-                },
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {
+                'detail': 'Meeting room booking minimum duration is 30 minutes.'
             },
+        },
         response_only=True,
         status_codes=['400'],
     ),

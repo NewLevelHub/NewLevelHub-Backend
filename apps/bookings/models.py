@@ -104,6 +104,32 @@ class Booking(TimeStampedModel):
         return f'{self.resource.name}: {self.start_time:%Y-%m-%d %H:%M} – {self.end_time:%H:%M}'
 
 
+class BookingCancellationAudit(TimeStampedModel):
+    """Immutable audit row for every successful booking cancellation."""
+
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.CASCADE,
+        related_name='cancellation_audits',
+    )
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='booking_cancellation_audits',
+    )
+    cancel_reason = models.TextField(blank=True, default='')
+    cancelled_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        db_table = 'booking_cancellation_audits'
+        indexes = [
+            models.Index(fields=['booking', 'cancelled_at']),
+            models.Index(fields=['cancelled_by', 'cancelled_at']),
+        ]
+
+
 class BookingParticipant(TimeStampedModel):
     """Дополнительные участники (для конференц-залов)."""
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='participants')

@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db.models import Prefetch, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -21,7 +22,13 @@ import rest_framework.fields as fields
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from .models import Resource, Booking, RecurringBooking, ResourceBlock
+from .models import (
+    Resource,
+    Booking,
+    RecurringBooking,
+    ResourceBlock,
+    BookingCancellationAudit,
+)
 from .serializers import (
     ResourceSerializer,
     ResourceDetailSerializer,
@@ -420,11 +427,34 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             and not user.is_superadmin()
         ):
             raise PermissionDenied('You can only cancel your own bookings.')
-        # TODO: проверить min_cancel_minutes, отправить уведомление
+        if booking.status == 'cancelled':
+            raise ValidationError({'detail': 'Booking is already cancelled.'})
+
+        now = timezone.now()
+        if booking.start_time <= now:
+            raise ValidationError({'detail': 'Cannot cancel a booking that has already started.'})
+
+        min_cancel_minutes = booking.resource.min_cancel_minutes
+        if booking.start_time - now < timedelta(minutes=min_cancel_minutes):
+            raise ValidationError(
+                {
+                    'detail': (
+                        f'Booking can only be cancelled at least '
+                        f'{min_cancel_minutes} minutes before start.'
+                    )
+                }
+            )
+
         booking.status = 'cancelled'
         booking.cancelled_by = request.user
         booking.cancel_reason = request.data.get('reason', '')
         booking.save()
+        BookingCancellationAudit.objects.create(
+            booking=booking,
+            cancelled_by=request.user,
+            cancel_reason=booking.cancel_reason,
+            cancelled_at=now,
+        )
         return Response(BookingSerializer(booking).data)
 
     @extend_schema(
@@ -447,7 +477,53 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 "The 'user' filter is not supported on this endpoint. "
                 "Use /bookings/reservations/ to filter by user."
             )
-        qs = Booking.objects.filter(user=request.user).order_by('-start_time')
+        qs = Booking.objects.filter(user=request.user).select_related('resource')
+
+        status_filter = request.query_params.get('status')
+        resource_type = request.query_params.get('resource_type')
+        date_from_raw = request.query_params.get('date_from')
+        date_to_raw = request.query_params.get('date_to')
+        now = timezone.now()
+
+        if status_filter:
+            if status_filter == 'upcoming':
+                qs = qs.filter(status='confirmed', start_time__gt=now)
+            elif status_filter == 'past':
+                qs = qs.exclude(status='cancelled').filter(start_time__lt=now)
+            elif status_filter == 'cancelled':
+                qs = qs.filter(status='cancelled')
+            else:
+                raise ValidationError(
+                    {
+                        'status': (
+                            "Unsupported status filter. "
+                            "Use one of: upcoming, past, cancelled."
+                        )
+                    }
+                )
+
+        if resource_type:
+            qs = qs.filter(resource__resource_type=resource_type)
+
+        if date_from_raw:
+            date_from = parse_datetime(date_from_raw)
+            if date_from is None:
+                raise ValidationError({'date_from': 'Invalid datetime format.'})
+            qs = qs.filter(start_time__gte=date_from)
+
+        if date_to_raw:
+            date_to = parse_datetime(date_to_raw)
+            if date_to is None:
+                raise ValidationError({'date_to': 'Invalid datetime format.'})
+            qs = qs.filter(start_time__lte=date_to)
+
+        if status_filter == 'upcoming':
+            qs = qs.order_by('start_time')
+        elif status_filter == 'past':
+            qs = qs.order_by('-start_time')
+        else:
+            qs = qs.order_by('-start_time')
+
         page = self.paginate_queryset(qs)
         if page is not None:
             return self.get_paginated_response(BookingSerializer(page, many=True).data)

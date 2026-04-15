@@ -430,10 +430,23 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     @extend_schema(
         tags=['Bookings'],
         summary='My bookings',
-        responses={200: BookingSerializer(many=True)},
+        description=(
+            'Returns only bookings belonging to the authenticated user. '
+            'The `user` query parameter is not supported on this endpoint; '
+            'use /bookings/reservations/ to filter by user.'
+        ),
+        responses={
+            200: BookingSerializer(many=True),
+            400: OpenApiResponse(description="'user' filter is not supported on this endpoint"),
+        },
     )
     @action(detail=False, methods=['get'], url_path='my')
     def my_bookings(self, request):
+        if 'user' in request.query_params:
+            raise ValidationError(
+                "The 'user' filter is not supported on this endpoint. "
+                "Use /bookings/reservations/ to filter by user."
+            )
         qs = Booking.objects.filter(user=request.user).order_by('-start_time')
         page = self.paginate_queryset(qs)
         if page is not None:

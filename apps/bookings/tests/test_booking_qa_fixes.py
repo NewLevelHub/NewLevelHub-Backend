@@ -176,12 +176,12 @@ class TestNaiveDatetimeRejected:
 
 @pytest.mark.django_db
 class TestMyBookingsIgnoresUserParam:
-    """B-21 — my_bookings always returns only request.user's bookings."""
+    """B-21 — my_bookings rejects ?user= with 400; always returns only request.user's bookings."""
 
-    def test_my_bookings_ignores_other_user_id(
+    def test_my_bookings_user_param_returns_400(
         self, api_client, employee, other_employee, stable_resource, company
     ):
-        """Passing ?user=<other_id> must not return other user's bookings."""
+        """Passing ?user=<other_id> must return 400 — the parameter is unsupported."""
         start = _fixed_future_slot(hours_from_now=49)
         Booking.objects.create(
             resource=stable_resource,
@@ -194,16 +194,12 @@ class TestMyBookingsIgnoresUserParam:
 
         api_client.force_authenticate(user=employee)
         response = api_client.get(MY_BOOKINGS_URL, {'user': other_employee.id})
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        results = data.get('results', data) if isinstance(data, dict) else data
-        # employee has no bookings — count must be 0, not other_employee's booking
-        assert len(results) == 0
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_my_bookings_ignores_nonexistent_user_id(
+    def test_my_bookings_nonexistent_user_param_returns_400(
         self, api_client, employee, stable_resource, company
     ):
-        """Passing ?user=999999999 (nonexistent) must return empty, not all bookings."""
+        """Passing ?user=999999999 (nonexistent) must return 400 — parameter is unsupported."""
         start = _fixed_future_slot(hours_from_now=73)
         Booking.objects.create(
             resource=stable_resource,
@@ -216,12 +212,7 @@ class TestMyBookingsIgnoresUserParam:
 
         api_client.force_authenticate(user=employee)
         response = api_client.get(MY_BOOKINGS_URL, {'user': 999999999})
-        assert response.status_code == status.HTTP_200_OK
-        data = response.json()
-        results = data.get('results', data) if isinstance(data, dict) else data
-        # employee has 1 booking — must be returned regardless of the user param
-        assert len(results) == 1
-        assert results[0]['user'] == employee.id
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_my_bookings_returns_only_own(
         self, api_client, employee, other_employee, stable_resource, company
@@ -248,6 +239,7 @@ class TestMyBookingsIgnoresUserParam:
 
         api_client.force_authenticate(user=employee)
         response = api_client.get(MY_BOOKINGS_URL)
+        assert response.status_code == status.HTTP_200_OK
         data = response.json()
         results = data.get('results', data) if isinstance(data, dict) else data
         user_ids = {r['user'] for r in results}

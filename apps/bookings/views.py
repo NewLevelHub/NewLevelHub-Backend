@@ -264,11 +264,13 @@ _BOOKING_400_EXAMPLES = [
     ),
     OpenApiExample(
         name='Meeting room — duration too short',
-        value={
-            'error': True,
-            'status_code': 400,
-            'detail': {'detail': 'Meeting room booking minimum duration is 30 minutes.'},
-        },
+            value={
+                'error': True,
+                'status_code': 400,
+                'detail': {
+                    'detail': 'Meeting room booking minimum duration is 30 minutes.'
+                },
+            },
         response_only=True,
         status_codes=['400'],
     ),
@@ -1131,8 +1133,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             '- Returns **409** if another confirmed booking or an admin block overlaps '
             'the requested interval on the same resource.\n\n'
             '### Active booking limit\n'
-            f'- Users cannot exceed 5 simultaneous active (confirmed, future-ending) bookings '
-            f'(configurable via `MAX_ACTIVE_BOOKINGS_PER_USER` in settings).'
+            '- Users cannot exceed 5 simultaneous active (confirmed, future-ending) bookings '
+            '(configurable via `MAX_ACTIVE_BOOKINGS_PER_USER` in settings).'
         ),
         request=BookingCreateSerializer,
         examples=_BOOKING_REQUEST_EXAMPLES + _BOOKING_400_EXAMPLES + [

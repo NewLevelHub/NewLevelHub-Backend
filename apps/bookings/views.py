@@ -396,6 +396,9 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         headers = self.get_success_headers(output.data)
         return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    def get_queryset(self):
+        return super().get_queryset().order_by('-start_time', '-id')
+
     @extend_schema(
         tags=['Bookings'],
         summary='Cancel booking',
@@ -426,6 +429,47 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         booking.cancel_reason = request.data.get('reason', '')
         booking.save()
         return Response(BookingSerializer(booking).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Admin cancel booking',
+        request=inline_serializer(
+            name='AdminCancelBookingRequest',
+            fields={
+                'reason': fields.CharField(required=True, allow_blank=False),
+            },
+        ),
+        responses={
+            200: BookingSerializer,
+            400: OpenApiResponse(description='reason is required'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Booking not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='admin-cancel')
+    def admin_cancel(self, request, pk=None):
+        user = request.user
+        if not user.is_company_admin():
+            raise PermissionDenied('Only company admins can perform admin cancellation.')
+
+        booking = self.get_object()
+        reason = str(request.data.get('reason', '')).strip()
+        if not reason:
+            raise ValidationError({'reason': 'This field is required.'})
+
+        booking.status = 'cancelled'
+        booking.cancelled_by = user
+        booking.cancel_reason = reason
+        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+
+        Notification.objects.create(
+            user=booking.user,
+            notification_type='booking_cancelled',
+            title=f'Бронирование отменено администратором: {booking.resource.name}',
+            body=reason,
+            url='',
+        )
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     @extend_schema(
         tags=['Bookings'],

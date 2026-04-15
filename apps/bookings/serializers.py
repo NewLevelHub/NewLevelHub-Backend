@@ -391,13 +391,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 {'detail': f'Active booking limit exceeded ({active_limit}).'}
             )
 
-    def _ensure_no_conflicts(self, *, resource, start_time, end_time):
-        has_booking_overlap = Booking.objects.filter(
+    def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None):
+        booking_overlap_qs = Booking.objects.filter(
             resource=resource,
             status='confirmed',
             start_time__lt=end_time,
             end_time__gt=start_time,
-        ).exists()
+        )
+        if exclude_booking_id is not None:
+            booking_overlap_qs = booking_overlap_qs.exclude(pk=exclude_booking_id)
+        has_booking_overlap = booking_overlap_qs.exists()
         if has_booking_overlap:
             raise self.BookingConflictException()
 

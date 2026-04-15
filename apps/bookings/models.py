@@ -130,6 +130,43 @@ class BookingCancellationAudit(TimeStampedModel):
         ]
 
 
+class BookingChangeAudit(TimeStampedModel):
+    """Immutable audit row for booking updates and participants changes."""
+
+    ACTION_TIME_UPDATED = 'time_updated'
+    ACTION_PARTICIPANTS_ADDED = 'participants_added'
+    ACTION_PARTICIPANT_REMOVED = 'participant_removed'
+
+    ACTION_CHOICES = [
+        (ACTION_TIME_UPDATED, 'Time Updated'),
+        (ACTION_PARTICIPANTS_ADDED, 'Participants Added'),
+        (ACTION_PARTICIPANT_REMOVED, 'Participant Removed'),
+    ]
+
+    booking = models.ForeignKey(
+        Booking,
+        on_delete=models.CASCADE,
+        related_name='change_audits',
+    )
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='booking_change_audits',
+    )
+    action = models.CharField(max_length=32, choices=ACTION_CHOICES, db_index=True)
+    payload = models.JSONField(default=dict, blank=True)
+    changed_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        db_table = 'booking_change_audits'
+        indexes = [
+            models.Index(fields=['booking', 'changed_at']),
+            models.Index(fields=['changed_by', 'changed_at']),
+        ]
+
+
 class BookingParticipant(TimeStampedModel):
     """Дополнительные участники (для конференц-залов)."""
     booking = models.ForeignKey(Booking, on_delete=models.CASCADE, related_name='participants')

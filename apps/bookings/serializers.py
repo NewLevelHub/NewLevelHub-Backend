@@ -236,6 +236,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
     photo_url = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
+    reason = serializers.SerializerMethodField()
     available_at = serializers.SerializerMethodField()
 
     class Meta:
@@ -255,6 +256,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'parking_type',
             'capsule_zone',
             'status',
+            'reason',
             'available_at',
         ]
 
@@ -289,8 +291,15 @@ class ResourceListSerializer(serializers.ModelSerializer):
             return None
         return max(ends)
 
+    def _active_block(self, obj):
+        blocks = getattr(obj, '_active_blocks_prefetch', None) or []
+        return blocks[0] if blocks else None
+
     def get_status(self, obj):
         now = self.context.get('catalog_now') or timezone.now()
+        active_block = self._active_block(obj)
+        if active_block is not None:
+            return 'blocked'
         if not obj.is_active:
             return 'occupied'
         window_end = self._availability_window(obj)
@@ -301,8 +310,16 @@ class ResourceListSerializer(serializers.ModelSerializer):
             return 'soon_available'
         return 'occupied'
 
+    def get_reason(self, obj):
+        active_block = self._active_block(obj)
+        if active_block is None:
+            return None
+        return active_block.reason or ''
+
     def get_available_at(self, obj):
         now = self.context.get('catalog_now') or timezone.now()
+        if self._active_block(obj) is not None:
+            return None
         window_end = self._availability_window(obj)
         if window_end is None:
             return None
@@ -659,3 +676,12 @@ class ResourceBlockSerializer(serializers.ModelSerializer):
         model = ResourceBlock
         fields = '__all__'
         read_only_fields = ['id', 'blocked_by', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        start_time = attrs.get('start_time')
+        end_time = attrs.get('end_time')
+        if start_time and end_time and start_time >= end_time:
+            raise serializers.ValidationError(
+                {'detail': 'start_time must be before end_time'}
+            )
+        return attrs

@@ -1423,6 +1423,88 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
     @extend_schema(
         tags=['Bookings'],
+        summary='Check in to a booking',
+        description=(
+            'Confirms presence at the booked resource. '
+            'Sets `checked_in_at` to the current timestamp, preventing the booking from '
+            'being marked as `no_show` by the periodic task.\n\n'
+            '**Access:** the booking owner, a company_admin of the same company, or superadmin.\n\n'
+            '**Validation:**\n'
+            '- Booking must be in `confirmed` status.\n'
+            '- Booking must not have already been checked in (`checked_in_at` is null).'
+        ),
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                response=BookingSerializer,
+                description='Check-in recorded.',
+                examples=[
+                    OpenApiExample(
+                        name='Checked in',
+                        value={
+                            'id': 101,
+                            'status': 'confirmed',
+                            'checked_in_at': '2025-04-20T09:05:00+06:00',
+                        },
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Booking already checked in or not in a confirmable state.',
+                examples=[
+                    OpenApiExample(
+                        name='Already checked in',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Booking has already been checked in.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                    OpenApiExample(
+                        name='Wrong status',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Check-in is only allowed for confirmed bookings.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Not allowed.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Booking not found.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='check-in')
+    def check_in(self, request, pk=None):
+        booking = self.get_object()
+        user = request.user
+
+        if (
+            booking.user != user
+            and not user.is_company_admin()
+            and not user.is_superadmin()
+        ):
+            raise PermissionDenied('You can only check in to your own bookings.')
+
+        if booking.status != 'confirmed':
+            raise ValidationError({'detail': 'Check-in is only allowed for confirmed bookings.'})
+
+        if booking.checked_in_at is not None:
+            raise ValidationError({'detail': 'Booking has already been checked in.'})
+
+        booking.checked_in_at = timezone.now()
+        booking.save(update_fields=['checked_in_at', 'updated_at'])
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
         summary='Manually trigger auto-complete bookings (superadmin)',
         description=(
             'Runs the auto_complete_bookings Celery task synchronously. '
@@ -1468,6 +1550,31 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         from .tasks import send_booking_reminders
         count = send_booking_reminders()
         return Response({'reminders_sent': count})
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger no-show detection (superadmin)',
+        description=(
+            'Runs the mark_no_show_bookings Celery task synchronously. '
+            'Marks meeting_room bookings as no_show when start_time is more than '
+            'NO_SHOW_MINUTES in the past and no check-in was recorded. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='NoShowResponse',
+                fields={'no_show_marked': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-no-show',
+            permission_classes=[IsSuperAdmin])
+    def run_no_show(self, request):
+        from .tasks import mark_no_show_bookings
+        count = mark_no_show_bookings()
+        return Response({'no_show_marked': count})
 
 
 # ---------------------------------------------------------------------------

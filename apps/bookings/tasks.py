@@ -114,10 +114,30 @@ def send_booking_reminder(booking_id):
 
 
 @shared_task
+def mark_no_show_bookings():
+    """
+    Beat task (every 5 min): mark meeting_room bookings as no_show if
+    started >NO_SHOW_MINUTES ago with no check-in.
+    Frees up the resource by moving the booking out of 'confirmed' status.
+    """
+    from apps.bookings.models import Booking
+
+    threshold = timezone.now() - timedelta(minutes=settings.NO_SHOW_MINUTES)
+    bookings = Booking.objects.filter(
+        resource__resource_type='meeting_room',
+        status='confirmed',
+        start_time__lte=threshold,
+        checked_in_at__isnull=True,
+    )
+    count = bookings.update(status='no_show', updated_at=timezone.now())
+    logger.info('[no_show] Marked %d bookings as no_show', count)
+    return count
+
+
+@shared_task
 def auto_cancel_no_show():
-    """Автоотмена бронирований конференц-залов, если no-show > 15 мин."""
-    # TODO: найти confirmed bookings meeting_room, start_time + 15min < now, отменить
-    pass
+    """Автоотмена бронирований конференц-залов, если no-show > 15 мин. (legacy stub — use mark_no_show_bookings)"""
+    return mark_no_show_bookings()
 
 
 @shared_task

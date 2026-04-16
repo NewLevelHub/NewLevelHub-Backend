@@ -384,6 +384,24 @@ class ResourceViewSet(viewsets.ModelViewSet):
             401: OpenApiResponse(description='Not authenticated'),
         },
     ),
+    partial_update=extend_schema(
+        tags=['Bookings'],
+        summary='Update booking (partial)',
+        description=(
+            'PATCH a booking. When changing the reservation window, send both `start_time` and '
+            '`end_time` (ISO 8601 with timezone); the same overlap rules apply as for creation '
+            '(409 if the slot conflicts). Other writable fields use the standard serializer rules.'
+        ),
+        request=BookingSerializer,
+        responses={
+            200: BookingSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Booking not found'),
+            409: OpenApiResponse(description='Time slot conflict with another booking or block'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
 )
 class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BookingSerializer
@@ -528,6 +546,47 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
     @extend_schema(
         tags=['Bookings'],
+        summary='Admin cancel booking',
+        request=inline_serializer(
+            name='AdminCancelBookingRequest',
+            fields={
+                'reason': fields.CharField(required=True, allow_blank=False),
+            },
+        ),
+        responses={
+            200: BookingSerializer,
+            400: OpenApiResponse(description='reason is required'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Booking not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='admin-cancel')
+    def admin_cancel(self, request, pk=None):
+        user = request.user
+        if not user.is_company_admin():
+            raise PermissionDenied('Only company admins can perform admin cancellation.')
+
+        booking = self.get_object()
+        reason = str(request.data.get('reason', '')).strip()
+        if not reason:
+            raise ValidationError({'reason': 'This field is required.'})
+
+        booking.status = 'cancelled'
+        booking.cancelled_by = user
+        booking.cancel_reason = reason
+        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+
+        Notification.objects.create(
+            user=booking.user,
+            notification_type='booking_cancelled',
+            title=f'Бронирование отменено администратором: {booking.resource.name}',
+            body=reason,
+            url='',
+        )
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
         summary='Add booking participants',
         request=inline_serializer(
             name='AddParticipantsRequest',
@@ -536,11 +595,6 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                     child=fields.IntegerField(min_value=1),
                     required=True,
                 ),
-        summary='Admin cancel booking',
-        request=inline_serializer(
-            name='AdminCancelBookingRequest',
-            fields={
-                'reason': fields.CharField(required=True, allow_blank=False),
             },
         ),
         responses={
@@ -624,35 +678,6 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             payload={'user_id': user_id_int},
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
-            400: OpenApiResponse(description='reason is required'),
-            403: OpenApiResponse(description='Company admin or superadmin only'),
-            404: OpenApiResponse(description='Booking not found'),
-        },
-    )
-    @action(detail=True, methods=['post'], url_path='admin-cancel')
-    def admin_cancel(self, request, pk=None):
-        user = request.user
-        if not user.is_company_admin():
-            raise PermissionDenied('Only company admins can perform admin cancellation.')
-
-        booking = self.get_object()
-        reason = str(request.data.get('reason', '')).strip()
-        if not reason:
-            raise ValidationError({'reason': 'This field is required.'})
-
-        booking.status = 'cancelled'
-        booking.cancelled_by = user
-        booking.cancel_reason = reason
-        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
-
-        Notification.objects.create(
-            user=booking.user,
-            notification_type='booking_cancelled',
-            title=f'Бронирование отменено администратором: {booking.resource.name}',
-            body=reason,
-            url='',
-        )
-        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     @extend_schema(
         tags=['Bookings'],

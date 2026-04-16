@@ -487,6 +487,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             )
 
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
     def get_queryset(self):
         return super().get_queryset().order_by('-start_time', '-id')
 

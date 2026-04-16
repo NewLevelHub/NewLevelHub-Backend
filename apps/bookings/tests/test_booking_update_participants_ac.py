@@ -38,6 +38,37 @@ def organizer(db, company):
 
 
 @pytest.fixture
+def company_admin(db, company):
+    return User.objects.create_user(
+        email='company-admin@booking-update-ac.test',
+        password='pass',
+        first_name='Company',
+        last_name='Admin',
+        role='company_admin',
+        company=company,
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
+def other_company(db):
+    return Company.objects.create(name='Other Booking Update AC Co', plan='basic')
+
+
+@pytest.fixture
+def other_company_employee(db, other_company):
+    return User.objects.create_user(
+        email='employee-other-company@booking-update-ac.test',
+        password='pass',
+        first_name='Other',
+        last_name='CompanyEmployee',
+        role='employee',
+        company=other_company,
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
 def participant_one(db, company):
     return User.objects.create_user(
         email='participant-one@booking-update-ac.test',
@@ -182,19 +213,19 @@ class TestBookingParticipantsManagement:
     def test_add_participants_for_meeting_room_creates_rows_and_notifications(
         self,
         api_client,
-        organizer,
+        company_admin,
         company,
         meeting_room_resource,
         participant_one,
         participant_two,
     ):
         booking = _create_booking(
-            user=organizer,
+            user=company_admin,
             company=company,
             resource=meeting_room_resource,
             start_delta_minutes=300,
         )
-        api_client.force_authenticate(user=organizer)
+        api_client.force_authenticate(user=company_admin)
         response = api_client.post(
             f'{RESERVATIONS_URL}{booking.id}/participants/',
             {'user_ids': [participant_one.id, participant_two.id]},
@@ -216,15 +247,15 @@ class TestBookingParticipantsManagement:
         assert notification_user_ids == {participant_one.id, participant_two.id}
 
     def test_add_participants_for_non_meeting_room_returns_400(
-        self, api_client, organizer, company, desk_resource, participant_one
+        self, api_client, company_admin, company, desk_resource, participant_one
     ):
         booking = _create_booking(
-            user=organizer,
+            user=company_admin,
             company=company,
             resource=desk_resource,
             start_delta_minutes=300,
         )
-        api_client.force_authenticate(user=organizer)
+        api_client.force_authenticate(user=company_admin)
         response = api_client.post(
             f'{RESERVATIONS_URL}{booking.id}/participants/',
             {'user_ids': [participant_one.id]},
@@ -235,16 +266,16 @@ class TestBookingParticipantsManagement:
         assert BookingParticipant.objects.filter(booking=booking).count() == 0
 
     def test_delete_participant_removes_relation(
-        self, api_client, organizer, company, meeting_room_resource, participant_one
+        self, api_client, company_admin, company, meeting_room_resource, participant_one
     ):
         booking = _create_booking(
-            user=organizer,
+            user=company_admin,
             company=company,
             resource=meeting_room_resource,
             start_delta_minutes=300,
         )
         BookingParticipant.objects.create(booking=booking, user=participant_one)
-        api_client.force_authenticate(user=organizer)
+        api_client.force_authenticate(user=company_admin)
         response = api_client.delete(
             f'{RESERVATIONS_URL}{booking.id}/participants/{participant_one.id}/'
         )
@@ -252,10 +283,7 @@ class TestBookingParticipantsManagement:
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not BookingParticipant.objects.filter(booking=booking, user=participant_one).exists()
 
-
-@pytest.mark.django_db
-class TestBookingChangesAudit:
-    def test_booking_update_and_participants_changes_are_written_to_audit(
+    def test_employee_owner_cannot_add_participants(
         self, api_client, organizer, company, meeting_room_resource, participant_one
     ):
         booking = _create_booking(
@@ -265,6 +293,28 @@ class TestBookingChangesAudit:
             start_delta_minutes=300,
         )
         api_client.force_authenticate(user=organizer)
+        response = api_client.post(
+            f'{RESERVATIONS_URL}{booking.id}/participants/',
+            {'user_ids': [participant_one.id]},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert BookingParticipant.objects.filter(booking=booking).count() == 0
+
+
+@pytest.mark.django_db
+class TestBookingChangesAudit:
+    def test_booking_update_and_participants_changes_are_written_to_audit(
+        self, api_client, company_admin, company, meeting_room_resource, participant_one
+    ):
+        booking = _create_booking(
+            user=company_admin,
+            company=company,
+            resource=meeting_room_resource,
+            start_delta_minutes=300,
+        )
+        api_client.force_authenticate(user=company_admin)
 
         patch_start, patch_end = _next_day_slot(days_ahead=2, hour=12, duration_minutes=60)
         patch_response = api_client.patch(
@@ -296,3 +346,29 @@ class TestBookingChangesAudit:
         assert 'time_updated' in actions
         assert 'participants_added' in actions
         assert 'participant_removed' in actions
+
+
+@pytest.mark.django_db
+class TestBookingUpdateIsolation:
+    def test_patch_booking_from_other_company_returns_404(
+        self, api_client, organizer, other_company_employee, company, meeting_room_resource
+    ):
+        booking = _create_booking(
+            user=organizer,
+            company=company,
+            resource=meeting_room_resource,
+            start_delta_minutes=360,
+        )
+        new_start, new_end = _next_day_slot(days_ahead=2, hour=15, duration_minutes=60)
+
+        api_client.force_authenticate(user=other_company_employee)
+        response = api_client.patch(
+            f'{RESERVATIONS_URL}{booking.id}/',
+            {
+                'start_time': new_start.isoformat(),
+                'end_time': new_end.isoformat(),
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND

@@ -6,7 +6,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
@@ -1227,6 +1227,11 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             changed_at=timezone.now(),
         )
 
+    def _ensure_participants_manage_permission(self, user):
+        if user.is_superadmin() or user.is_company_admin():
+            return
+        raise PermissionDenied('Only company admins can manage participants.')
+
     def partial_update(self, request, *args, **kwargs):
         # AC DEV-77: when updating reservation times, reuse creation conflict-control.
         updates_time = 'start_time' in request.data or 'end_time' in request.data
@@ -1236,7 +1241,15 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             raise ValidationError({'detail': 'Both start_time and end_time are required for time updates.'})
 
         with transaction.atomic():
-            current = self.get_queryset().select_related('resource').select_for_update().get(pk=kwargs['pk'])
+            current = (
+                self.get_queryset()
+                .select_related('resource')
+                .select_for_update()
+                .filter(pk=kwargs['pk'])
+                .first()
+            )
+            if current is None:
+                raise NotFound('Not found.')
             serializer = BookingSerializer(
                 current,
                 data=request.data,
@@ -1450,6 +1463,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     )
     @action(detail=True, methods=['post'], url_path='participants')
     def add_participants(self, request, pk=None):
+        self._ensure_participants_manage_permission(request.user)
         booking = self.get_object()
         if booking.resource.resource_type != 'meeting_room':
             raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})
@@ -1504,6 +1518,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     )
     @action(detail=True, methods=['delete'], url_path=r'participants/(?P<user_id>[^/.]+)')
     def remove_participant(self, request, pk=None, user_id=None):
+        self._ensure_participants_manage_permission(request.user)
         booking = self.get_object()
         if booking.resource.resource_type != 'meeting_room':
             raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})

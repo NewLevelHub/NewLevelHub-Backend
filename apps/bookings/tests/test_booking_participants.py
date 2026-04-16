@@ -179,7 +179,8 @@ class TestBookingParticipants:
         assert resp.status_code == status.HTTP_201_CREATED
         body = resp.json()
         assert 'participants' in body
-        assert colleague_1.email in body['participants']
+        participant_emails = [p['email'] for p in body['participants']]
+        assert colleague_1.email in participant_emails
 
     def test_booking_without_participants_succeeds(
         self, api_client, employee, meeting_room
@@ -224,3 +225,83 @@ class TestBookingParticipants:
     def test_unauthenticated_returns_401(self, api_client):
         resp = api_client.post(RESERVATIONS_URL, {}, format='json')
         assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_participant_sees_booking_in_my_endpoint(
+        self, api_client, employee, colleague_1, meeting_room
+    ):
+        """A user added as participant must see the booking at GET /my/."""
+        api_client.force_authenticate(user=employee)
+        day = _next_weekday(2)
+        start = day.replace(hour=14, minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': meeting_room.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+            'participant_ids': [colleague_1.id],
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+        booking_id = resp.json()['id']
+
+        # Colleague (participant, not creator) calls /my/
+        api_client.force_authenticate(user=colleague_1)
+        my_resp = api_client.get(RESERVATIONS_URL + 'my/')
+        assert my_resp.status_code == status.HTTP_200_OK
+        result_ids = [b['id'] for b in my_resp.json()['results']]
+        assert booking_id in result_ids, (
+            'Participant should see the booking in GET /my/ endpoint'
+        )
+
+    def test_creator_not_duplicated_in_my_endpoint(
+        self, api_client, employee, colleague_1, meeting_room
+    ):
+        """The creator's booking must appear exactly once in /my/ (no duplicates from JOIN)."""
+        api_client.force_authenticate(user=employee)
+        day = _next_weekday(3)
+        start = day.replace(hour=15, minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': meeting_room.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+            'participant_ids': [colleague_1.id],
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+        booking_id = resp.json()['id']
+
+        # Creator calls /my/ — booking must appear exactly once
+        my_resp = api_client.get(RESERVATIONS_URL + 'my/')
+        assert my_resp.status_code == status.HTTP_200_OK
+        result_ids = [b['id'] for b in my_resp.json()['results']]
+        assert result_ids.count(booking_id) == 1, (
+            'Booking should appear exactly once for the creator (no JOIN duplicates)'
+        )
+
+    def test_non_participant_does_not_see_booking_in_my_endpoint(
+        self, api_client, employee, colleague_1, colleague_2, meeting_room
+    ):
+        """A user who is neither creator nor participant must not see the booking in /my/."""
+        api_client.force_authenticate(user=employee)
+        day = _next_weekday(4)
+        start = day.replace(hour=9, minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': meeting_room.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+            'participant_ids': [colleague_1.id],
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+        booking_id = resp.json()['id']
+
+        # colleague_2 is NOT a participant
+        api_client.force_authenticate(user=colleague_2)
+        my_resp = api_client.get(RESERVATIONS_URL + 'my/')
+        assert my_resp.status_code == status.HTTP_200_OK
+        result_ids = [b['id'] for b in my_resp.json()['results']]
+        assert booking_id not in result_ids, (
+            'Non-participant should NOT see the booking in GET /my/ endpoint'
+        )

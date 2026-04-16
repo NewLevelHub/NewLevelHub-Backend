@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
@@ -10,6 +11,8 @@ from apps.companies.models import Company
 from apps.notifications.models import Notification
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, seven_day_range_from_today
+
+User = get_user_model()
 
 # Type-specific validation constants
 _DESK_MAX_ADVANCE_DAYS = 14
@@ -504,6 +507,24 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if has_block_overlap:
             raise self.BookingConflictException()
 
+    def validate_participant_ids(self, value):
+        if not value:
+            return value
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            company = request.user.company
+            if company:
+                invalid = list(
+                    User.objects.filter(
+                        id__in=value
+                    ).exclude(company=company).values_list('id', flat=True)
+                )
+                if invalid:
+                    raise serializers.ValidationError(
+                        f'Users {invalid} do not belong to your company.'
+                    )
+        return value
+
     def _check_timezone_aware(self, field_name):
         """
         Reject naive datetimes submitted without timezone info.
@@ -594,7 +615,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                             f'{user.full_name} invited you to '
                             f'{resource.name} on {start_time:%Y-%m-%d %H:%M}.'
                         ),
-                        url='',
+                        url=f'/bookings/{booking.id}',
                     )
 
         return booking
@@ -616,7 +637,14 @@ class BookingSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'user', 'company', 'created_at', 'updated_at']
 
     def get_participants(self, obj):
-        return list(obj.participants.values_list('user__email', flat=True))
+        return [
+            {
+                'id': p.user.id,
+                'email': p.user.email,
+                'full_name': f'{p.user.first_name} {p.user.last_name}'.strip(),
+            }
+            for p in obj.participants.select_related('user').all()
+        ]
 
 
 class RecurringBookingSerializer(serializers.ModelSerializer):

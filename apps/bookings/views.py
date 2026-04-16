@@ -1292,7 +1292,12 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 "The 'user' filter is not supported on this endpoint. "
                 "Use /bookings/reservations/ to filter by user."
             )
-        qs = Booking.objects.filter(user=request.user).order_by('-start_time')
+        qs = (
+            Booking.objects
+            .filter(Q(user=request.user) | Q(participants__user=request.user))
+            .distinct()
+            .order_by('-start_time')
+        )
         page = self.paginate_queryset(qs)
         if page is not None:
             return self.get_paginated_response(BookingSerializer(page, many=True).data)

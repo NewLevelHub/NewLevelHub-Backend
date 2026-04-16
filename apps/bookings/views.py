@@ -6,7 +6,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, PermissionDenied
+from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
@@ -23,12 +23,15 @@ import rest_framework.fields as fields
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.users.models import User
 from .models import (
     Resource,
     Booking,
+    BookingParticipant,
     RecurringBooking,
     ResourceBlock,
     BookingCancellationAudit,
+    BookingChangeAudit,
 )
 from .serializers import (
     ResourceSerializer,
@@ -1175,6 +1178,24 @@ class ResourceViewSet(viewsets.ModelViewSet):
             ),
         },
     ),
+    partial_update=extend_schema(
+        tags=['Bookings'],
+        summary='Update booking (partial)',
+        description=(
+            'PATCH a booking. When changing the reservation window, send both `start_time` and '
+            '`end_time` (ISO 8601 with timezone); the same overlap rules apply as for creation '
+            '(409 if the slot conflicts). Other writable fields use the standard serializer rules.'
+        ),
+        request=BookingSerializer,
+        responses={
+            200: BookingSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Booking not found'),
+            409: OpenApiResponse(description='Time slot conflict with another booking or block'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    ),
 )
 class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BookingSerializer
@@ -1196,6 +1217,83 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         output = BookingSerializer(booking, context=self.get_serializer_context())
         headers = self.get_success_headers(output.data)
         return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def _create_change_audit(self, *, booking, action, payload):
+        BookingChangeAudit.objects.create(
+            booking=booking,
+            changed_by=self.request.user,
+            action=action,
+            payload=payload,
+            changed_at=timezone.now(),
+        )
+
+    def _ensure_participants_manage_permission(self, user):
+        if user.is_superadmin() or user.is_company_admin():
+            return
+        raise PermissionDenied('Only company admins can manage participants.')
+
+    def partial_update(self, request, *args, **kwargs):
+        # AC DEV-77: when updating reservation times, reuse creation conflict-control.
+        updates_time = 'start_time' in request.data or 'end_time' in request.data
+        if not updates_time:
+            return super().partial_update(request, *args, **kwargs)
+        if 'start_time' not in request.data or 'end_time' not in request.data:
+            raise ValidationError({'detail': 'Both start_time and end_time are required for time updates.'})
+
+        with transaction.atomic():
+            current = (
+                self.get_queryset()
+                .select_related('resource')
+                .select_for_update()
+                .filter(pk=kwargs['pk'])
+                .first()
+            )
+            if current is None:
+                raise NotFound('Not found.')
+            serializer = BookingSerializer(
+                current,
+                data=request.data,
+                partial=True,
+                context=self.get_serializer_context(),
+            )
+            serializer.is_valid(raise_exception=True)
+
+            new_start = serializer.validated_data.get('start_time', current.start_time)
+            new_end = serializer.validated_data.get('end_time', current.end_time)
+            if new_start >= new_end:
+                raise ValidationError({'detail': 'start_time must be before end_time'})
+
+            validator = BookingCreateSerializer(
+                data=request.data,
+                partial=True,
+                context={'request': request},
+            )
+            validator._check_timezone_aware('start_time')
+            validator._check_timezone_aware('end_time')
+            resource = Resource.objects.select_for_update().get(pk=current.resource_id)
+            validator._validate_availability_window(
+                resource=resource,
+                start_time=new_start,
+                end_time=new_end,
+            )
+            validator._ensure_no_conflicts(
+                resource=resource,
+                start_time=new_start,
+                end_time=new_end,
+                exclude_booking_id=current.id,
+            )
+
+            booking = serializer.save()
+            self._create_change_audit(
+                booking=booking,
+                action=BookingChangeAudit.ACTION_TIME_UPDATED,
+                payload={
+                    'start_time': booking.start_time.isoformat(),
+                    'end_time': booking.end_time.isoformat(),
+                },
+            )
+
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     def get_queryset(self):
         return super().get_queryset().order_by('-start_time', '-id')
@@ -1344,6 +1442,102 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             url='',
         )
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Add booking participants',
+        request=inline_serializer(
+            name='AddParticipantsRequest',
+            fields={
+                'user_ids': fields.ListField(
+                    child=fields.IntegerField(min_value=1),
+                    required=True,
+                ),
+            },
+        ),
+        responses={
+            200: BookingSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='Booking not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='participants')
+    def add_participants(self, request, pk=None):
+        self._ensure_participants_manage_permission(request.user)
+        booking = self.get_object()
+        if booking.resource.resource_type != 'meeting_room':
+            raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})
+
+        user_ids = request.data.get('user_ids')
+        if not isinstance(user_ids, list) or not user_ids:
+            raise ValidationError({'user_ids': 'Provide a non-empty list of user ids.'})
+        if not all(isinstance(uid, int) for uid in user_ids):
+            raise ValidationError({'user_ids': 'All user ids must be integers.'})
+
+        users = list(
+            User.objects.filter(
+                id__in=user_ids,
+                company_id=booking.company_id,
+            )
+        )
+        found_ids = {u.id for u in users}
+        missing_ids = sorted(set(user_ids) - found_ids)
+        if missing_ids:
+            raise ValidationError({'user_ids': f'Users not found in company: {missing_ids}'})
+
+        added_ids = []
+        with transaction.atomic():
+            for user in users:
+                _, created = BookingParticipant.objects.get_or_create(booking=booking, user=user)
+                if not created:
+                    continue
+                added_ids.append(user.id)
+                Notification.objects.create(
+                    user=user,
+                    notification_type='booking_confirmed',
+                    title=f'You were added to meeting: {booking.resource.name}',
+                    body='Check your bookings for updated participants.',
+                    url='',
+                )
+            self._create_change_audit(
+                booking=booking,
+                action=BookingChangeAudit.ACTION_PARTICIPANTS_ADDED,
+                payload={'user_ids': added_ids},
+            )
+        booking.refresh_from_db()
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Remove booking participant',
+        responses={
+            204: OpenApiResponse(description='Participant removed'),
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='Booking or participant not found'),
+        },
+    )
+    @action(detail=True, methods=['delete'], url_path=r'participants/(?P<user_id>[^/.]+)')
+    def remove_participant(self, request, pk=None, user_id=None):
+        self._ensure_participants_manage_permission(request.user)
+        booking = self.get_object()
+        if booking.resource.resource_type != 'meeting_room':
+            raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})
+
+        try:
+            user_id_int = int(user_id)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({'user_id': 'User id must be an integer.'}) from exc
+
+        deleted, _ = BookingParticipant.objects.filter(booking=booking, user_id=user_id_int).delete()
+        if not deleted:
+            raise ValidationError({'detail': 'Participant is not attached to this booking.'})
+
+        self._create_change_audit(
+            booking=booking,
+            action=BookingChangeAudit.ACTION_PARTICIPANT_REMOVED,
+            payload={'user_id': user_id_int},
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
         tags=['Bookings'],

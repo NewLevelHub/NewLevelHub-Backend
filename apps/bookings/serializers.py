@@ -1,14 +1,26 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
 
 from apps.companies.models import Company
+from apps.notifications.models import Notification
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, seven_day_range_from_today
+
+User = get_user_model()
+
+# Type-specific validation constants
+_DESK_MAX_ADVANCE_DAYS = 14
+_MEETING_ROOM_MIN_MINUTES = 30
+_MEETING_ROOM_MAX_MINUTES = 240  # 4 hours
+_PARKING_MAX_ADVANCE_DAYS = 7
+_CAPSULE_MIN_MINUTES = 60
+_CAPSULE_MAX_MINUTES = 480  # 8 hours
 
 # Минут до освобождения, после которых статус «soon_available» вместо «occupied».
 SOON_AVAILABLE_MINUTES = 30
@@ -360,7 +372,15 @@ class BookingCreateSerializer(serializers.ModelSerializer):
     def _validate_availability_window(self, *, resource, start_time, end_time):
         local_start = timezone.localtime(start_time)
         local_end = timezone.localtime(end_time)
-        if local_start.date() != local_end.date():
+
+        # Parking whole-day bookings span midnight (00:00 to next day 00:00),
+        # so we skip the single-day check for parking.
+        is_parking_whole_day = (
+            resource.resource_type == 'parking'
+            and local_start.hour == 0 and local_start.minute == 0
+            and local_end.hour == 0 and local_end.minute == 0
+        )
+        if not is_parking_whole_day and local_start.date() != local_end.date():
             raise serializers.ValidationError(
                 {'detail': 'Booking must be within a single day.'}
             )
@@ -372,11 +392,89 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 {'detail': 'Booking is outside resource availability days.'}
             )
 
-        start_local_time = local_start.time()
-        end_local_time = local_end.time()
-        if start_local_time < resource.available_from or end_local_time > resource.available_until:
+        # Skip availability-hours check for whole-day parking bookings
+        if not is_parking_whole_day:
+            start_local_time = local_start.time()
+            end_local_time = local_end.time()
+            if start_local_time < resource.available_from or end_local_time > resource.available_until:
+                raise serializers.ValidationError(
+                    {'detail': 'Booking is outside resource availability hours.'}
+                )
+
+    def _validate_type_specific_rules(self, *, resource, start_time, end_time):
+        """Validate type-specific booking rules per resource type."""
+        rtype = resource.resource_type
+        duration = end_time - start_time
+        duration_minutes = duration.total_seconds() / 60
+        local_start = timezone.localtime(start_time)
+        local_end = timezone.localtime(end_time)
+
+        if rtype == 'desk':
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_DESK_MAX_ADVANCE_DAYS)).date()
+            if timezone.localtime(start_time).date() > max_start_date:
+                raise serializers.ValidationError(
+                    {'detail': 'Desk booking must start within 14 days from now.'}
+                )
+
+        elif rtype == 'meeting_room':
+            if duration_minutes < _MEETING_ROOM_MIN_MINUTES:
+                raise serializers.ValidationError(
+                    {'detail': 'Meeting room booking minimum duration is 30 minutes.'}
+                )
+            if duration_minutes > _MEETING_ROOM_MAX_MINUTES:
+                raise serializers.ValidationError(
+                    {'detail': 'Meeting room booking maximum duration is 4 hours.'}
+                )
+
+        elif rtype == 'parking':
+            # Must be whole-day: start 00:00, end 23:59 same day or next day 00:00
+            is_whole_day = (
+                local_start.hour == 0 and local_start.minute == 0
+                and (
+                    (local_end.hour == 23 and local_end.minute == 59)
+                    or (local_end.hour == 0 and local_end.minute == 0
+                        and local_end.date() > local_start.date())
+                )
+            )
+            if not is_whole_day:
+                raise serializers.ValidationError(
+                    {'detail': 'Parking booking must be whole-day only '
+                               '(start 00:00, end 23:59 or next day 00:00).'}
+                )
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_PARKING_MAX_ADVANCE_DAYS)).date()
+            if timezone.localtime(start_time).date() > max_start_date:
+                raise serializers.ValidationError(
+                    {'detail': 'Parking booking must start within 7 days from now.'}
+                )
+
+        elif rtype == 'capsule':
+            if duration_minutes < _CAPSULE_MIN_MINUTES:
+                raise serializers.ValidationError(
+                    {'detail': 'Capsule booking minimum duration is 1 hour.'}
+                )
+            if duration_minutes > _CAPSULE_MAX_MINUTES:
+                raise serializers.ValidationError(
+                    {'detail': 'Capsule booking maximum duration is 8 hours.'}
+                )
+
+    def _validate_resource_duration_limits(self, *, resource, start_time, end_time):
+        """Validate against resource-level min/max duration settings.
+
+        Skipped for parking because parking enforces whole-day bookings via
+        type-specific rules, making per-resource duration limits inapplicable.
+        """
+        if resource.resource_type == 'parking':
+            return
+
+        duration_minutes = (end_time - start_time).total_seconds() / 60
+
+        if resource.min_duration_minutes and duration_minutes < resource.min_duration_minutes:
             raise serializers.ValidationError(
-                {'detail': 'Booking is outside resource availability hours.'}
+                {'detail': f'Minimum booking duration is {resource.min_duration_minutes} minutes.'}
+            )
+        if resource.max_duration_minutes and duration_minutes > resource.max_duration_minutes:
+            raise serializers.ValidationError(
+                {'detail': f'Maximum booking duration is {resource.max_duration_minutes} minutes.'}
             )
 
     def _validate_user_active_limit(self, *, user):
@@ -408,6 +506,24 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         ).exists()
         if has_block_overlap:
             raise self.BookingConflictException()
+
+    def validate_participant_ids(self, value):
+        if not value:
+            return value
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            company = request.user.company
+            if company:
+                invalid = list(
+                    User.objects.filter(
+                        id__in=value
+                    ).exclude(company=company).values_list('id', flat=True)
+                )
+                if invalid:
+                    raise serializers.ValidationError(
+                        f'Users {invalid} do not belong to your company.'
+                    )
+        return value
 
     def _check_timezone_aware(self, field_name):
         """
@@ -441,6 +557,10 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         attrs.pop('resource_id', None)
         if attrs['start_time'] >= attrs['end_time']:
             raise serializers.ValidationError('start_time must be before end_time')
+        if attrs['start_time'] <= timezone.now():
+            raise serializers.ValidationError(
+                {'start_time': 'Booking start time must be in the future.'}
+            )
         return attrs
 
     def create(self, validated_data):
@@ -459,6 +579,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 start_time=start_time,
                 end_time=end_time,
             )
+            self._validate_type_specific_rules(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+            )
+            self._validate_resource_duration_limits(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+            )
             self._validate_user_active_limit(user=user)
             self._ensure_no_conflicts(
                 resource=resource,
@@ -471,9 +601,23 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             validated_data['company'] = user.company
             booking = super().create(validated_data)
 
-            for uid in participant_ids:
-                BookingParticipant.objects.create(booking=booking, user_id=uid)
-        # TODO: отправить уведомление участникам
+            # Only create participants for meeting rooms
+            if resource.resource_type == 'meeting_room' and participant_ids:
+                for uid in participant_ids:
+                    BookingParticipant.objects.create(booking=booking, user_id=uid)
+                # Send notifications to participants
+                for uid in participant_ids:
+                    Notification.objects.create(
+                        user_id=uid,
+                        notification_type='booking_confirmed',
+                        title=f'You have been added to a meeting: {resource.name}',
+                        body=(
+                            f'{user.full_name} invited you to '
+                            f'{resource.name} on {start_time:%Y-%m-%d %H:%M}.'
+                        ),
+                        url=f'/bookings/{booking.id}',
+                    )
+
         return booking
 
 
@@ -493,7 +637,14 @@ class BookingSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'user', 'company', 'created_at', 'updated_at']
 
     def get_participants(self, obj):
-        return list(obj.participants.values_list('user__email', flat=True))
+        return [
+            {
+                'id': p.user.id,
+                'email': p.user.email,
+                'full_name': f'{p.user.first_name} {p.user.last_name}'.strip(),
+            }
+            for p in obj.participants.select_related('user').all()
+        ]
 
 
 class RecurringBookingSerializer(serializers.ModelSerializer):

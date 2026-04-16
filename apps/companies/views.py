@@ -156,7 +156,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             # views themselves enforce additional role-based checks (e.g.
             # only superadmin can remove another company_admin).
             return [IsCompanyAdmin()]
-        if self.action in ('members', 'onboarding_status', 'skip_onboarding'):
+        if self.action in ('onboarding_status', 'skip_onboarding'):
             # company_admin (own company) and superadmin; employees/guests blocked
             return [IsCompanyAdmin()]
         # list / retrieve / custom actions — company members only; guests get 403
@@ -312,13 +312,13 @@ class CompanyViewSet(viewsets.ModelViewSet):
         },
     )
     @action(detail=True, methods=['get'], url_path='members',
-            permission_classes=[IsCompanyAdmin])
+            permission_classes=[IsCompanyMember])
     def members(self, request, pk=None):
         # Resolve the company without letting global filter_backends interfere.
         # get_object() calls filter_queryset() which would apply SearchFilter
         # to the company queryset using the ?search= param intended for members.
         company_qs = Company.objects.all()
-        if request.user.role == 'company_admin':
+        if request.user.role in ('company_admin', 'employee'):
             if request.user.company_id != int(pk):
                 raise PermissionDenied('You can only view members of your own company.')
             company_qs = company_qs.filter(id=request.user.company_id)

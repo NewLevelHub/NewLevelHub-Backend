@@ -13,21 +13,23 @@ logger = logging.getLogger(__name__)
 def send_booking_reminders():
     """
     Beat task (every 5 min): send reminders for bookings starting in
-    REMINDER_MINUTES_BEFORE minutes (±2.5 min window).
+    REMINDER_MINUTES_BEFORE minutes. Window: [now+10min, now+17.5min] to
+    cover bookings created within the same beat cycle as the reminder window.
     """
     from apps.bookings.models import Booking
     from apps.notifications.models import Notification, NotificationPreference
 
     now = timezone.now()
     reminder_minutes = settings.REMINDER_MINUTES_BEFORE
-    window_half = timedelta(minutes=2.5)
-    target = now + timedelta(minutes=reminder_minutes)
+    BEAT_INTERVAL_MINUTES = 5
+    window_start = now + timedelta(minutes=reminder_minutes - BEAT_INTERVAL_MINUTES)
+    window_end = now + timedelta(minutes=reminder_minutes) + timedelta(minutes=2.5)
 
     bookings = Booking.objects.filter(
         status='confirmed',
         reminder_sent=False,
-        start_time__gte=target - window_half,
-        start_time__lte=target + window_half,
+        start_time__gte=window_start,
+        start_time__lte=window_end,
     ).select_related('user', 'resource')
 
     sent_count = 0
@@ -97,7 +99,7 @@ def auto_complete_bookings():
 
     for booking in bookings:
         booking.status = 'completed'
-        booking.save(update_fields=['status'])
+        booking.save(update_fields=['status', 'updated_at'])
         logger.info('Auto-completed booking %s', booking.id)
         completed_count += 1
 

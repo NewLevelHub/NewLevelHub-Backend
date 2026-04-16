@@ -12,7 +12,7 @@ required.  All tests are self-contained — fixtures create their own objects.
 """
 
 from datetime import datetime, timezone as dt_timezone, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from django.utils import timezone

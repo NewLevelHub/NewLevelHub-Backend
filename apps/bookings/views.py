@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
+    OpenApiExample,
     OpenApiParameter,
     OpenApiResponse,
     inline_serializer,
@@ -48,62 +49,571 @@ from .filters import ResourceFilter, BookingFilter
 from .schedule import busy_slots_for_resource, day_range_aware, week_range_for_date
 
 
+# ---------------------------------------------------------------------------
+# Shared OpenApiExample sets — reused across list / create / retrieve actions
+# ---------------------------------------------------------------------------
+
+_RESOURCE_REQUEST_EXAMPLES = [
+    OpenApiExample(
+        name='Desk',
+        summary='Create a desk resource',
+        value={
+            'type': 'desk',
+            'name': 'Desk A-01',
+            'floor': 2,
+            'zone': 'Open Space',
+            'capacity': 1,
+            'is_hot_desk': True,
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Meeting Room',
+        summary='Create a meeting-room resource',
+        value={
+            'type': 'meeting_room',
+            'name': 'Boardroom Alpha',
+            'floor': 3,
+            'capacity': 12,
+            'equipment': {
+                'projector': True,
+                'whiteboard': True,
+                'tv': False,
+                'video_conf': True,
+                'monitor': False,
+                'dock': False,
+                'power_outlet': True,
+            },
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Parking Spot',
+        summary='Create a parking resource',
+        value={
+            'type': 'parking',
+            'name': 'Spot P-07',
+            'floor': 0,
+            'parking_type': 'regular',
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Capsule',
+        summary='Create a capsule resource',
+        value={
+            'type': 'capsule',
+            'name': 'Capsule Q-03',
+            'floor': 1,
+            'capsule_zone': 'quiet',
+        },
+        request_only=True,
+    ),
+]
+
+_RESOURCE_RESPONSE_EXAMPLE = OpenApiExample(
+    name='Resource (desk)',
+    summary='Typical resource object',
+    value={
+        'id': 42,
+        'type': 'desk',
+        'name': 'Desk A-01',
+        'floor': 2,
+        'zone': 'Open Space',
+        'description': '',
+        'photo': None,
+        'capacity': 1,
+        'equipment': None,
+        'is_active': True,
+        'has_monitor': False,
+        'has_dock': False,
+        'has_power_outlet': True,
+        'is_hot_desk': True,
+        'assigned_company': None,
+        'min_duration_minutes': 30,
+        'max_duration_minutes': 480,
+        'availability_start': '08:00:00',
+        'availability_end': '22:00:00',
+        'availability_days': [0, 1, 2, 3, 4],
+        'parking_type': None,
+        'capsule_zone': '',
+        'created_at': '2025-01-15T09:00:00+06:00',
+        'updated_at': '2025-01-15T09:00:00+06:00',
+    },
+    response_only=True,
+)
+
+_RESOURCE_400_EXAMPLE = OpenApiExample(
+    name='Validation error',
+    summary='Missing required field',
+    value={'error': True, 'status_code': 400, 'detail': {'capacity': ['This field is required for meeting_room.']}},
+    response_only=True,
+    status_codes=['400'],
+)
+
+_AUTH_401_EXAMPLE = OpenApiExample(
+    name='Unauthenticated',
+    value={'error': True, 'status_code': 401, 'detail': 'Authentication credentials were not provided.'},
+    response_only=True,
+    status_codes=['401'],
+)
+
+_FORBIDDEN_403_EXAMPLE = OpenApiExample(
+    name='Forbidden',
+    value={'error': True, 'status_code': 403, 'detail': 'You do not have permission to perform this action.'},
+    response_only=True,
+    status_codes=['403'],
+)
+
+# BookingCreateSerializer request examples
+_BOOKING_REQUEST_EXAMPLES = [
+    OpenApiExample(
+        name='Book a desk',
+        summary='Desk — single working day, max 14 days ahead',
+        description=(
+            'Desk bookings must start within 14 calendar days from now. '
+            'The booking must fall within a single calendar day and inside '
+            'the resource availability window (default 08:00–22:00).'
+        ),
+        value={
+            'resource_id': 42,
+            'start_time': '2025-04-20T09:00:00+06:00',
+            'end_time': '2025-04-20T18:00:00+06:00',
+            'description': 'Working from the office today',
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Book a meeting room',
+        summary='Meeting room — 30 min to 4 hours, participant_ids supported',
+        description=(
+            'Meeting room bookings must be between 30 minutes and 4 hours. '
+            'Pass participant_ids (list of user PKs) to invite colleagues; '
+            'they will receive in-app notifications.'
+        ),
+        value={
+            'resource_id': 7,
+            'start_time': '2025-04-21T14:00:00+06:00',
+            'end_time': '2025-04-21T15:30:00+06:00',
+            'description': 'Q2 planning sync',
+            'participant_ids': [3, 8, 15],
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Book a parking spot',
+        summary='Parking — whole-day only, max 7 days ahead',
+        description=(
+            'Parking bookings are whole-day: start_time must be 00:00 and '
+            'end_time must be 23:59 (same day) or 00:00 (next day). '
+            'Must start within 7 days from now.'
+        ),
+        value={
+            'resource_id': 19,
+            'start_time': '2025-04-20T00:00:00+06:00',
+            'end_time': '2025-04-20T23:59:00+06:00',
+            'description': '',
+        },
+        request_only=True,
+    ),
+    OpenApiExample(
+        name='Book a capsule',
+        summary='Capsule — 1 hour to 8 hours',
+        description=(
+            'Capsule bookings must be between 1 hour (60 minutes) and 8 hours (480 minutes). '
+            'Must fall within a single calendar day and inside availability hours.'
+        ),
+        value={
+            'resource_id': 33,
+            'start_time': '2025-04-20T10:00:00+06:00',
+            'end_time': '2025-04-20T14:00:00+06:00',
+            'description': 'Focus session',
+        },
+        request_only=True,
+    ),
+]
+
+_BOOKING_201_EXAMPLE = OpenApiExample(
+    name='Booking created',
+    summary='Successfully created booking',
+    value={
+        'id': 101,
+        'resource': 42,
+        'resource_name': 'Desk A-01',
+        'user': 5,
+        'user_name': 'Aibek Seitkali',
+        'company': 2,
+        'start_time': '2025-04-20T09:00:00+06:00',
+        'end_time': '2025-04-20T18:00:00+06:00',
+        'status': 'confirmed',
+        'description': 'Working from the office today',
+        'cancelled_by': None,
+        'cancel_reason': '',
+        'participants': [],
+        'created_at': '2025-04-15T10:00:00+06:00',
+        'updated_at': '2025-04-15T10:00:00+06:00',
+    },
+    response_only=True,
+    status_codes=['201'],
+)
+
+_BOOKING_409_EXAMPLE = OpenApiExample(
+    name='Conflict',
+    summary='Resource already occupied for the requested time slot',
+    value={'error': True, 'status_code': 409, 'detail': 'Selected time slot is already occupied.'},
+    response_only=True,
+    status_codes=['409'],
+)
+
+_BOOKING_400_EXAMPLES = [
+    OpenApiExample(
+        name='Desk — too far in advance',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Desk booking must start within 14 days from now.'},
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+    OpenApiExample(
+        name='Meeting room — duration too short',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {
+                'detail': 'Meeting room booking minimum duration is 30 minutes.'
+            },
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+    OpenApiExample(
+        name='Meeting room — duration too long',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Meeting room booking maximum duration is 4 hours.'},
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+    OpenApiExample(
+        name='Parking — not whole day',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Parking booking must be whole-day only (start 00:00, end 23:59 or next day 00:00).'},
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+    OpenApiExample(
+        name='Capsule — duration too short',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Capsule booking minimum duration is 1 hour.'},
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+    OpenApiExample(
+        name='Active booking limit exceeded',
+        value={
+            'error': True,
+            'status_code': 400,
+            'detail': {'detail': 'Active booking limit exceeded (5).'},
+        },
+        response_only=True,
+        status_codes=['400'],
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# ResourceViewSet
+# ---------------------------------------------------------------------------
+
 @extend_schema_view(
     list=extend_schema(
-        tags=['Bookings'],
+        tags=['Resources'],
         summary='List resources (catalog)',
+        description=(
+            'Returns a paginated catalog of resources visible to the current user.\n\n'
+            '**Access rules:**\n'
+            '- Any authenticated user (including `guest`) can browse the catalog.\n'
+            '- `superadmin` sees all resources (active and inactive).\n'
+            '- All other roles see only `is_active=True` resources.\n'
+            '- Users whose company has a `premium` plan also see resources assigned to '
+            'their company (`assigned_company=<their company>`), in addition to unassigned ones.\n\n'
+            '**Extra response field:** `meeting_room_equipment_keys` — list of equipment keys '
+            '(`projector`, `tv`, `whiteboard`, `video_conf`, `monitor`, `dock`, `power_outlet`) '
+            'that exist on at least one meeting room matching the current filters (used to build '
+            'dynamic filter chips on the frontend).\n\n'
+            '**Availability filter:** pass both `available_from` and `available_to` (ISO 8601 '
+            'datetime strings) to exclude resources that have a confirmed booking or admin block '
+            'overlapping that interval.'
+        ),
         parameters=[
+            OpenApiParameter(
+                name='type',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by resource type: `desk`, `meeting_room`, `parking`, `capsule`.',
+                enum=['desk', 'meeting_room', 'parking', 'capsule'],
+            ),
+            OpenApiParameter(
+                name='resource_type',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Alias for `type` — both map to the same model field.',
+            ),
+            OpenApiParameter(
+                name='floor',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Exact floor number.',
+            ),
+            OpenApiParameter(
+                name='capacity_min',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Minimum seating capacity (inclusive).',
+            ),
+            OpenApiParameter(
+                name='capacity_max',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Maximum seating capacity (inclusive).',
+            ),
+            OpenApiParameter(
+                name='is_active',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='`true` / `false`. Superadmin only — non-superadmin always gets active resources.',
+            ),
+            OpenApiParameter(
+                name='equipment',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description=(
+                    'Comma-separated equipment keys for meeting rooms: '
+                    '`projector`, `tv`, `whiteboard`, `video_conf`, `monitor`, `dock`, `power_outlet`. '
+                    'Example: `?equipment=projector,whiteboard`'
+                ),
+            ),
+            OpenApiParameter(
+                name='has_projector',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter meeting rooms that have a projector.',
+            ),
+            OpenApiParameter(
+                name='has_tv',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter meeting rooms that have a TV.',
+            ),
+            OpenApiParameter(
+                name='has_video_conf',
+                type=OpenApiTypes.BOOL,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter meeting rooms that have video-conferencing equipment.',
+            ),
             OpenApiParameter(
                 name='available_from',
                 type=OpenApiTypes.DATETIME,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='Свободен с (ISO datetime); вместе с available_to исключает ресурсы с пересечениями.',
+                description=(
+                    'ISO 8601 datetime — start of the requested free interval. '
+                    'Must be combined with `available_to`. '
+                    'Resources with an overlapping confirmed booking or admin block are excluded.'
+                ),
             ),
             OpenApiParameter(
                 name='available_to',
                 type=OpenApiTypes.DATETIME,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='Свободен до (ISO datetime).',
+                description='ISO 8601 datetime — end of the requested free interval (see `available_from`).',
+            ),
+            OpenApiParameter(
+                name='search',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Full-text search on the resource `name` field.',
+            ),
+            OpenApiParameter(
+                name='ordering',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description=(
+                    'Sort order. Allowed fields: `name`, `floor`, `capacity`, `id`. '
+                    'Prefix with `-` for descending. Example: `?ordering=-capacity,name`'
+                ),
+            ),
+            OpenApiParameter(
+                name='page',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Page number (default: 1).',
+            ),
+            OpenApiParameter(
+                name='page_size',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Number of results per page (default: 20, max: 100).',
             ),
         ],
-        responses={200: ResourceListSerializer(many=True)},
+        responses={
+            200: ResourceListSerializer(many=True),
+            401: OpenApiResponse(
+                description='Not authenticated.',
+                examples=[_AUTH_401_EXAMPLE],
+            ),
+        },
     ),
     retrieve=extend_schema(
-        tags=['Bookings'],
-        summary='Get resource details and 7-day busy schedule',
-        responses={200: ResourceDetailSerializer, 404: OpenApiResponse(description='Not found')},
+        tags=['Resources'],
+        summary='Get resource details + 7-day busy schedule',
+        description=(
+            'Returns the full resource object plus a `schedule` array that lists all '
+            'confirmed bookings and admin blocks for the next 7 calendar days '
+            '(starting from today in the server timezone, `Asia/Almaty`).\n\n'
+            '**Access:** any authenticated user.'
+        ),
+        responses={
+            200: ResourceDetailSerializer,
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
+        },
     ),
     create=extend_schema(
-        tags=['Bookings'],
-        summary='Create resource (superadmin)',
+        tags=['Resources'],
+        summary='Create a resource (superadmin only)',
+        description=(
+            'Creates a new bookable resource.\n\n'
+            '**Access:** `superadmin` only.\n\n'
+            '**Type-specific required fields:**\n'
+            '- `desk` — no extra required fields.\n'
+            '- `meeting_room` — `capacity` is required (>= 1); optionally pass `equipment` JSON.\n'
+            '- `parking` — `parking_type` is required (`regular` or `vip`).\n'
+            '- `capsule` — `capsule_zone` is required (`quiet` or `regular`).\n\n'
+            '**Equipment JSON** (meeting rooms only): '
+            '`{"projector": true, "whiteboard": true, "tv": false, "video_conf": true, '
+            '"monitor": false, "dock": false, "power_outlet": true}`\n\n'
+            '**Availability window** (`availability_start` / `availability_end`):\n'
+            'Time-of-day window when the resource can be booked (default 08:00–22:00). '
+            '`availability_days` is a list of weekday integers (0=Monday … 6=Sunday).'
+        ),
         request=ResourceSerializer,
+        examples=_RESOURCE_REQUEST_EXAMPLES + [_RESOURCE_400_EXAMPLE, _FORBIDDEN_403_EXAMPLE],
         responses={
-            201: ResourceSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            201: OpenApiResponse(
+                response=ResourceSerializer,
+                description='Resource created.',
+                examples=[_RESOURCE_RESPONSE_EXAMPLE],
+            ),
+            400: OpenApiResponse(
+                description='Validation error.',
+                examples=[_RESOURCE_400_EXAMPLE],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
         },
     ),
     update=extend_schema(
-        tags=['Bookings'],
-        summary='Update resource (superadmin)',
+        tags=['Resources'],
+        summary='Full update of a resource (superadmin only)',
+        description=(
+            'Replaces all writable fields on an existing resource. '
+            'If the resource is deactivated (`is_active=false`), '
+            'all future confirmed bookings are automatically cancelled '
+            'and the booking owners receive in-app notifications.\n\n'
+            '**Access:** `superadmin` only.'
+        ),
         request=ResourceSerializer,
-        responses={200: ResourceSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        examples=_RESOURCE_REQUEST_EXAMPLES,
+        responses={
+            200: OpenApiResponse(
+                response=ResourceSerializer,
+                description='Resource updated.',
+                examples=[_RESOURCE_RESPONSE_EXAMPLE],
+            ),
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
+        },
     ),
     partial_update=extend_schema(
-        tags=['Bookings'],
-        summary='Partial update resource',
+        tags=['Resources'],
+        summary='Partial update of a resource (superadmin only)',
+        description=(
+            'Updates one or more fields on an existing resource. '
+            'Same deactivation side-effect as full update: '
+            'deactivating cancels future bookings.\n\n'
+            '**Access:** `superadmin` only.'
+        ),
         request=ResourceSerializer,
-        responses={200: ResourceSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        examples=_RESOURCE_REQUEST_EXAMPLES,
+        responses={
+            200: OpenApiResponse(
+                response=ResourceSerializer,
+                description='Resource updated.',
+                examples=[_RESOURCE_RESPONSE_EXAMPLE],
+            ),
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
+        },
     ),
     destroy=extend_schema(
-        tags=['Bookings'],
-        summary='Delete resource (superadmin)',
+        tags=['Resources'],
+        summary='Delete a resource (superadmin only)',
+        description=(
+            'Permanently deletes a resource. '
+            'Deletion is blocked if the resource has any **future confirmed bookings** '
+            '— cancel them first (or deactivate the resource, which cancels them automatically).\n\n'
+            '**Access:** `superadmin` only.'
+        ),
         responses={
-            204: OpenApiResponse(description='Deleted'),
-            400: OpenApiResponse(description='Has future bookings'),
-            403: OpenApiResponse(description='Superadmin only'),
+            204: OpenApiResponse(description='Deleted successfully.'),
+            400: OpenApiResponse(
+                description='Resource has future confirmed bookings.',
+                examples=[
+                    OpenApiExample(
+                        name='Has future bookings',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Cannot delete a resource that has future confirmed bookings.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
         },
     ),
 )
@@ -253,28 +763,67 @@ class ResourceViewSet(viewsets.ModelViewSet):
             )
 
     @extend_schema(
-        tags=['Bookings'],
-        summary='Resource busy schedule for a calendar day or week',
+        tags=['Resources'],
+        summary='Busy schedule for a resource (day or week view)',
+        description=(
+            'Returns the list of busy time slots (confirmed bookings + admin blocks) '
+            'for the given resource.\n\n'
+            'Pass exactly one of:\n'
+            '- `date=YYYY-MM-DD` — returns slots for that single calendar day.\n'
+            '- `week=YYYY-MM-DD` — returns slots for the whole ISO week (Mon–Sun) '
+            'that contains the given date.\n\n'
+            '**Access:** `company_admin` or `employee` (company member) or `superadmin`. '
+            'Guests are blocked.'
+        ),
         parameters=[
             OpenApiParameter(
                 name='date',
                 type=OpenApiTypes.DATE,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='YYYY-MM-DD — один календарный день (локальная таймзона сервера).',
+                description='YYYY-MM-DD — returns busy slots for this single calendar day.',
             ),
             OpenApiParameter(
                 name='week',
                 type=OpenApiTypes.DATE,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='YYYY-MM-DD — любой день; возвращается неделя с понедельника по воскресенье.',
+                description=(
+                    'YYYY-MM-DD — any day within the desired week; '
+                    'returns busy slots for the full Mon–Sun range.'
+                ),
             ),
         ],
         responses={
             200: ResourceScheduleSlotSerializer(many=True),
-            400: OpenApiResponse(description='Bad query'),
-            404: OpenApiResponse(description='Not found'),
+            400: OpenApiResponse(
+                description='Missing or conflicting query parameters.',
+                examples=[
+                    OpenApiExample(
+                        name='Both params provided',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Укажите только один параметр: date или week.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                    OpenApiExample(
+                        name='No params provided',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Нужен query-параметр date=YYYY-MM-DD или week=YYYY-MM-DD.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
         },
     )
     @action(detail=True, methods=['get'], url_path='schedule')
@@ -308,13 +857,58 @@ class ResourceViewSet(viewsets.ModelViewSet):
         return Response(ResourceScheduleSlotSerializer(slots, many=True).data)
 
     @extend_schema(
-        tags=['Bookings'],
-        summary='Bulk create resources (superadmin)',
+        tags=['Resources'],
+        summary='Bulk-create resources from a template (superadmin only)',
+        description=(
+            'Creates `count` resources by cloning a `template` payload and '
+            'appending a numeric suffix to each name: `{name_prefix} 1`, `{name_prefix} 2`, …\n\n'
+            'The `template` object is validated with the same rules as a single resource create. '
+            'The entire operation runs in a single database transaction.\n\n'
+            '**Access:** `superadmin` only.'
+        ),
         request=ResourceBulkCreateSerializer,
+        examples=[
+            OpenApiExample(
+                name='Bulk create desks',
+                summary='Create 5 desks on floor 2',
+                value={
+                    'template': {
+                        'type': 'desk',
+                        'floor': 2,
+                        'zone': 'Open Space',
+                        'capacity': 1,
+                    },
+                    'count': 5,
+                    'name_prefix': 'Desk A',
+                },
+                request_only=True,
+            ),
+            OpenApiExample(
+                name='Bulk create capsules',
+                summary='Create 3 quiet capsules on floor 1',
+                value={
+                    'template': {
+                        'type': 'capsule',
+                        'floor': 1,
+                        'capsule_zone': 'quiet',
+                    },
+                    'count': 3,
+                    'name_prefix': 'Capsule Q',
+                },
+                request_only=True,
+            ),
+        ],
         responses={
-            201: ResourceSerializer(many=True),
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            201: OpenApiResponse(
+                response=ResourceSerializer(many=True),
+                description='List of created resources.',
+            ),
+            400: OpenApiResponse(
+                description='Validation error in template or parameters.',
+                examples=[_RESOURCE_400_EXAMPLE],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
         },
     )
     @action(detail=False, methods=['post'], url_path='bulk-create')
@@ -343,13 +937,54 @@ class ResourceViewSet(viewsets.ModelViewSet):
         )
 
     @extend_schema(
-        tags=['Bookings'],
-        summary='Block resource (superadmin)',
+        tags=['Resources'],
+        summary='Block a resource for a time interval (superadmin only)',
+        description=(
+            'Creates an admin block that prevents bookings during the specified interval. '
+            'Typical use cases: maintenance, internal events, cleaning.\n\n'
+            '**Note:** existing overlapping confirmed bookings are NOT automatically cancelled '
+            '(TODO — will be added in a future release). Cancel them manually if needed.\n\n'
+            '**Access:** `superadmin` only.'
+        ),
         request=ResourceBlockSerializer,
+        examples=[
+            OpenApiExample(
+                name='Maintenance block',
+                summary='Block Desk A-01 for maintenance',
+                value={
+                    'start_time': '2025-04-22T08:00:00+06:00',
+                    'end_time': '2025-04-22T18:00:00+06:00',
+                    'reason': 'Plumbing maintenance on floor 2',
+                },
+                request_only=True,
+            ),
+        ],
         responses={
-            201: ResourceBlockSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            201: OpenApiResponse(
+                response=ResourceBlockSerializer,
+                description='Block created.',
+                examples=[
+                    OpenApiExample(
+                        name='Block created',
+                        value={
+                            'id': 12,
+                            'resource': 42,
+                            'blocked_by': 1,
+                            'start_time': '2025-04-22T08:00:00+06:00',
+                            'end_time': '2025-04-22T18:00:00+06:00',
+                            'reason': 'Plumbing maintenance on floor 2',
+                            'created_at': '2025-04-15T10:00:00+06:00',
+                            'updated_at': '2025-04-15T10:00:00+06:00',
+                        },
+                        response_only=True,
+                        status_codes=['201'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Superadmin only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Resource not found.'),
         },
     )
     @action(detail=True, methods=['post'], url_path='block')
@@ -362,26 +997,185 @@ class ResourceViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+# ---------------------------------------------------------------------------
+# BookingViewSet
+# ---------------------------------------------------------------------------
+
 @extend_schema_view(
     list=extend_schema(
         tags=['Bookings'],
         summary='List bookings',
-        responses={200: BookingSerializer(many=True)},
+        description=(
+            'Returns a paginated list of bookings scoped to the current user\'s company.\n\n'
+            '**Access:** `company_admin`, `employee`, or `superadmin`. Guests are blocked.\n\n'
+            '`superadmin` sees all bookings across all companies. '
+            'Company admins and employees see only their own company\'s bookings.\n\n'
+            '**Filters:**\n'
+            '- `status` — `confirmed`, `cancelled`, `completed`, `no_show`\n'
+            '- `resource_type` — `desk`, `meeting_room`, `parking`, `capsule`\n'
+            '- `resource` — resource PK\n'
+            '- `user` — user PK\n'
+            '- `company` — company PK (superadmin only in practice)\n'
+            '- `date_from` — bookings starting on or after this datetime (ISO 8601)\n'
+            '- `date_to` — bookings ending on or before this datetime (ISO 8601)\n\n'
+            '**Ordering:** `start_time`, `created_at` (prefix with `-` for descending).'
+        ),
+        parameters=[
+            OpenApiParameter(
+                name='status',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                enum=['confirmed', 'cancelled', 'completed', 'no_show'],
+                description='Filter by booking status.',
+            ),
+            OpenApiParameter(
+                name='resource_type',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                enum=['desk', 'meeting_room', 'parking', 'capsule'],
+                description='Filter by the type of the booked resource.',
+            ),
+            OpenApiParameter(
+                name='resource',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by resource PK.',
+            ),
+            OpenApiParameter(
+                name='user',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by user PK.',
+            ),
+            OpenApiParameter(
+                name='company',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter by company PK.',
+            ),
+            OpenApiParameter(
+                name='date_from',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Return bookings whose start_time >= this value (ISO 8601).',
+            ),
+            OpenApiParameter(
+                name='date_to',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Return bookings whose end_time <= this value (ISO 8601).',
+            ),
+            OpenApiParameter(
+                name='ordering',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Sort: `start_time`, `-start_time`, `created_at`, `-created_at`.',
+            ),
+            OpenApiParameter(
+                name='page',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Page number.',
+            ),
+            OpenApiParameter(
+                name='page_size',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Results per page (default 20, max 100).',
+            ),
+        ],
+        responses={
+            200: BookingSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+        },
     ),
     retrieve=extend_schema(
         tags=['Bookings'],
         summary='Get booking details',
-        responses={200: BookingSerializer, 404: OpenApiResponse(description='Not found')},
+        description=(
+            'Returns the full booking object including participant emails.\n\n'
+            '**Access:** company member or superadmin. '
+            'A regular employee can only see bookings that belong to their company '
+            '(enforced by `CompanyIsolationMixin`).'
+        ),
+        responses={
+            200: BookingSerializer,
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Booking not found.'),
+        },
     ),
     create=extend_schema(
         tags=['Bookings'],
-        summary='Create booking',
+        summary='Create a booking',
+        description=(
+            'Creates a new booking with conflict detection. '
+            'All validations run inside a **serialized database transaction** '
+            '(`SELECT FOR UPDATE` on the resource row) to prevent race conditions.\n\n'
+            '**Access:** `company_admin` or `employee` with a verified email, or `superadmin`.\n\n'
+            '---\n\n'
+            '### Type-specific rules\n\n'
+            '**Desk** (`type=desk`)\n'
+            '- Must start within **14 days** from now.\n'
+            '- Must fall within a single calendar day.\n'
+            '- Must be within the resource availability hours (default 08:00–22:00).\n\n'
+            '**Meeting Room** (`type=meeting_room`)\n'
+            '- Duration: **30 minutes minimum, 4 hours maximum**.\n'
+            '- Must fall within a single calendar day.\n'
+            '- Pass `participant_ids` (list of user PKs) to add colleagues as participants; '
+            'they receive in-app notifications.\n\n'
+            '**Parking** (`type=parking`)\n'
+            '- **Whole-day only**: `start_time` must be `00:00`, '
+            '`end_time` must be `23:59` (same day) or `00:00` (next day).\n'
+            '- Must start within **7 days** from now.\n\n'
+            '**Capsule** (`type=capsule`)\n'
+            '- Duration: **1 hour minimum, 8 hours maximum**.\n'
+            '- Must fall within a single calendar day.\n\n'
+            '---\n\n'
+            '### Conflict rules\n'
+            '- Returns **409** if another confirmed booking or an admin block overlaps '
+            'the requested interval on the same resource.\n\n'
+            '### Active booking limit\n'
+            '- Users cannot exceed 5 simultaneous active (confirmed, future-ending) bookings '
+            '(configurable via `MAX_ACTIVE_BOOKINGS_PER_USER` in settings).'
+        ),
         request=BookingCreateSerializer,
+        examples=_BOOKING_REQUEST_EXAMPLES + _BOOKING_400_EXAMPLES + [
+            _BOOKING_201_EXAMPLE,
+            _BOOKING_409_EXAMPLE,
+            _AUTH_401_EXAMPLE,
+            _FORBIDDEN_403_EXAMPLE,
+        ],
         responses={
-            201: BookingSerializer,
-            400: OpenApiResponse(description='Validation error or scheduling conflict'),
-            409: OpenApiResponse(description='Resource already occupied'),
-            401: OpenApiResponse(description='Not authenticated'),
+            201: OpenApiResponse(
+                response=BookingSerializer,
+                description='Booking created successfully.',
+                examples=[_BOOKING_201_EXAMPLE],
+            ),
+            400: OpenApiResponse(
+                description='Validation error — see examples for all possible messages.',
+                examples=_BOOKING_400_EXAMPLES,
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(
+                description='Company member with verified email required.',
+                examples=[_FORBIDDEN_403_EXAMPLE],
+            ),
+            409: OpenApiResponse(
+                description='Time slot conflict — another booking or admin block overlaps.',
+                examples=[_BOOKING_409_EXAMPLE],
+            ),
         },
     ),
     partial_update=extend_schema(
@@ -493,15 +1287,65 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
     @extend_schema(
         tags=['Bookings'],
-        summary='Cancel booking',
+        summary='Cancel a booking',
+        description=(
+            'Cancels a booking by setting its status to `cancelled`. '
+            'An optional `reason` field is stored on the booking record.\n\n'
+            '**Access:** any authenticated company member or superadmin. '
+            'Object-level ownership is **not** enforced here — any company member can cancel '
+            'any booking within their company (admin use case). '
+            'The cancelling user is recorded in `cancelled_by`.\n\n'
+            '**Note:** minimum-notice cancellation enforcement (`min_cancel_minutes`) '
+            'is not yet implemented (TODO).'
+        ),
         request=inline_serializer(
             name='CancelBookingRequest',
-            fields={'reason': fields.CharField(required=False, default='')},
+            fields={'reason': fields.CharField(required=False, default='', help_text='Optional cancellation reason.')},
         ),
+        examples=[
+            OpenApiExample(
+                name='Cancel with reason',
+                value={'reason': 'Meeting rescheduled to next week'},
+                request_only=True,
+            ),
+            OpenApiExample(
+                name='Cancel without reason',
+                value={},
+                request_only=True,
+            ),
+        ],
         responses={
-            200: BookingSerializer,
-            401: OpenApiResponse(description='Not authenticated'),
-            404: OpenApiResponse(description='Booking not found'),
+            200: OpenApiResponse(
+                response=BookingSerializer,
+                description='Booking cancelled.',
+                examples=[
+                    OpenApiExample(
+                        name='Cancelled booking',
+                        value={
+                            'id': 101,
+                            'resource': 42,
+                            'resource_name': 'Desk A-01',
+                            'user': 5,
+                            'user_name': 'Aibek Seitkali',
+                            'company': 2,
+                            'start_time': '2025-04-20T09:00:00+06:00',
+                            'end_time': '2025-04-20T18:00:00+06:00',
+                            'status': 'cancelled',
+                            'description': 'Working from the office today',
+                            'cancelled_by': 3,
+                            'cancel_reason': 'Meeting rescheduled to next week',
+                            'participants': [],
+                            'created_at': '2025-04-15T10:00:00+06:00',
+                            'updated_at': '2025-04-15T12:00:00+06:00',
+                        },
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Booking not found.'),
         },
     )
     @action(detail=True, methods=['post'], url_path='cancel')
@@ -691,6 +1535,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         responses={
             200: BookingSerializer(many=True),
             400: OpenApiResponse(description="'user' filter is not supported on this endpoint"),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
         },
     )
     @action(detail=False, methods=['get'], url_path='my')
@@ -700,7 +1545,12 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 "The 'user' filter is not supported on this endpoint. "
                 "Use /bookings/reservations/ to filter by user."
             )
-        qs = Booking.objects.filter(user=request.user).select_related('resource')
+        qs = (
+            Booking.objects
+            .filter(Q(user=request.user) | Q(participants__user=request.user))
+            .distinct()
+            .select_related('resource')
+        )
 
         status_filter = request.query_params.get('status')
         resource_type = request.query_params.get('resource_type')
@@ -742,8 +1592,6 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
         if status_filter == 'upcoming':
             qs = qs.order_by('start_time')
-        elif status_filter == 'past':
-            qs = qs.order_by('-start_time')
         else:
             qs = qs.order_by('-start_time')
 
@@ -753,20 +1601,120 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         return Response(BookingSerializer(qs, many=True).data)
 
 
+# ---------------------------------------------------------------------------
+# RecurringBookingViewSet
+# ---------------------------------------------------------------------------
+
 @extend_schema_view(
     list=extend_schema(
         tags=['Bookings'],
-        summary='List recurring bookings',
-        responses={200: RecurringBookingSerializer(many=True)},
+        summary='List recurring booking templates',
+        description=(
+            'Returns recurring booking templates scoped to the current user\'s company.\n\n'
+            '**Access:** company member or superadmin.\n\n'
+            'Each template defines a repeating slot: resource, day of week, start/end time, '
+            'and validity range (`valid_from` / `valid_until`).'
+        ),
+        responses={
+            200: RecurringBookingSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['Bookings'],
+        summary='Get a recurring booking template',
+        description='Returns a single recurring booking template by PK.',
+        responses={
+            200: RecurringBookingSerializer,
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Not found.'),
+        },
     ),
     create=extend_schema(
         tags=['Bookings'],
-        summary='Create recurring booking',
+        summary='Create a recurring booking template',
+        description=(
+            'Creates a new recurring booking template. '
+            'The `user` and `company` fields are set automatically from the request user.\n\n'
+            '**Access:** company member or superadmin.\n\n'
+            '**Note:** recurring booking templates currently define the *schedule pattern* only. '
+            'Actual `Booking` objects are not yet auto-generated by Celery tasks (TODO).\n\n'
+            '**Fields:**\n'
+            '- `resource` — FK to resource\n'
+            '- `day_of_week` — 0=Monday … 6=Sunday\n'
+            '- `start_time` — time of day (HH:MM)\n'
+            '- `end_time` — time of day (HH:MM)\n'
+            '- `valid_from` — date from which the template is effective\n'
+            '- `valid_until` — optional expiry date\n'
+            '- `is_active` — whether the template is currently active'
+        ),
+        request=RecurringBookingSerializer,
+        examples=[
+            OpenApiExample(
+                name='Weekly Monday standup',
+                summary='Reserve Boardroom Alpha every Monday 10:00–11:00',
+                value={
+                    'resource': 7,
+                    'day_of_week': 0,
+                    'start_time': '10:00',
+                    'end_time': '11:00',
+                    'valid_from': '2025-04-21',
+                    'valid_until': '2025-12-31',
+                    'is_active': True,
+                },
+                request_only=True,
+            ),
+        ],
+        responses={
+            201: OpenApiResponse(
+                response=RecurringBookingSerializer,
+                description='Recurring template created.',
+            ),
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+        },
+    ),
+    update=extend_schema(
+        tags=['Bookings'],
+        summary='Full update of a recurring booking template',
+        description='Replaces all fields on an existing recurring booking template.',
         request=RecurringBookingSerializer,
         responses={
-            201: RecurringBookingSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            401: OpenApiResponse(description='Not authenticated'),
+            200: RecurringBookingSerializer,
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Not found.'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['Bookings'],
+        summary='Partial update of a recurring booking template',
+        description='Updates one or more fields on an existing recurring booking template.',
+        request=RecurringBookingSerializer,
+        responses={
+            200: RecurringBookingSerializer,
+            400: OpenApiResponse(description='Validation error.', examples=[_RESOURCE_400_EXAMPLE]),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Not found.'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['Bookings'],
+        summary='Delete a recurring booking template',
+        description=(
+            'Permanently deletes a recurring booking template. '
+            'Does not affect already-created individual `Booking` objects.'
+        ),
+        responses={
+            204: OpenApiResponse(description='Deleted.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Company members only.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Not found.'),
         },
     ),
 )

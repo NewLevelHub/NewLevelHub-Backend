@@ -131,10 +131,10 @@ class TestMembersAccessControl:
         resp = api_client.get(members_url(company_a.pk))
         assert resp.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_employee_returns_403(self, api_client, company_a, employee_a):
+    def test_employee_own_company_returns_200(self, api_client, company_a, employee_a):
         auth(api_client, employee_a)
         resp = api_client.get(members_url(company_a.pk))
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_company_admin_own_company_returns_200(self, api_client, company_a, admin_a):
         auth(api_client, admin_a)

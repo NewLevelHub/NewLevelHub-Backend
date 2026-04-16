@@ -181,6 +181,19 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    'send-booking-reminders': {
+        'task': 'apps.bookings.tasks.send_booking_reminders',
+        'schedule': crontab(minute='*/5'),
+    },
+    'auto-complete-bookings': {
+        'task': 'apps.bookings.tasks.auto_complete_bookings',
+        'schedule': crontab(minute='*/5'),
+    },
+}
+
 # Email
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'localhost')
@@ -192,6 +205,7 @@ EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
+REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 
 # File upload limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB

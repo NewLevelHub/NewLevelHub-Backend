@@ -92,6 +92,7 @@ class Booking(TimeStampedModel):
         null=True, blank=True, related_name='cancelled_bookings',
     )
     cancel_reason = models.TextField(blank=True, default='')
+    reminder_sent = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         db_table = 'bookings'

@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import APIException
@@ -232,6 +233,11 @@ class ResourceListSerializer(serializers.ModelSerializer):
     """Лёгкий сериализатор для каталога."""
 
     type = serializers.CharField(source='resource_type', read_only=True)
+    availability_days = serializers.ListField(
+        child=serializers.IntegerField(min_value=0, max_value=6),
+        source='available_days',
+        read_only=True,
+    )
     parking_type = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
@@ -253,6 +259,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'equipment',
             'is_active',
             'is_hot_desk',
+            'availability_days',
             'parking_type',
             'capsule_zone',
             'status',
@@ -708,11 +715,12 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         resource = attrs['resource_id']
         request = self.context['request']
         user = request.user
+        today = timezone.localdate()
 
         if attrs['start_time'] >= attrs['end_time']:
             raise serializers.ValidationError({'end_time': 'end_time must be later than start_time.'})
 
-        if attrs['repeat_until'] < timezone.localdate():
+        if attrs['repeat_until'] < today:
             raise serializers.ValidationError({'repeat_until': 'repeat_until must not be in the past.'})
 
         if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
@@ -727,6 +735,23 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
             or attrs['end_time'] > resource.available_until
         ):
             raise serializers.ValidationError({'detail': 'Booking is outside resource availability hours.'})
+
+        has_duplicate_series = RecurringBooking.objects.filter(
+            resource=resource,
+            user=user,
+            company=user.company,
+            is_active=True,
+            day_of_week=attrs['day_of_week'],
+            start_time=attrs['start_time'],
+            end_time=attrs['end_time'],
+            valid_from__lte=attrs['repeat_until'],
+        ).filter(
+            Q(valid_until__isnull=True) | Q(valid_until__gte=today)
+        ).exists()
+        if has_duplicate_series:
+            raise serializers.ValidationError(
+                {'detail': 'Active recurring series for this slot already exists.'}
+            )
 
         attrs['resource'] = resource
         return attrs

@@ -133,7 +133,6 @@ def test_ac1_returns_count_of_no_show_bookings():
 @pytest.mark.django_db
 def test_ac1_logs_no_show_count(caplog):
     """AC-1: task logs at INFO level with the count of no_show bookings."""
-    import logging
     from apps.bookings.tasks import mark_no_show_bookings
 
     company = _make_company('a1c')

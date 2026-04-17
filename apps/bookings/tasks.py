@@ -103,7 +103,7 @@ def auto_complete_bookings():
 
     for booking in bookings:
         booking.status = 'completed'
-        booking.save(update_fields=['status', 'updated_at'])
+        booking.save(update_fields=['status'])
         logger.info('Auto-completed booking %s', booking.id)
         completed_count += 1
 
@@ -118,10 +118,34 @@ def send_booking_reminder(booking_id):
 
 
 @shared_task
+def mark_no_show_bookings():
+    """
+    Beat task (every 5 min): mark meeting_room bookings as no_show if
+    started >NO_SHOW_MINUTES ago with no check-in.
+    Only targets bookings whose end_time is still in the future to avoid
+    race conditions with auto_complete_bookings (which handles ended bookings).
+    Frees up the resource by moving the booking out of 'confirmed' status.
+    """
+    from apps.bookings.models import Booking
+
+    now = timezone.now()
+    threshold = now - timedelta(minutes=settings.NO_SHOW_MINUTES)
+    bookings = Booking.objects.filter(
+        resource__resource_type='meeting_room',
+        status='confirmed',
+        start_time__lte=threshold,
+        end_time__gt=now,
+        checked_in_at__isnull=True,
+    )
+    count = bookings.update(status='no_show')
+    logger.info('[no_show] Marked %d bookings as no_show', count)
+    return count
+
+
+@shared_task
 def auto_cancel_no_show():
-    """Автоотмена бронирований конференц-залов, если no-show > 15 мин."""
-    # TODO: найти confirmed bookings meeting_room, start_time + 15min < now, отменить
-    pass
+    # DEPRECATED: Never add to CELERY_BEAT_SCHEDULE. Use mark_no_show_bookings instead.
+    return mark_no_show_bookings()
 
 
 @shared_task

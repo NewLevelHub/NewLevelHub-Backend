@@ -99,7 +99,8 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+_STATIC_SRC = BASE_DIR / 'static'
+STATICFILES_DIRS = [_STATIC_SRC] if _STATIC_SRC.exists() else []
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -196,6 +197,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.bookings.tasks.auto_complete_bookings',
         'schedule': crontab(minute='*/5'),
     },
+    'mark-no-show-bookings': {
+        'task': 'apps.bookings.tasks.mark_no_show_bookings',
+        'schedule': crontab(minute='*/5'),
+    },
 }
 
 # Email
@@ -210,6 +215,7 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
+NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))
 
 # File upload limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB

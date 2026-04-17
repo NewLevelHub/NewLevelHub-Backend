@@ -100,6 +100,7 @@ class Booking(TimeStampedModel):
     )
     cancel_reason = models.TextField(blank=True, default='')
     reminder_sent = models.BooleanField(default=False, db_index=True)
+    checked_in_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'bookings'

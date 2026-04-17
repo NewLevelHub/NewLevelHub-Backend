@@ -6,6 +6,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
 from rest_framework.response import Response
@@ -621,7 +622,7 @@ _BOOKING_400_EXAMPLES = [
 )
 class ResourceViewSet(viewsets.ModelViewSet):
     queryset = Resource.objects.all()
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsAuthenticated]
     filterset_class = ResourceFilter
     search_fields = ['name']
     ordering_fields = ['name', 'floor', 'capacity', 'id']
@@ -736,7 +737,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
             'bulk_create',
         ):
             return [IsSuperAdmin()]
-        return [IsCompanyMember()]
+        return [IsAuthenticated()]
 
     def perform_update(self, serializer):
         was_active = serializer.instance.is_active

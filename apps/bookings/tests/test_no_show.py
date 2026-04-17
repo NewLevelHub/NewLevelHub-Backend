@@ -547,3 +547,121 @@ def test_ac6_no_show_minutes_30_marks_at_35_min():
     booking.refresh_from_db()
     assert booking.status == 'no_show'
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-7  Check-in before booking start_time returns 400
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_ac7_checkin_before_start_time_returns_400():
+    """
+    AC-7: Check-in attempt before the booking start_time → 400.
+    Prevents users from checking in early to bypass no-show detection.
+    """
+    company = _make_company('a7a')
+    user = _make_user(company, 'a7a')
+    resource = _make_resource('a7a', resource_type='meeting_room')
+    # start_offset_minutes=+30 means booking starts 30 min in the future
+    booking = _make_booking(user, resource, start_offset_minutes=30,
+                            duration_minutes=60, fixed_now=_FIXED_NOW)
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    # Patch timezone.now in views to simulate calling before start
+    with patch('apps.bookings.views.timezone.now', return_value=_FIXED_NOW):
+        response = client.post(f'/api/v1/bookings/reservations/{booking.id}/check-in/')
+
+    assert response.status_code == 400
+    data = response.json()
+    assert 'detail' in str(data)
+
+
+# ---------------------------------------------------------------------------
+# AC-8  run-no-show endpoint permission checks
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_ac8_run_no_show_returns_403_for_employee():
+    """
+    AC-8: POST /api/v1/bookings/reservations/run-no-show/ by an employee → 403.
+    """
+    company = _make_company('a8a')
+    user = _make_user(company, 'a8a', role='employee')
+
+    client = APIClient()
+    client.force_authenticate(user=user)
+
+    response = client.post('/api/v1/bookings/reservations/run-no-show/')
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_ac8_run_no_show_returns_403_for_company_admin():
+    """
+    AC-8: POST /api/v1/bookings/reservations/run-no-show/ by a company_admin → 403.
+    Only superadmin may trigger this endpoint.
+    """
+    company = _make_company('a8b')
+    admin = _make_user(company, 'a8b', role='company_admin')
+
+    client = APIClient()
+    client.force_authenticate(user=admin)
+
+    response = client.post('/api/v1/bookings/reservations/run-no-show/')
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_ac8_run_no_show_returns_200_for_superadmin():
+    """
+    AC-8: POST /api/v1/bookings/reservations/run-no-show/ by superadmin → 200.
+    """
+    superadmin = User.objects.create_user(
+        email='superadmin_a8@test.com',
+        password='pass',
+        first_name='Super',
+        last_name='Admin',
+        role='superadmin',
+        is_email_verified=True,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=superadmin)
+
+    response = client.post('/api/v1/bookings/reservations/run-no-show/')
+
+    assert response.status_code == 200
+    assert 'no_show_marked' in response.json()
+
+
+# ---------------------------------------------------------------------------
+# AC-9  mark_no_show_bookings does NOT touch bookings with end_time in the past
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_ac9_ended_booking_not_marked_no_show():
+    """
+    AC-9: A meeting_room booking that started >NO_SHOW_MINUTES ago AND has already
+    ended (end_time in the past) is NOT marked no_show by mark_no_show_bookings.
+    Ended bookings are handled by auto_complete_bookings, not this task.
+    """
+    from apps.bookings.tasks import mark_no_show_bookings
+
+    company = _make_company('a9a')
+    user = _make_user(company, 'a9a')
+    resource = _make_resource('a9a', resource_type='meeting_room')
+    # duration_minutes=10 means end_time = start + 10 min = _FIXED_NOW - 20 + 10 = _FIXED_NOW - 10
+    # So end_time is 10 min in the past at _FIXED_NOW — booking has already ended
+    booking = _make_booking(user, resource, start_offset_minutes=-20,
+                            duration_minutes=10, fixed_now=_FIXED_NOW)
+
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+        count = mark_no_show_bookings()
+
+    booking.refresh_from_db()
+    assert booking.status == 'confirmed'
+    assert count == 0

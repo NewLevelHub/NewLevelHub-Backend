@@ -1,13 +1,13 @@
 from datetime import datetime, timedelta
 
 from django.db.models import Prefetch, Q
+from django.http import Http404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema,
@@ -20,7 +20,9 @@ from drf_spectacular.utils import (
 from drf_spectacular.types import OpenApiTypes
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import (
+    IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsEmailVerifiedOrSuperAdmin,
+)
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import (
@@ -616,7 +618,7 @@ _BOOKING_400_EXAMPLES = [
 )
 class ResourceViewSet(viewsets.ModelViewSet):
     queryset = Resource.objects.all()
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCompanyMember]
     filterset_class = ResourceFilter
     search_fields = ['name']
     ordering_fields = ['name', 'floor', 'capacity', 'id']
@@ -722,7 +724,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
             return [IsCompanyMember()]
         if self.action in ('create', 'update', 'partial_update', 'destroy', 'block', 'bulk_create'):
             return [IsSuperAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyMember()]
 
     def perform_update(self, serializer):
         was_active = serializer.instance.is_active
@@ -1263,17 +1265,10 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             404: OpenApiResponse(description='Booking not found.'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='cancel')
+    @action(detail=True, methods=['post'], url_path='cancel',
+            permission_classes=[IsOwnerOrAdmin])
     def cancel(self, request, pk=None):
         booking = self.get_object()
-        user = request.user
-        # Only the booking owner, a company_admin of the same company, or a superadmin may cancel.
-        if (
-            booking.user != user
-            and not user.is_company_admin()
-            and not user.is_superadmin()
-        ):
-            raise PermissionDenied('You can only cancel your own bookings.')
         if booking.status == 'cancelled':
             raise ValidationError({'detail': 'Booking is already cancelled.'})
 
@@ -1320,12 +1315,10 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             404: OpenApiResponse(description='Booking not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='admin-cancel')
+    @action(detail=True, methods=['post'], url_path='admin-cancel',
+            permission_classes=[IsCompanyAdmin])
     def admin_cancel(self, request, pk=None):
         user = request.user
-        if not user.is_company_admin():
-            raise PermissionDenied('Only company admins can perform admin cancellation.')
-
         booking = self.get_object()
         reason = str(request.data.get('reason', '')).strip()
         if not reason:
@@ -1334,7 +1327,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         booking.status = 'cancelled'
         booking.cancelled_by = user
         booking.cancel_reason = reason
-        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason'])
 
         Notification.objects.create(
             user=booking.user,
@@ -1481,26 +1474,32 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             404: OpenApiResponse(description='Booking not found.'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='check-in')
+    @action(detail=True, methods=['post'], url_path='check-in',
+            permission_classes=[IsOwnerOrAdmin])
     def check_in(self, request, pk=None):
-        booking = self.get_object()
-        user = request.user
+        with transaction.atomic():
+            try:
+                booking = (
+                    self.get_queryset()
+                    .select_for_update()
+                    .get(pk=self.kwargs['pk'])
+                )
+            except Booking.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, booking)
 
-        if (
-            booking.user != user
-            and not user.is_company_admin()
-            and not user.is_superadmin()
-        ):
-            raise PermissionDenied('You can only check in to your own bookings.')
+            now = timezone.now()
+            if now < booking.start_time:
+                raise ValidationError({'detail': 'Check-in is not allowed before the booking start time.'})
 
-        if booking.status != 'confirmed':
-            raise ValidationError({'detail': 'Check-in is only allowed for confirmed bookings.'})
+            if booking.status != 'confirmed':
+                raise ValidationError({'detail': 'Check-in is only allowed for confirmed bookings.'})
 
-        if booking.checked_in_at is not None:
-            raise ValidationError({'detail': 'Booking has already been checked in.'})
+            if booking.checked_in_at is not None:
+                raise ValidationError({'detail': 'Booking has already been checked in.'})
 
-        booking.checked_in_at = timezone.now()
-        booking.save(update_fields=['checked_in_at', 'updated_at'])
+            booking.checked_in_at = now
+            booking.save(update_fields=['checked_in_at'])
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     @extend_schema(

@@ -1615,6 +1615,54 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             return self.get_paginated_response(BookingSerializer(page, many=True).data)
         return Response(BookingSerializer(qs, many=True).data)
 
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger auto-complete bookings (superadmin)',
+        description=(
+            'Runs the auto_complete_bookings Celery task synchronously. '
+            'Marks all confirmed bookings whose end_time is in the past as completed. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='AutoCompleteResponse',
+                fields={'completed': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-auto-complete',
+            permission_classes=[IsSuperAdmin])
+    def run_auto_complete(self, request):
+        from .tasks import auto_complete_bookings
+        count = auto_complete_bookings()
+        return Response({'completed': count})
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger booking reminders (superadmin)',
+        description=(
+            'Runs the send_booking_reminders Celery task synchronously. '
+            'Sends reminders for bookings that are starting within the configured reminder window. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='RemindersResponse',
+                fields={'reminders_sent': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-reminders',
+            permission_classes=[IsSuperAdmin])
+    def run_reminders(self, request):
+        from .tasks import send_booking_reminders
+        count = send_booking_reminders()
+        return Response({'reminders_sent': count})
+
 
 # ---------------------------------------------------------------------------
 # RecurringBookingViewSet

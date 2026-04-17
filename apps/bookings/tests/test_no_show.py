@@ -103,7 +103,9 @@ def test_ac1_meeting_room_past_threshold_no_checkin_marked_no_show():
     booking = _make_booking(user, resource, start_offset_minutes=-20,
                             duration_minutes=60, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -124,7 +126,9 @@ def test_ac1_returns_count_of_no_show_bookings():
     _make_booking(user, resource, start_offset_minutes=-30,
                   duration_minutes=60, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     assert count == 2
@@ -142,7 +146,9 @@ def test_ac1_logs_no_show_count(caplog):
                   duration_minutes=60, fixed_now=_FIXED_NOW)
 
     with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings, \
             patch('apps.bookings.tasks.logger') as mock_logger:
+        mock_settings.NO_SHOW_MINUTES = 15
         mark_no_show_bookings()
 
     mock_logger.info.assert_called_once()
@@ -170,7 +176,9 @@ def test_ac2_booking_with_checkin_not_marked_no_show():
                             duration_minutes=60, fixed_now=_FIXED_NOW,
                             checked_in_at=check_time)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -192,7 +200,9 @@ def test_ac2_desk_booking_not_marked_no_show():
     booking = _make_booking(user, resource, start_offset_minutes=-20,
                             duration_minutes=480, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -214,7 +224,9 @@ def test_ac2_parking_booking_not_marked_no_show():
     booking = _make_booking(user, resource, start_offset_minutes=-20,
                             duration_minutes=480, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -237,7 +249,9 @@ def test_ac2_meeting_room_not_past_threshold_not_marked():
     booking = _make_booking(user, resource, start_offset_minutes=-10,
                             duration_minutes=60, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -260,7 +274,9 @@ def test_ac2_already_cancelled_booking_not_affected():
                             duration_minutes=60, status='cancelled',
                             fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -283,7 +299,9 @@ def test_ac2_already_completed_booking_not_affected():
                             duration_minutes=60, status='completed',
                             fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()
@@ -322,9 +340,11 @@ def test_ac3_checkin_returns_200_and_sets_checked_in_at():
 
 
 @pytest.mark.django_db
-def test_ac3_checkin_by_company_admin_returns_200():
+def test_ac3_checkin_by_company_admin_returns_403():
     """
-    AC-3: A company_admin can check in any booking in their company.
+    AC-3: company_admin cannot check in on another user's booking.
+    Check-in is a physical presence confirmation — only the booking owner
+    (or superadmin for emergency override) may perform it.
     """
     company = _make_company('a3b')
     admin = _make_user(company, 'a3b_admin', role='company_admin')
@@ -335,6 +355,35 @@ def test_ac3_checkin_by_company_admin_returns_200():
 
     client = APIClient()
     client.force_authenticate(user=admin)
+
+    response = client.post(f'/api/v1/bookings/reservations/{booking.id}/check-in/')
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+def test_ac3_checkin_by_superadmin_returns_200():
+    """
+    AC-3: superadmin can check in on any booking (emergency override).
+    Returns 200 and sets checked_in_at.
+    """
+    company = _make_company('a3sa')
+    employee = _make_user(company, 'a3sa_emp')
+    resource = _make_resource('a3sa', resource_type='meeting_room')
+    booking = _make_booking(employee, resource, start_offset_minutes=-5,
+                            duration_minutes=60, fixed_now=_FIXED_NOW)
+
+    superadmin = User.objects.create_user(
+        email='superadmin_a3sa@test.com',
+        password='pass',
+        first_name='Super',
+        last_name='Admin',
+        role='superadmin',
+        is_email_verified=True,
+    )
+
+    client = APIClient()
+    client.force_authenticate(user=superadmin)
 
     response = client.post(f'/api/v1/bookings/reservations/{booking.id}/check-in/')
 
@@ -658,7 +707,9 @@ def test_ac9_ended_booking_not_marked_no_show():
     booking = _make_booking(user, resource, start_offset_minutes=-20,
                             duration_minutes=10, fixed_now=_FIXED_NOW)
 
-    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW):
+    with patch('apps.bookings.tasks.timezone.now', return_value=_FIXED_NOW), \
+            patch('apps.bookings.tasks.settings') as mock_settings:
+        mock_settings.NO_SHOW_MINUTES = 15
         count = mark_no_show_bookings()
 
     booking.refresh_from_db()

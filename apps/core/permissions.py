@@ -142,3 +142,36 @@ class IsOwnerOrAdmin(_AuthenticatedPermission):
         if user.role == 'company_admin' and hasattr(obj, 'company'):
             return obj.company_id == user.company_id
         return False
+
+
+class IsOwnerOrSuperAdmin(_AuthenticatedPermission):
+    """
+    Object-level permission for actions that require physical presence or
+    personal ownership — only the object owner or a superadmin may proceed.
+    company_admin is intentionally excluded (unlike IsOwnerOrAdmin).
+
+    Grants access when the requesting user:
+      - is a superadmin (emergency / platform-level override), or
+      - owns the object (obj.<owner_field> == request.user).
+
+    ``owner_field`` can be overridden on the view class::
+
+        class MyView(RetrieveUpdateAPIView):
+            permission_classes = [IsOwnerOrSuperAdmin]
+            # default is 'user'; override if the FK is named differently:
+            # owner_field = 'created_by'
+    """
+
+    owner_field = 'user'
+
+    def _has_role_permission(self, request, view):
+        # has_permission is satisfied for any authenticated user;
+        # the real gate is has_object_permission below.
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if user.role == 'superadmin':
+            return True
+        owner = getattr(obj, self.owner_field, None)
+        return owner == user

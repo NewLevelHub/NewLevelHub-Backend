@@ -22,7 +22,8 @@ from drf_spectacular.types import OpenApiTypes
 import rest_framework.fields as fields
 
 from apps.core.permissions import (
-    IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsEmailVerifiedOrSuperAdmin,
+    IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
+    IsEmailVerifiedOrSuperAdmin,
 )
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
@@ -1737,7 +1738,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         },
     )
     @action(detail=True, methods=['post'], url_path='check-in',
-            permission_classes=[IsOwnerOrAdmin])
+            permission_classes=[IsOwnerOrSuperAdmin])
     def check_in(self, request, pk=None):
         with transaction.atomic():
             try:

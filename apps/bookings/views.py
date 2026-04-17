@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta
 
 from django.db.models import Prefetch, Q
+from django.http import Http404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import viewsets, status
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema,
@@ -20,7 +21,10 @@ from drf_spectacular.utils import (
 from drf_spectacular.types import OpenApiTypes
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import (
+    IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
+    IsEmailVerifiedOrSuperAdmin,
+)
 from apps.notifications.models import Notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.users.models import User
@@ -1428,17 +1432,10 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             404: OpenApiResponse(description='Booking not found.'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='cancel')
+    @action(detail=True, methods=['post'], url_path='cancel',
+            permission_classes=[IsOwnerOrAdmin])
     def cancel(self, request, pk=None):
         booking = self.get_object()
-        user = request.user
-        # Only the booking owner, a company_admin of the same company, or a superadmin may cancel.
-        if (
-            booking.user != user
-            and not user.is_company_admin()
-            and not user.is_superadmin()
-        ):
-            raise PermissionDenied('You can only cancel your own bookings.')
         if booking.status == 'cancelled':
             raise ValidationError({'detail': 'Booking is already cancelled.'})
 
@@ -1485,12 +1482,10 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             404: OpenApiResponse(description='Booking not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='admin-cancel')
+    @action(detail=True, methods=['post'], url_path='admin-cancel',
+            permission_classes=[IsCompanyAdmin])
     def admin_cancel(self, request, pk=None):
         user = request.user
-        if not user.is_company_admin():
-            raise PermissionDenied('Only company admins can perform admin cancellation.')
-
         booking = self.get_object()
         reason = str(request.data.get('reason', '')).strip()
         if not reason:
@@ -1499,7 +1494,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         booking.status = 'cancelled'
         booking.cancelled_by = user
         booking.cancel_reason = reason
-        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason'])
 
         Notification.objects.create(
             user=booking.user,
@@ -1684,6 +1679,94 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
     @extend_schema(
         tags=['Bookings'],
+        summary='Check in to a booking',
+        description=(
+            'Confirms presence at the booked resource. '
+            'Sets `checked_in_at` to the current timestamp, preventing the booking from '
+            'being marked as `no_show` by the periodic task.\n\n'
+            '**Access:** the booking owner, a company_admin of the same company, or superadmin.\n\n'
+            '**Validation:**\n'
+            '- Booking must be in `confirmed` status.\n'
+            '- Booking must not have already been checked in (`checked_in_at` is null).'
+        ),
+        request=None,
+        responses={
+            200: OpenApiResponse(
+                response=BookingSerializer,
+                description='Check-in recorded.',
+                examples=[
+                    OpenApiExample(
+                        name='Checked in',
+                        value={
+                            'id': 101,
+                            'status': 'confirmed',
+                            'checked_in_at': '2025-04-20T09:05:00+06:00',
+                        },
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Booking already checked in or not in a confirmable state.',
+                examples=[
+                    OpenApiExample(
+                        name='Already checked in',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Booking has already been checked in.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                    OpenApiExample(
+                        name='Wrong status',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': {'detail': 'Check-in is only allowed for confirmed bookings.'},
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Not allowed.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Booking not found.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='check-in',
+            permission_classes=[IsOwnerOrSuperAdmin])
+    def check_in(self, request, pk=None):
+        with transaction.atomic():
+            try:
+                booking = (
+                    self.get_queryset()
+                    .select_for_update()
+                    .get(pk=self.kwargs['pk'])
+                )
+            except Booking.DoesNotExist:
+                raise Http404
+            self.check_object_permissions(request, booking)
+
+            now = timezone.now()
+            if now < booking.start_time:
+                raise ValidationError({'detail': 'Check-in is not allowed before the booking start time.'})
+
+            if booking.status != 'confirmed':
+                raise ValidationError({'detail': 'Check-in is only allowed for confirmed bookings.'})
+
+            if booking.checked_in_at is not None:
+                raise ValidationError({'detail': 'Booking has already been checked in.'})
+
+            booking.checked_in_at = now
+            booking.save(update_fields=['checked_in_at'])
+        return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
         summary='Manually trigger auto-complete bookings (superadmin)',
         description=(
             'Runs the auto_complete_bookings Celery task synchronously. '
@@ -1729,6 +1812,31 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         from .tasks import send_booking_reminders
         count = send_booking_reminders()
         return Response({'reminders_sent': count})
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger no-show detection (superadmin)',
+        description=(
+            'Runs the mark_no_show_bookings Celery task synchronously. '
+            'Marks meeting_room bookings as no_show when start_time is more than '
+            'NO_SHOW_MINUTES in the past and no check-in was recorded. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='NoShowResponse',
+                fields={'no_show_marked': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-no-show',
+            permission_classes=[IsSuperAdmin])
+    def run_no_show(self, request):
+        from .tasks import mark_no_show_bookings
+        count = mark_no_show_bookings()
+        return Response({'no_show_marked': count})
 
 
 # ---------------------------------------------------------------------------

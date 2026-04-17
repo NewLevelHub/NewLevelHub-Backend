@@ -1992,13 +1992,36 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         return RecurringBookingSerializer
 
     def get_queryset(self):
-        return (
+        queryset = (
             super()
             .get_queryset()
-            .filter(user=self.request.user)
             .select_related('resource', 'user', 'company')
             .order_by('id')
         )
+        user = self.request.user
+        if user.is_superadmin():
+            return queryset
+        if user.is_company_admin():
+            return queryset.filter(
+                Q(user_id=user.id)
+                | Q(company_id=user.company_id, user__role='employee')
+            )
+        return queryset.filter(user_id=user.id)
+
+    def _get_recurring_for_destroy(self, *, pk):
+        user = self.request.user
+        queryset = RecurringBooking.objects.select_related('resource', 'user', 'company')
+
+        if user.is_superadmin():
+            return queryset.filter(pk=pk).first()
+
+        if user.is_company_admin():
+            return queryset.filter(pk=pk).filter(
+                Q(user_id=user.id)
+                | Q(company_id=user.company_id, user__role='employee')
+            ).first()
+
+        return queryset.filter(pk=pk, user_id=user.id).first()
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -2028,7 +2051,9 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         return Response(output, status=status.HTTP_201_CREATED, headers=headers)
 
     def destroy(self, request, *args, **kwargs):
-        recurring_booking = self.get_object()
+        recurring_booking = self._get_recurring_for_destroy(pk=kwargs.get('pk'))
+        if recurring_booking is None:
+            raise Http404
         Booking.objects.filter(
             recurring_booking=recurring_booking,
             start_time__gt=timezone.now(),

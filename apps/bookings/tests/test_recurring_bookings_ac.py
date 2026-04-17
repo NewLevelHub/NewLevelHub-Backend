@@ -68,6 +68,19 @@ def another_employee(db, company):
 
 
 @pytest.fixture
+def another_company_admin(db, company):
+    return User.objects.create_user(
+        email='another-admin@recurring.test',
+        password='pass',
+        first_name='Another',
+        last_name='Admin',
+        role='company_admin',
+        company=company,
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
 def guest_user(db):
     return User.objects.create_user(
         email='guest@recurring.test',
@@ -75,6 +88,18 @@ def guest_user(db):
         first_name='Guest',
         last_name='User',
         role='guest',
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
+def superadmin(db):
+    return User.objects.create_user(
+        email='superadmin@recurring.test',
+        password='pass',
+        first_name='Super',
+        last_name='Admin',
+        role='superadmin',
         is_email_verified=True,
     )
 
@@ -281,6 +306,59 @@ class TestRecurringBookingListAC:
         ids = [item['id'] for item in _results(response)]
         assert ids == [own.id]
 
+    def test_company_admin_get_includes_own_and_employee_series_same_company(
+        self, api_client, company_admin, employee, another_company_admin, other_company_employee,
+        company, other_company, desk_resource
+    ):
+        own_series = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=company_admin,
+            company=company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+        employee_series = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=employee,
+            company=company,
+            day_of_week=1,
+            start_time='11:00',
+            end_time='12:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+        RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=another_company_admin,
+            company=company,
+            day_of_week=2,
+            start_time='13:00',
+            end_time='14:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+        RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=other_company_employee,
+            company=other_company,
+            day_of_week=3,
+            start_time='15:00',
+            end_time='16:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(RECURRING_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        rows = _results(response)
+        assert sorted(item['id'] for item in rows) == sorted([own_series.id, employee_series.id])
+        assert sorted(item['user_role'] for item in rows) == ['company_admin', 'employee']
+
 
 @pytest.mark.django_db
 class TestRecurringBookingDeleteAC:
@@ -324,6 +402,106 @@ class TestRecurringBookingDeleteAC:
         assert response.status_code == status.HTTP_204_NO_CONTENT
         assert not Booking.objects.filter(recurring_booking=recurring, start_time__gt=timezone.now()).exists()
         assert Booking.objects.filter(pk=past_booking.pk).exists()
+
+    def test_company_admin_can_cancel_employee_series_same_company(
+        self, api_client, company_admin, employee, company, desk_resource
+    ):
+        recurring = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=employee,
+            company=company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.delete(f'{RECURRING_URL}{recurring.id}/')
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert not RecurringBooking.objects.filter(pk=recurring.id).exists()
+
+    def test_company_admin_cannot_cancel_superadmin_series(
+        self, api_client, company_admin, superadmin, desk_resource
+    ):
+        recurring = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=superadmin,
+            company=company_admin.company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.delete(f'{RECURRING_URL}{recurring.id}/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert RecurringBooking.objects.filter(pk=recurring.id).exists()
+
+    def test_company_admin_cannot_cancel_employee_series_other_company(
+        self, api_client, company_admin, other_company_employee, other_company, desk_resource
+    ):
+        recurring = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=other_company_employee,
+            company=other_company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.delete(f'{RECURRING_URL}{recurring.id}/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert RecurringBooking.objects.filter(pk=recurring.id).exists()
+
+    def test_employee_cannot_cancel_another_employee_series(
+        self, api_client, employee, another_employee, company, desk_resource
+    ):
+        recurring = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=another_employee,
+            company=company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.delete(f'{RECURRING_URL}{recurring.id}/')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert RecurringBooking.objects.filter(pk=recurring.id).exists()
+
+    def test_superadmin_can_cancel_any_series(
+        self, api_client, superadmin, other_company_employee, other_company, desk_resource
+    ):
+        recurring = RecurringBooking.objects.create(
+            resource=desk_resource,
+            user=other_company_employee,
+            company=other_company,
+            day_of_week=0,
+            start_time='09:00',
+            end_time='10:00',
+            valid_from=date.today(),
+            valid_until=date.today() + timedelta(days=30),
+        )
+
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.delete(f'{RECURRING_URL}{recurring.id}/')
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+        assert not RecurringBooking.objects.filter(pk=recurring.id).exists()
 
 
 @pytest.mark.django_db

@@ -677,6 +677,8 @@ class BookingSerializer(serializers.ModelSerializer):
 
 class RecurringBookingSerializer(serializers.ModelSerializer):
     resource_id = serializers.IntegerField(read_only=True)
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_role = serializers.CharField(source='user.role', read_only=True)
 
     class Meta:
         model = RecurringBooking
@@ -685,6 +687,8 @@ class RecurringBookingSerializer(serializers.ModelSerializer):
             'resource',
             'resource_id',
             'user',
+            'user_name',
+            'user_role',
             'company',
             'day_of_week',
             'start_time',

@@ -653,7 +653,7 @@ class BookingSerializer(serializers.ModelSerializer):
             'id', 'resource', 'resource_name', 'user', 'user_name', 'company',
             'start_time', 'end_time', 'status', 'description',
             'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
-            'checked_in_at','created_at', 'updated_at',
+            'checked_in_at', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'company', 'checked_in_at', 'created_at', 'updated_at']
 

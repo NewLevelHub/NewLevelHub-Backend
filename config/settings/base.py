@@ -168,6 +168,10 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Analytics', 'description': 'Аналитика и отчёты'},
         {'name': 'System', 'description': 'Health check и системные эндпоинты'},
     ],
+    'POSTPROCESSING_HOOKS': [
+        'drf_spectacular.hooks.postprocess_schema_enums',
+        'apps.core.schema.normalize_operation_tags',
+    ],
 }
 
 CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')

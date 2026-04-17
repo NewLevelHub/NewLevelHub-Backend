@@ -641,7 +641,7 @@ class TestResourceCatalogStatus:
         with patch('django.utils.timezone.now', return_value=fixed):
             r = api_client.get(RESOURCES_URL)
         row = next(x for x in _list_results(r) if x['id'] == rid)
-        assert row['status'] in ('occupied', 'soon_available')
+        assert row['status'] == 'blocked'
 
 
 @pytest.mark.django_db
@@ -815,3 +815,154 @@ class TestResourceScheduleEndpoints:
         api_client.force_authenticate(user=guest_user)
         r = api_client.get(f'{RESOURCES_URL}{rid}/schedule/', {'date': '2031-03-02'})
         assert r.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestResourceBlockingAcceptanceCriteria:
+    def test_superadmin_blocks_resource_and_cancels_overlapping_bookings_with_notification(
+        self, api_client, superadmin, employee, company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        create_resource = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AC Block Desk', 'floor': 1},
+            format='json',
+        )
+        resource_id = create_resource.json()['id']
+        resource = Resource.objects.get(pk=resource_id)
+        start_time = timezone.now() + timedelta(days=1)
+        end_time = start_time + timedelta(hours=2)
+        booking = Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=start_time,
+            end_time=end_time,
+            status='confirmed',
+        )
+
+        block_response = api_client.post(
+            f'{RESOURCES_URL}{resource_id}/block/',
+            {
+                'start_time': (start_time + timedelta(minutes=30)).isoformat(),
+                'end_time': (end_time + timedelta(hours=1)).isoformat(),
+                'reason': 'Ремонт кондиционера',
+            },
+            format='json',
+        )
+        assert block_response.status_code == status.HTTP_201_CREATED
+        booking.refresh_from_db()
+        assert booking.status == 'cancelled'
+        assert booking.cancel_reason == 'Ремонт кондиционера'
+        assert booking.cancelled_by_id == superadmin.id
+        notification = Notification.objects.filter(
+            user=employee,
+            notification_type='booking_cancelled',
+        ).order_by('-id').first()
+        assert notification is not None
+        assert 'Ремонт кондиционера' in notification.body
+
+    def test_non_superadmin_cannot_block_resource(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        create_resource = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AC Restrict Desk', 'floor': 1},
+            format='json',
+        )
+        resource_id = create_resource.json()['id']
+        api_client.force_authenticate(user=employee)
+        block_response = api_client.post(
+            f'{RESOURCES_URL}{resource_id}/block/',
+            {
+                'start_time': (timezone.now() + timedelta(days=1)).isoformat(),
+                'end_time': (timezone.now() + timedelta(days=1, hours=2)).isoformat(),
+                'reason': 'event',
+            },
+            format='json',
+        )
+        assert block_response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_booking_conflict_control_considers_resource_block(
+        self, api_client, superadmin, employee
+    ):
+        employee.is_email_verified = True
+        employee.save(update_fields=['is_email_verified'])
+        api_client.force_authenticate(user=superadmin)
+        create_resource = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AC Conflict Desk', 'floor': 1},
+            format='json',
+        )
+        resource_id = create_resource.json()['id']
+        resource = Resource.objects.get(pk=resource_id)
+        blocked_from = timezone.now() + timedelta(days=2)
+        blocked_to = blocked_from + timedelta(hours=2)
+        ResourceBlock.objects.create(
+            resource=resource,
+            blocked_by=superadmin,
+            start_time=blocked_from,
+            end_time=blocked_to,
+            reason='Внутреннее мероприятие',
+        )
+
+        api_client.force_authenticate(user=employee)
+        booking_response = api_client.post(
+            '/api/v1/bookings/reservations/',
+            {
+                'resource_id': resource_id,
+                'start_time': (blocked_from + timedelta(minutes=30)).isoformat(),
+                'end_time': (blocked_from + timedelta(hours=1)).isoformat(),
+            },
+            format='json',
+        )
+        assert booking_response.status_code == status.HTTP_409_CONFLICT
+
+    def test_can_list_and_delete_resource_blocks(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        create_resource = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AC Blocks Desk', 'floor': 1},
+            format='json',
+        )
+        resource_id = create_resource.json()['id']
+        create_block = ResourceBlock.objects.create(
+            resource_id=resource_id,
+            blocked_by=superadmin,
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1, hours=2),
+            reason='Ремонт',
+        )
+        block_id = create_block.id
+
+        blocks_response = api_client.get(f'{RESOURCES_URL}{resource_id}/blocks/')
+        assert blocks_response.status_code == status.HTTP_200_OK
+        blocks_payload = blocks_response.json()
+        assert isinstance(blocks_payload, list)
+        assert any(item['id'] == block_id for item in blocks_payload)
+
+        delete_response = api_client.delete(f'{RESOURCES_URL}{resource_id}/blocks/{block_id}/')
+        assert delete_response.status_code == status.HTTP_204_NO_CONTENT
+        assert not ResourceBlock.objects.filter(pk=block_id).exists()
+
+    def test_catalog_marks_blocked_status_with_reason(self, api_client, superadmin, employee):
+        api_client.force_authenticate(user=superadmin)
+        create_resource = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AC Catalog Desk', 'floor': 1},
+            format='json',
+        )
+        resource_id = create_resource.json()['id']
+        ResourceBlock.objects.create(
+            resource_id=resource_id,
+            blocked_by=superadmin,
+            start_time=timezone.now() - timedelta(minutes=5),
+            end_time=timezone.now() + timedelta(hours=3),
+            reason='Ремонт покрытия',
+        )
+
+        api_client.force_authenticate(user=employee)
+        catalog_response = api_client.get(RESOURCES_URL)
+        assert catalog_response.status_code == status.HTTP_200_OK
+        row = next(item for item in _list_results(catalog_response) if item['id'] == resource_id)
+        assert row['status'] == 'blocked'
+        assert row['reason'] == 'Ремонт покрытия'

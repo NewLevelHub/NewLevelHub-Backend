@@ -749,7 +749,16 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'schedule':
             return [IsCompanyMember()]
-        if self.action in ('create', 'update', 'partial_update', 'destroy', 'block', 'bulk_create'):
+        if self.action in (
+            'create',
+            'update',
+            'partial_update',
+            'destroy',
+            'block',
+            'blocks',
+            'unblock',
+            'bulk_create',
+        ):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
 
@@ -785,6 +794,33 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 notification_type='booking_cancelled',
                 title=f'Бронирование отменено: {resource.name}',
                 body='Ресурс деактивирован администратором.',
+                url='',
+            )
+
+    def _cancel_overlapping_bookings_for_block(self, *, resource, block, admin):
+        cancellation_reason = block.reason or 'Resource blocked by administrator'
+        now = timezone.now()
+        overlaps = resource.bookings.filter(
+            status='confirmed',
+            start_time__lt=block.end_time,
+            end_time__gt=block.start_time,
+        )
+        for booking in overlaps:
+            booking.status = 'cancelled'
+            booking.cancelled_by = admin
+            booking.cancel_reason = cancellation_reason
+            booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+            BookingCancellationAudit.objects.create(
+                booking=booking,
+                cancelled_by=admin,
+                cancel_reason=cancellation_reason,
+                cancelled_at=now,
+            )
+            Notification.objects.create(
+                user=booking.user,
+                notification_type='booking_cancelled',
+                title=f'Бронирование отменено: {resource.name}',
+                body=cancellation_reason,
                 url='',
             )
 
@@ -968,8 +1004,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
         description=(
             'Creates an admin block that prevents bookings during the specified interval. '
             'Typical use cases: maintenance, internal events, cleaning.\n\n'
-            '**Note:** existing overlapping confirmed bookings are NOT automatically cancelled '
-            '(TODO — will be added in a future release). Cancel them manually if needed.\n\n'
+            'Overlapping confirmed bookings are automatically cancelled and affected users '
+            'receive in-app notifications with the block reason.\n\n'
             '**Access:** `superadmin` only.'
         ),
         request=ResourceBlockSerializer,
@@ -1016,11 +1052,42 @@ class ResourceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='block')
     def block(self, request, pk=None):
         resource = self.get_object()
-        serializer = ResourceBlockSerializer(data=request.data)
+        payload = dict(request.data)
+        payload['resource'] = resource.id
+        serializer = ResourceBlockSerializer(data=payload)
         serializer.is_valid(raise_exception=True)
-        serializer.save(resource=resource, blocked_by=request.user)
-        # TODO: отменить пересекающиеся бронирования с уведомлением
+        block = serializer.save(resource=resource, blocked_by=request.user)
+        self._cancel_overlapping_bookings_for_block(
+            resource=resource,
+            block=block,
+            admin=request.user,
+        )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='List resource blocks (superadmin only)',
+        responses={200: ResourceBlockSerializer(many=True)},
+    )
+    @action(detail=True, methods=['get'], url_path='blocks')
+    def blocks(self, request, pk=None):
+        resource = self.get_object()
+        queryset = resource.blocks.order_by('start_time', 'id')
+        return Response(ResourceBlockSerializer(queryset, many=True).data)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Remove resource block (superadmin only)',
+        responses={204: OpenApiResponse(description='Block removed.')},
+    )
+    @action(detail=True, methods=['delete'], url_path=r'blocks/(?P<block_id>[^/.]+)')
+    def unblock(self, request, pk=None, block_id=None):
+        resource = self.get_object()
+        block = resource.blocks.filter(pk=block_id).first()
+        if block is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        block.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ---------------------------------------------------------------------------
@@ -1640,6 +1707,54 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         if page is not None:
             return self.get_paginated_response(BookingSerializer(page, many=True).data)
         return Response(BookingSerializer(qs, many=True).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger auto-complete bookings (superadmin)',
+        description=(
+            'Runs the auto_complete_bookings Celery task synchronously. '
+            'Marks all confirmed bookings whose end_time is in the past as completed. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='AutoCompleteResponse',
+                fields={'completed': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-auto-complete',
+            permission_classes=[IsSuperAdmin])
+    def run_auto_complete(self, request):
+        from .tasks import auto_complete_bookings
+        count = auto_complete_bookings()
+        return Response({'completed': count})
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Manually trigger booking reminders (superadmin)',
+        description=(
+            'Runs the send_booking_reminders Celery task synchronously. '
+            'Sends reminders for bookings that are starting within the configured reminder window. '
+            'Superadmin only.'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='RemindersResponse',
+                fields={'reminders_sent': fields.IntegerField()},
+            ),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='run-reminders',
+            permission_classes=[IsSuperAdmin])
+    def run_reminders(self, request):
+        from .tasks import send_booking_reminders
+        count = send_booking_reminders()
+        return Response({'reminders_sent': count})
 
 
 # ---------------------------------------------------------------------------

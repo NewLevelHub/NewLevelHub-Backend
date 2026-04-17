@@ -628,13 +628,14 @@ class BookingSerializer(serializers.ModelSerializer):
     resource_name = serializers.CharField(source='resource.name', read_only=True)
     user_name = serializers.CharField(source='user.full_name', read_only=True)
     participants = serializers.SerializerMethodField()
+    recurring_booking_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Booking
         fields = [
             'id', 'resource', 'resource_name', 'user', 'user_name', 'company',
             'start_time', 'end_time', 'status', 'description',
-            'cancelled_by', 'cancel_reason', 'participants',
+            'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'company', 'created_at', 'updated_at']
@@ -651,10 +652,67 @@ class BookingSerializer(serializers.ModelSerializer):
 
 
 class RecurringBookingSerializer(serializers.ModelSerializer):
+    resource_id = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = RecurringBooking
-        fields = '__all__'
+        fields = [
+            'id',
+            'resource',
+            'resource_id',
+            'user',
+            'company',
+            'day_of_week',
+            'start_time',
+            'end_time',
+            'is_active',
+            'valid_from',
+            'valid_until',
+            'created_at',
+            'updated_at',
+        ]
         read_only_fields = ['id', 'user', 'company', 'created_at', 'updated_at']
+
+
+class RecurringBookingCreateSerializer(serializers.Serializer):
+    resource_id = serializers.IntegerField()
+    day_of_week = serializers.IntegerField(min_value=0, max_value=6)
+    start_time = serializers.TimeField()
+    end_time = serializers.TimeField()
+    repeat_until = serializers.DateField()
+
+    def validate_resource_id(self, value):
+        try:
+            return Resource.objects.get(pk=value)
+        except Resource.DoesNotExist as exc:
+            raise serializers.ValidationError('Resource does not exist.') from exc
+
+    def validate(self, attrs):
+        resource = attrs['resource_id']
+        request = self.context['request']
+        user = request.user
+
+        if attrs['start_time'] >= attrs['end_time']:
+            raise serializers.ValidationError({'end_time': 'end_time must be later than start_time.'})
+
+        if attrs['repeat_until'] < timezone.localdate():
+            raise serializers.ValidationError({'repeat_until': 'repeat_until must not be in the past.'})
+
+        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+            raise serializers.ValidationError({'resource_id': 'Resource is assigned to another company.'})
+
+        available_days = resource.available_days or list(range(7))
+        if attrs['day_of_week'] not in available_days:
+            raise serializers.ValidationError({'day_of_week': 'Booking is outside resource availability days.'})
+
+        if (
+            attrs['start_time'] < resource.available_from
+            or attrs['end_time'] > resource.available_until
+        ):
+            raise serializers.ValidationError({'detail': 'Booking is outside resource availability hours.'})
+
+        attrs['resource'] = resource
+        return attrs
 
 
 class ResourceBlockSerializer(serializers.ModelSerializer):

@@ -42,11 +42,13 @@ from .serializers import (
     BookingSerializer,
     BookingCreateSerializer,
     RecurringBookingSerializer,
+    RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
     _EQUIPMENT_KEYS,
 )
 from .filters import ResourceFilter, BookingFilter
 from .schedule import busy_slots_for_resource, day_range_aware, week_range_for_date
+from .tasks import create_bookings_for_recurring
 
 
 # ---------------------------------------------------------------------------
@@ -1739,5 +1741,52 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     queryset = RecurringBooking.objects.all()
     http_method_names = ['get', 'post', 'patch', 'delete']
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user, company=self.request.user.company)
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return RecurringBookingCreateSerializer
+        return RecurringBookingSerializer
+
+    def get_queryset(self):
+        return (
+            super()
+            .get_queryset()
+            .filter(user=self.request.user)
+            .select_related('resource', 'user', 'company')
+            .order_by('id')
+        )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            recurring_booking = RecurringBooking.objects.create(
+                resource=serializer.validated_data['resource'],
+                user=request.user,
+                company=request.user.company,
+                day_of_week=serializer.validated_data['day_of_week'],
+                start_time=serializer.validated_data['start_time'],
+                end_time=serializer.validated_data['end_time'],
+                valid_from=timezone.localdate(),
+                valid_until=serializer.validated_data['repeat_until'],
+                is_active=True,
+            )
+            skipped_dates = create_bookings_for_recurring(
+                recurring_booking,
+                start_date=recurring_booking.valid_from,
+                end_date=recurring_booking.valid_until,
+            )
+
+        output = RecurringBookingSerializer(recurring_booking, context=self.get_serializer_context()).data
+        output['skipped_dates'] = skipped_dates
+        headers = self.get_success_headers(output)
+        return Response(output, status=status.HTTP_201_CREATED, headers=headers)
+
+    def destroy(self, request, *args, **kwargs):
+        recurring_booking = self.get_object()
+        Booking.objects.filter(
+            recurring_booking=recurring_booking,
+            start_time__gt=timezone.now(),
+        ).delete()
+        recurring_booking.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

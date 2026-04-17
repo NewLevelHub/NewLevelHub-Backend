@@ -81,6 +81,13 @@ class Booking(TimeStampedModel):
         'companies.Company', on_delete=models.SET_NULL,
         null=True, blank=True, related_name='bookings',
     )
+    recurring_booking = models.ForeignKey(
+        'bookings.RecurringBooking',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='bookings',
+    )
 
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)

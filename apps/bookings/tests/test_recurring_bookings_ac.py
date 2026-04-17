@@ -205,7 +205,7 @@ class TestRecurringBookingCreateAC:
 
         second_response = api_client.post(RECURRING_URL, payload, format='json')
         assert second_response.status_code == status.HTTP_400_BAD_REQUEST
-        assert second_response.json()['detail'] == 'Active recurring series for this slot already exists.'
+        assert second_response.json()['detail'] == ['Active recurring series for this slot already exists.']
         assert RecurringBooking.objects.filter(
             user=company_admin,
             resource=desk_resource,

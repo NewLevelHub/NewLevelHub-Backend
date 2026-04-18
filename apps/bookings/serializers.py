@@ -740,10 +740,10 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         ):
             raise serializers.ValidationError({'detail': 'Booking is outside resource availability hours.'})
 
+        # Один слот (ресурс + день недели + интервал времени) — одна активная серия на всех
+        # пользователей компании не дублируем: иначе админ и сотрудник могли бы занять одно и то же время.
         has_duplicate_series = RecurringBooking.objects.filter(
             resource=resource,
-            user=user,
-            company=user.company,
             is_active=True,
             day_of_week=attrs['day_of_week'],
             start_time=attrs['start_time'],

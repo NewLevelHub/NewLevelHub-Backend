@@ -244,6 +244,26 @@ class TestRecurringBookingCreateAC:
             is_active=True,
         ).count() == 1
 
+    def test_company_admin_cannot_duplicate_slot_after_employee(
+        self, api_client, company_admin, employee, desk_resource
+    ):
+        monday = _next_weekday_date(0)
+        repeat_until = monday + timedelta(days=14)
+        payload = {
+            'resource_id': desk_resource.id,
+            'day_of_week': 0,
+            'start_time': '10:00',
+            'end_time': '11:00',
+            'repeat_until': repeat_until.isoformat(),
+        }
+        api_client.force_authenticate(user=employee)
+        first = api_client.post(RECURRING_URL, payload, format='json')
+        assert first.status_code == status.HTTP_201_CREATED, first.json()
+
+        api_client.force_authenticate(user=company_admin)
+        second = api_client.post(RECURRING_URL, payload, format='json')
+        assert second.status_code == status.HTTP_400_BAD_REQUEST
+
     def test_guest_cannot_create_recurring_booking(self, api_client, guest_user, desk_resource):
         monday = _next_weekday_date(0)
         api_client.force_authenticate(user=guest_user)

@@ -180,9 +180,16 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
                 {'detail': 'Only company admins can archive boards.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        board = self.get_object()
-        board.is_archived = True
-        board.save(update_fields=['is_archived', 'updated_at'])
+        user = request.user
+        if user.role == 'superadmin':
+            board = Board.objects.filter(pk=pk).first()
+        else:
+            board = Board.objects.filter(pk=pk, company=user.company).first()
+        if board is None:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not board.is_archived:
+            board.is_archived = True
+            board.save(update_fields=['is_archived', 'updated_at'])
         return Response(BoardSerializer(board).data)
 
 

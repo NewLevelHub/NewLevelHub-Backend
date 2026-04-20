@@ -17,6 +17,10 @@ def archive_url(pk):
     return f'/api/v1/crm/boards/{pk}/archive/'
 
 
+def unarchive_url(pk):
+    return f'/api/v1/crm/boards/{pk}/unarchive/'
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -395,3 +399,88 @@ class TestBoardArchive:
         response_second = api_client.post(archive_url(board_b.id))
         assert response_second.status_code == status.HTTP_200_OK
         assert response_second.data['is_archived'] is True
+
+
+# ---------------------------------------------------------------------------
+# Unarchive action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBoardUnarchive:
+    def test_unarchive_happy_path(self, api_client, admin_a, company_a, archived_board_a):
+        """Admin archives a board and then unarchives it — board must be active again."""
+        api_client.force_authenticate(user=admin_a)
+        response = api_client.post(unarchive_url(archived_board_a.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['id'] == archived_board_a.id
+        assert response.data['is_archived'] is False
+        archived_board_a.refresh_from_db()
+        assert archived_board_a.is_archived is False
+
+    def test_unarchive_limit_exceeded(self, api_client, admin_a, company_a):
+        """max_boards=2, 2 active + 1 archived → unarchiving the archived one returns 400."""
+        company_a.max_boards = 2
+        company_a.save(update_fields=['max_boards'])
+
+        Board.objects.create(company=company_a, name='Active 1', created_by=admin_a)
+        Board.objects.create(company=company_a, name='Active 2', created_by=admin_a)
+        archived = Board.objects.create(
+            company=company_a, name='Archived', created_by=admin_a, is_archived=True,
+        )
+
+        api_client.force_authenticate(user=admin_a)
+        response = api_client.post(unarchive_url(archived.id))
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'detail' in response.data
+        assert 'лимит' in response.data['detail']
+        archived.refresh_from_db()
+        assert archived.is_archived is True
+
+    def test_unarchive_already_active_is_idempotent(self, api_client, admin_a, board_a):
+        """Unarchiving a board that is already active returns 200 without error."""
+        api_client.force_authenticate(user=admin_a)
+        response = api_client.post(unarchive_url(board_a.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['id'] == board_a.id
+        assert response.data['is_archived'] is False
+
+    def test_unarchive_by_employee_returns_403(self, api_client, employee_a, archived_board_a):
+        """Employees are not allowed to unarchive boards."""
+        api_client.force_authenticate(user=employee_a)
+        response = api_client.post(unarchive_url(archived_board_a.id))
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        archived_board_a.refresh_from_db()
+        assert archived_board_a.is_archived is True
+
+    def test_unarchive_superadmin_any_company(self, api_client, superadmin, admin_b, company_b):
+        """Superadmin can unarchive a board belonging to any company."""
+        board_b = Board.objects.create(
+            company=company_b, name='Archived B', created_by=admin_b, is_archived=True,
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(unarchive_url(board_b.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['is_archived'] is False
+        board_b.refresh_from_db()
+        assert board_b.is_archived is False
+
+    def test_unarchive_unauthenticated_returns_401(self, api_client, archived_board_a):
+        response = api_client.post(unarchive_url(archived_board_a.id))
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_unarchive_other_company_board_returns_404(
+        self, api_client, admin_a, admin_b, company_b,
+    ):
+        """An admin cannot unarchive a board from a different company."""
+        board_b = Board.objects.create(
+            company=company_b, name='Archived B', created_by=admin_b, is_archived=True,
+        )
+        api_client.force_authenticate(user=admin_a)
+        response = api_client.post(unarchive_url(board_b.id))
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND

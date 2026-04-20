@@ -380,16 +380,16 @@ class TestCompanyDirectoryProfileContract:
             resource=resource,
             user=employee_a,
             company=company_a,
-            start_time=now - timedelta(days=2),
-            end_time=now - timedelta(days=2) + timedelta(hours=1),
+            start_time=now + timedelta(days=2),
+            end_time=now + timedelta(days=2, hours=1),
             status="confirmed",
         )
         Booking.objects.create(
             resource=resource,
             user=employee_a,
             company=company_a,
-            start_time=now - timedelta(days=40),
-            end_time=now - timedelta(days=40) + timedelta(hours=1),
+            start_time=now + timedelta(days=40),
+            end_time=now + timedelta(days=40, hours=1),
             status="confirmed",
         )
 
@@ -412,4 +412,31 @@ class TestCompanyDirectoryProfileContract:
         }
         assert required.issubset(set(response.data.keys()))
         assert response.data["tasks_count"] == 2
+        assert response.data["bookings_last_30_days"] == 1
+
+    def test_bookings_last_30_days_excludes_future_bookings_outside_30_day_window(
+        self, api_client, company_a, company_admin_a, employee_a
+    ):
+        resource = Resource.objects.create(name="Desk A2", resource_type="desk")
+        now = timezone.now()
+        Booking.objects.create(
+            resource=resource,
+            user=employee_a,
+            company=company_a,
+            start_time=now + timedelta(days=1),
+            end_time=now + timedelta(days=1, hours=1),
+            status="confirmed",
+        )
+        Booking.objects.create(
+            resource=resource,
+            user=employee_a,
+            company=company_a,
+            start_time=now + timedelta(days=45),
+            end_time=now + timedelta(days=45, hours=1),
+            status="confirmed",
+        )
+
+        auth(api_client, company_admin_a)
+        response = api_client.get(directory_profile_url(company_a.id, employee_a.id))
+        assert response.status_code == status.HTTP_200_OK
         assert response.data["bookings_last_30_days"] == 1

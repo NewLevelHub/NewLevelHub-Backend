@@ -975,7 +975,8 @@ class CompanyDirectoryProfileView(APIView):
     def get(self, request, company_id, user_id):
         company = self._get_company(request, company_id)
         member = get_object_or_404(User, id=user_id, company=company)
-        thirty_days_ago = timezone.now() - timedelta(days=30)
+        now = timezone.now()
+        thirty_days_ahead = now + timedelta(days=30)
 
         tasks_count = Task.objects.filter(
             assignee=member,
@@ -984,7 +985,8 @@ class CompanyDirectoryProfileView(APIView):
         bookings_last_30_days = Booking.objects.filter(
             user=member,
             company=company,
-            start_time__gte=thirty_days_ago,
+            start_time__gte=now,
+            start_time__lte=thirty_days_ahead,
         ).count()
 
         member.tasks_count = tasks_count

@@ -2023,9 +2023,21 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
         return queryset.filter(pk=pk, user_id=user.id).first()
 
+    @staticmethod
+    def _next_matching_weekday(*, day_of_week, base_date):
+        """Return the next calendar date for weekday (strictly after base_date)."""
+        days_ahead = (day_of_week - base_date.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return base_date + timedelta(days=days_ahead)
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        valid_from = self._next_matching_weekday(
+            day_of_week=serializer.validated_data['day_of_week'],
+            base_date=timezone.localdate(),
+        )
 
         with transaction.atomic():
             recurring_booking = RecurringBooking.objects.create(
@@ -2035,7 +2047,7 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 day_of_week=serializer.validated_data['day_of_week'],
                 start_time=serializer.validated_data['start_time'],
                 end_time=serializer.validated_data['end_time'],
-                valid_from=timezone.localdate(),
+                valid_from=valid_from,
                 valid_until=serializer.validated_data['repeat_until'],
                 is_active=True,
             )

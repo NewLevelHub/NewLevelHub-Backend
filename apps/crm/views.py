@@ -192,6 +192,63 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
             board.save(update_fields=['is_archived', 'updated_at'])
         return Response(BoardSerializer(board).data)
 
+    @extend_schema(
+        tags=['CRM'],
+        summary='Unarchive board',
+        description=(
+            'Marks the board as active (sets `is_archived=False`). '
+            'Restricted to `company_admin` or `superadmin`; employees receive 403. '
+            'Returns 400 if the company has already reached its plan limit of active boards. '
+            'If the board is already active the action is idempotent and returns 200.'
+        ),
+        request=None,
+        responses={
+            200: BoardSerializer,
+            400: OpenApiResponse(
+                description='Board limit reached.',
+                examples=[
+                    OpenApiExample(
+                        name='Limit exceeded',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа',
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company admin or superadmin only.'),
+            404: OpenApiResponse(description='Board not found or not accessible.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive(self, request, pk=None):
+        if request.user.role not in ('superadmin', 'company_admin'):
+            return Response(
+                {'detail': 'Only company admins can unarchive boards.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        user = request.user
+        if user.role == 'superadmin':
+            board = Board.objects.filter(pk=pk).first()
+        else:
+            board = Board.objects.filter(pk=pk, company=user.company).first()
+        if board is None:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if board.is_archived:
+            active_count = board.company.boards.filter(is_archived=False).count()
+            if active_count >= board.company.max_boards:
+                return Response(
+                    {'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            board.is_archived = False
+            board.save(update_fields=['is_archived', 'updated_at'])
+        return Response(BoardSerializer(board).data)
+
 
 @extend_schema_view(
     list=extend_schema(

@@ -1,6 +1,8 @@
+from django.db import models
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema, extend_schema_view,
@@ -8,11 +10,11 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
-from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import IsCompanyMember, IsCompanyAdmin, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
-    BoardSerializer, BoardListSerializer, ColumnSerializer,
+    BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
     LabelSerializer, TaskSerializer, TaskMoveSerializer,
     CommentSerializer, TaskHistorySerializer,
 )
@@ -195,27 +197,223 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     create=extend_schema(
         tags=['CRM'],
         summary='Add column to board',
-        request=ColumnSerializer,
-        responses={201: ColumnSerializer, 400: OpenApiResponse(description='Validation error')},
+        request=ColumnWriteSerializer,
+        responses={
+            201: ColumnSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Board not found'),
+        },
     ),
     partial_update=extend_schema(
         tags=['CRM'],
-        summary='Update column',
-        request=ColumnSerializer,
-        responses={200: ColumnSerializer, 400: OpenApiResponse(description='Validation error')},
+        summary='Update column (name, wip_limit, position)',
+        request=ColumnWriteSerializer,
+        responses={
+            200: ColumnSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            404: OpenApiResponse(description='Column or board not found'),
+        },
     ),
     destroy=extend_schema(
         tags=['CRM'],
-        summary='Delete column',
-        responses={204: OpenApiResponse(description='Deleted')},
+        summary='Delete column — moves tasks to another column first',
+        parameters=[
+            OpenApiParameter(
+                name='move_to',
+                location=OpenApiParameter.QUERY,
+                required=True,
+                type=int,
+                description='ID of the column on the same board to receive all tasks from the deleted column.',
+            ),
+        ],
+        responses={
+            204: OpenApiResponse(description='Column deleted, tasks moved'),
+            400: OpenApiResponse(description='move_to missing, last column, or wrong board'),
+            403: OpenApiResponse(description='Company admin required'),
+            404: OpenApiResponse(description='Column or board not found'),
+        },
     ),
 )
 class ColumnViewSet(viewsets.ModelViewSet):
-    serializer_class = ColumnSerializer
-    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            return [IsCompanyAdmin(), IsEmailVerifiedOrSuperAdmin()]
+        return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
+
+    def _get_board_or_403(self):
+        """
+        Fetch the board identified by URL kwarg ``board_pk``.
+        Raises NotFound if the board does not exist.
+        Raises PermissionDenied if the board belongs to a different company
+        (non-superadmin users only).
+        """
+        board_pk = self.kwargs.get('board_pk')
+        try:
+            board = Board.objects.get(pk=board_pk)
+        except Board.DoesNotExist:
+            raise NotFound('Board not found.')
+        user = self.request.user
+        if user.role != 'superadmin' and board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this board.')
+        return board
 
     def get_queryset(self):
-        return Column.objects.filter(board_id=self.kwargs.get('board_pk')).prefetch_related('tasks')
+        board = self._get_board_or_403()
+        return Column.objects.filter(board=board).prefetch_related('tasks').order_by('position')
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'partial_update'):
+            return ColumnWriteSerializer
+        if self.action == 'reorder':
+            return ColumnReorderSerializer
+        return ColumnSerializer
+
+    def perform_create(self, serializer):
+        board = self._get_board_or_403()
+        last_position = (
+            Column.objects.filter(board=board).order_by('-position').values_list('position', flat=True).first()
+        )
+        next_position = (last_position or 0) + 1
+        serializer.save(board=board, position=next_position)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        output = ColumnSerializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        new_position = serializer.validated_data.get('position')
+
+        if new_position is not None and new_position != instance.position:
+            board = instance.board
+            old_position = instance.position
+            sibling_count = Column.objects.filter(board=board).exclude(pk=instance.pk).count()
+            # Clamp new_position to valid range
+            max_pos = sibling_count + 1
+            new_position = max(1, min(new_position, max_pos))
+            serializer.validated_data['position'] = new_position
+
+            # Shift siblings to fill the gap created by moving this column
+            if old_position < new_position:
+                # Moving down: shift columns between old+1 and new_position up by 1
+                Column.objects.filter(
+                    board=board,
+                    position__gt=old_position,
+                    position__lte=new_position,
+                ).exclude(pk=instance.pk).update(position=models.F('position') - 1)
+            else:
+                # Moving up: shift columns between new_position and old-1 down by 1
+                Column.objects.filter(
+                    board=board,
+                    position__gte=new_position,
+                    position__lt=old_position,
+                ).exclude(pk=instance.pk).update(position=models.F('position') + 1)
+
+        serializer.save()
+
+    def partial_update(self, request, *args, **kwargs):
+        self._get_board_or_403()
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        output = ColumnSerializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_200_OK)
+
+    def destroy(self, request, *args, **kwargs):
+        self._get_board_or_403()
+        instance = self.get_object()
+        board = instance.board
+
+        move_to_id = request.query_params.get('move_to')
+        if not move_to_id:
+            raise ValidationError({'move_to': 'This query parameter is required.'})
+
+        # Cannot delete the last column
+        board_columns = Column.objects.filter(board=board)
+        if board_columns.count() <= 1:
+            raise ValidationError({'detail': 'Cannot delete the last column on a board.'})
+
+        # Validate move_to column
+        try:
+            move_to_id = int(move_to_id)
+            target_column = board_columns.get(pk=move_to_id)
+        except (ValueError, Column.DoesNotExist):
+            raise ValidationError({'move_to': 'Target column not found on this board.'})
+
+        if target_column.pk == instance.pk:
+            raise ValidationError({'move_to': 'Target column must differ from the deleted column.'})
+
+        # Move all tasks
+        Task.objects.filter(column=instance).update(column=target_column)
+
+        # Delete the column
+        instance.delete()
+
+        # Re-normalize positions of remaining columns (fill gaps)
+        remaining = Column.objects.filter(board=board).order_by('position')
+        for idx, col in enumerate(remaining, start=1):
+            if col.position != idx:
+                col.position = idx
+                col.save(update_fields=['position'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Reorder all columns on a board',
+        request=ColumnReorderSerializer,
+        responses={
+            200: ColumnSerializer(many=True),
+            400: OpenApiResponse(description='Invalid column_ids'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Board not found'),
+        },
+        examples=[
+            OpenApiExample(
+                'Reorder example',
+                value={'column_ids': [3, 1, 2]},
+                request_only=True,
+            ),
+        ],
+    )
+    @action(detail=False, methods=['post'], url_path='reorder')
+    def reorder(self, request, board_pk=None):
+        board = self._get_board_or_403()
+        serializer = ColumnReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        column_ids = serializer.validated_data['column_ids']
+        board_column_ids = set(Column.objects.filter(board=board).values_list('id', flat=True))
+
+        # All columns of the board must be present — no missing, no extra
+        provided_ids = set(column_ids)
+        if provided_ids != board_column_ids:
+            missing = board_column_ids - provided_ids
+            extra = provided_ids - board_column_ids
+            errors = []
+            if missing:
+                errors.append(f'Missing column IDs: {sorted(missing)}.')
+            if extra:
+                errors.append(f'Unknown column IDs: {sorted(extra)}.')
+            raise ValidationError({'column_ids': ' '.join(errors)})
+
+        # Assign new positions in the given order
+        columns_by_id = {col.id: col for col in Column.objects.filter(board=board)}
+        for new_pos, col_id in enumerate(column_ids, start=1):
+            col = columns_by_id[col_id]
+            if col.position != new_pos:
+                col.position = new_pos
+                col.save(update_fields=['position'])
+
+        result = Column.objects.filter(board=board).prefetch_related('tasks').order_by('position')
+        return Response(ColumnSerializer(result, many=True).data, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(

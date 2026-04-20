@@ -79,11 +79,32 @@ class TaskMoveSerializer(serializers.Serializer):
 class ColumnSerializer(serializers.ModelSerializer):
     tasks = TaskSerializer(many=True, read_only=True)
     task_count = serializers.IntegerField(source='tasks.count', read_only=True)
+    board = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = Column
-        fields = ['id', 'name', 'position', 'wip_limit', 'tasks', 'task_count']
-        read_only_fields = ['id']
+        fields = ['id', 'name', 'position', 'wip_limit', 'board', 'tasks', 'task_count', 'created_at']
+        read_only_fields = ['id', 'board', 'created_at']
+
+
+class ColumnWriteSerializer(serializers.ModelSerializer):
+    """Used for create / partial_update — no nested task data."""
+    wip_limit = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=0)
+    position = serializers.IntegerField(required=False, min_value=1)
+
+    class Meta:
+        model = Column
+        fields = ['id', 'name', 'position', 'wip_limit', 'board', 'created_at']
+        read_only_fields = ['id', 'board', 'created_at']
+
+
+class ColumnReorderSerializer(serializers.Serializer):
+    """Validates the ordered list of column IDs for a board reorder operation."""
+    column_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        allow_empty=False,
+        error_messages={'empty': 'column_ids must not be empty.'},
+    )
 
 
 class BoardSerializer(serializers.ModelSerializer):

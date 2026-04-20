@@ -371,3 +371,27 @@ class TestBoardArchive:
         response = api_client.post(archive_url(board_b.id))
         # 403 from permission check before object lookup
         assert response.status_code in (status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND)
+
+    def test_archive_idempotent(self, api_client, admin_a, board_a):
+        """Archiving an already-archived board must return 200, not 404."""
+        api_client.force_authenticate(user=admin_a)
+
+        response_first = api_client.post(archive_url(board_a.id))
+        assert response_first.status_code == status.HTTP_200_OK
+        assert response_first.data['is_archived'] is True
+
+        response_second = api_client.post(archive_url(board_a.id))
+        assert response_second.status_code == status.HTTP_200_OK
+        assert response_second.data['is_archived'] is True
+
+    def test_archive_idempotent_superadmin(self, api_client, superadmin, admin_b, company_b):
+        """Superadmin archiving an already-archived board in any company must return 200."""
+        board_b = Board.objects.create(company=company_b, name='B Board', created_by=admin_b)
+        api_client.force_authenticate(user=superadmin)
+
+        response_first = api_client.post(archive_url(board_b.id))
+        assert response_first.status_code == status.HTTP_200_OK
+
+        response_second = api_client.post(archive_url(board_b.id))
+        assert response_second.status_code == status.HTTP_200_OK
+        assert response_second.data['is_archived'] is True

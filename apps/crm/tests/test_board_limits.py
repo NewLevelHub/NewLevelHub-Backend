@@ -45,7 +45,7 @@ class TestBoardLimit:
         response = api_client.post(_url(), {'name': 'B3'}, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Board limit reached'
+        assert response.data['detail'] == 'Board limit reached for your plan'
 
     def test_create_board_at_80_percent_creates_admin_notification(self, api_client, company_admin, company):
         company.max_boards = 5

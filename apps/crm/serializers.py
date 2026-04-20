@@ -91,8 +91,11 @@ class BoardSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Board
-        fields = ['id', 'name', 'description', 'is_archived', 'created_by', 'columns', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'description', 'is_archived', 'company',
+            'created_by', 'columns', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'company', 'created_by', 'created_at', 'updated_at']
 
 
 class BoardListSerializer(serializers.ModelSerializer):
@@ -101,7 +104,11 @@ class BoardListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Board
-        fields = ['id', 'name', 'description', 'is_archived', 'column_count', 'task_count', 'created_at']
+        fields = [
+            'id', 'name', 'description', 'is_archived', 'company',
+            'column_count', 'task_count', 'created_at',
+        ]
+        read_only_fields = ['id', 'company', 'created_at']
 
     def get_task_count(self, obj):
         return Task.objects.filter(column__board=obj, is_deleted=False).count()

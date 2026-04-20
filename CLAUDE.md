@@ -38,6 +38,31 @@ celery -A config.celery beat -l info
 
 ---
 
+## Quality Checks
+
+После каждого изменения кода, перед тем как считать задачу выполненной, обязательно запусти:
+
+```bash
+flake8 .                                          # Lint (max line length 120)
+python manage.py makemigrations --check           # Нет незафиксированных миграций
+pytest --no-header -q                             # Все тесты проходят
+```
+
+Если любая из команд падает — исправь и перезапусти до зелёного состояния.
+
+---
+
+## Backend Development
+
+После реализации изменений в API всегда верифицируй:
+
+1. **Миграции** — `python manage.py makemigrations --check && python manage.py migrate` без ошибок
+2. **Null-handling** — все новые поля в сериализаторах корректно обрабатывают `None` на существующих данных
+3. **Соответствие фронтенду** — формат пагинации (`{count, next, previous, results}`), HTTP методы (GET/POST/PATCH/DELETE), имена полей
+4. **Тесты** — интеграционные тесты требуют `@pytest.mark.django_db`; unit-тесты разрешений/миксинов — через `MagicMock` без DB
+
+---
+
 ## Architecture
 
 ### Settings

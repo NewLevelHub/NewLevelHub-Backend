@@ -2,7 +2,10 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from drf_spectacular.utils import (
+    extend_schema, extend_schema_view,
+    OpenApiParameter, OpenApiExample, OpenApiResponse,
+)
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
@@ -19,33 +22,88 @@ from .serializers import (
     list=extend_schema(
         tags=['CRM'],
         summary='List boards',
+        description=(
+            'Returns all boards scoped to the authenticated user\'s company. '
+            'Archived boards are excluded by default — pass `include_archived=true` to include them. '
+            'Superadmin sees boards across all companies and can narrow results with `company_id`.'
+        ),
+        parameters=[
+            OpenApiParameter(
+                name='include_archived',
+                type=bool,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='When true, archived boards are included in the response.',
+            ),
+            OpenApiParameter(
+                name='company_id',
+                type=int,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Superadmin only: filter boards by a specific company ID.',
+            ),
+        ],
         responses={200: BoardListSerializer(many=True)},
     ),
     retrieve=extend_schema(
         tags=['CRM'],
-        summary='Get board with columns and tasks',
-        responses={200: BoardSerializer, 404: OpenApiResponse(description='Not found')},
+        summary='Get board',
+        description='Returns full board detail including nested columns and their tasks.',
+        responses={
+            200: BoardSerializer,
+            404: OpenApiResponse(description='Board not found or not accessible.'),
+        },
     ),
     create=extend_schema(
         tags=['CRM'],
         summary='Create board',
+        description=(
+            'Creates a new board for the authenticated user\'s company. '
+            'Three default columns ("К выполнению", "В работе", "Готово") are automatically created. '
+            'Returns 400 if the company has reached its plan limit of non-archived boards.'
+        ),
         request=BoardSerializer,
         responses={
             201: BoardSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Company members only'),
+            400: OpenApiResponse(
+                description='Validation error or board limit reached.',
+                examples=[
+                    OpenApiExample(
+                        name='Board limit exceeded',
+                        value={'error': True, 'status_code': 400, 'detail': 'Board limit reached for your plan'},
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
         },
+        examples=[
+            OpenApiExample(
+                name='Create sales pipeline',
+                value={'name': 'Sales Pipeline', 'description': 'Track deals from lead to close'},
+                request_only=True,
+            ),
+        ],
     ),
     partial_update=extend_schema(
         tags=['CRM'],
         summary='Update board',
+        description='Partially updates a board. Only `name` and `description` are writable.',
         request=BoardSerializer,
-        responses={200: BoardSerializer, 400: OpenApiResponse(description='Validation error')},
+        responses={
+            200: BoardSerializer,
+            400: OpenApiResponse(description='Validation error.'),
+            404: OpenApiResponse(description='Board not found or not accessible.'),
+        },
     ),
     destroy=extend_schema(
         tags=['CRM'],
         summary='Delete board',
-        responses={204: OpenApiResponse(description='Deleted')},
+        description='Permanently deletes a board and all its columns and tasks.',
+        responses={
+            204: OpenApiResponse(description='Board deleted successfully.'),
+            404: OpenApiResponse(description='Board not found or not accessible.'),
+        },
     ),
 )
 class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
@@ -53,7 +111,22 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def get_queryset(self):
-        return Board.objects.filter(is_archived=False).prefetch_related('columns__tasks')
+        user = self.request.user
+        if user.role == 'superadmin':
+            qs = Board.objects.all()
+            company_id = self.request.query_params.get('company_id')
+            if company_id:
+                qs = qs.filter(company_id=company_id)
+        elif user.company_id:
+            qs = Board.objects.filter(company_id=user.company_id)
+        else:
+            qs = Board.objects.none()
+
+        include_archived = self.request.query_params.get('include_archived', '').lower() == 'true'
+        if not include_archived:
+            qs = qs.filter(is_archived=False)
+
+        return qs.prefetch_related('columns__tasks')
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -62,9 +135,12 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
 
     def create(self, request, *args, **kwargs):
         company = request.user.company
-        current_boards = company.boards.count()
+        current_boards = company.boards.filter(is_archived=False).count()
         if current_boards >= company.max_boards:
-            return Response({'detail': 'Board limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'detail': 'Board limit reached for your plan'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         response = super().create(request, *args, **kwargs)
         notify_company_admins_limit_thresholds(
@@ -84,19 +160,94 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     @extend_schema(
         tags=['CRM'],
         summary='Archive board',
+        description=(
+            'Marks the board as archived (sets `is_archived=True`). '
+            'Restricted to `company_admin` or `superadmin`; employees receive 403. '
+            'Archived boards are excluded from the default list response.'
+        ),
         request=None,
         responses={
-            200: OpenApiResponse(description='Board archived'),
-            401: OpenApiResponse(description='Not authenticated'),
-            404: OpenApiResponse(description='Not found'),
+            200: BoardSerializer,
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company admin or superadmin only.'),
+            404: OpenApiResponse(description='Board not found or not accessible.'),
         },
     )
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
-        board = self.get_object()
-        board.is_archived = True
-        board.save(update_fields=['is_archived'])
-        return Response({'detail': 'Board archived'})
+        if request.user.role not in ('superadmin', 'company_admin'):
+            return Response(
+                {'detail': 'Only company admins can archive boards.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        user = request.user
+        if user.role == 'superadmin':
+            board = Board.objects.filter(pk=pk).first()
+        else:
+            board = Board.objects.filter(pk=pk, company=user.company).first()
+        if board is None:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not board.is_archived:
+            board.is_archived = True
+            board.save(update_fields=['is_archived', 'updated_at'])
+        return Response(BoardSerializer(board).data)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Unarchive board',
+        description=(
+            'Marks the board as active (sets `is_archived=False`). '
+            'Restricted to `company_admin` or `superadmin`; employees receive 403. '
+            'Returns 400 if the company has already reached its plan limit of active boards. '
+            'If the board is already active the action is idempotent and returns 200.'
+        ),
+        request=None,
+        responses={
+            200: BoardSerializer,
+            400: OpenApiResponse(
+                description='Board limit reached.',
+                examples=[
+                    OpenApiExample(
+                        name='Limit exceeded',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа',
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company admin or superadmin only.'),
+            404: OpenApiResponse(description='Board not found or not accessible.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive(self, request, pk=None):
+        if request.user.role not in ('superadmin', 'company_admin'):
+            return Response(
+                {'detail': 'Only company admins can unarchive boards.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        user = request.user
+        if user.role == 'superadmin':
+            board = Board.objects.filter(pk=pk).first()
+        else:
+            board = Board.objects.filter(pk=pk, company=user.company).first()
+        if board is None:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if board.is_archived:
+            active_count = board.company.boards.filter(is_archived=False).count()
+            if active_count >= board.company.max_boards:
+                return Response(
+                    {'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            board.is_archived = False
+            board.save(update_fields=['is_archived', 'updated_at'])
+        return Response(BoardSerializer(board).data)
 
 
 @extend_schema_view(

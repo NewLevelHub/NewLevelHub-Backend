@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
 
 
@@ -6,6 +6,23 @@ from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Commen
 class BoardAdmin(admin.ModelAdmin):
     list_display = ['name', 'company', 'is_archived', 'created_by', 'created_at']
     list_filter = ['is_archived', 'company']
+
+    def save_model(self, request, obj, form, change):
+        if change:
+            original = Board.objects.get(pk=obj.pk)
+            if original.is_archived and not obj.is_archived:
+                active_count = obj.company.boards.filter(is_archived=False).exclude(pk=obj.pk).count()
+                if active_count >= obj.company.max_boards:
+                    self.message_user(
+                        request,
+                        (
+                            f"Невозможно разархивировать: достигнут лимит досок "
+                            f"({obj.company.max_boards}) для компании «{obj.company.name}»."
+                        ),
+                        level=messages.ERROR,
+                    )
+                    return
+        super().save_model(request, obj, form, change)
 
 
 class ChecklistItemInline(admin.TabularInline):

@@ -38,6 +38,12 @@ class Label(TimeStampedModel):
 
     class Meta:
         db_table = 'crm_labels'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['company', 'name'],
+                name='unique_label_per_company',
+            ),
+        ]
 
     def __str__(self):
         return self.name

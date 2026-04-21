@@ -183,8 +183,8 @@ class TaskDetailSerializer(TaskSerializer):
 
 class TaskMoveSerializer(serializers.Serializer):
     """Перемещение задачи между колонками / изменение позиции."""
-    column_id = serializers.IntegerField()
-    position = serializers.IntegerField()
+    column_id = serializers.PrimaryKeyRelatedField(queryset=Column.objects.all())
+    order = serializers.IntegerField(required=False, min_value=0)
 
 
 class ColumnSerializer(serializers.ModelSerializer):

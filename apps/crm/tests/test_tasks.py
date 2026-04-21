@@ -22,6 +22,10 @@ def task_history_url(pk):
     return f'/api/v1/crm/tasks/{pk}/history/'
 
 
+def task_archive_url(pk):
+    return f'/api/v1/crm/tasks/{pk}/archive/'
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -508,7 +512,7 @@ class TestTaskMove:
     def test_move_task_to_another_column(self, api_client, admin_a, task_a, column_a2):
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {
-            'column_id': column_a2.id, 'position': 1
+            'column_id': column_a2.id, 'order': 1
         }, format='json')
         assert res.status_code == status.HTTP_200_OK
         task_a.refresh_from_db()
@@ -518,6 +522,131 @@ class TestTaskMove:
     def test_move_records_history(self, api_client, admin_a, task_a, column_a2):
         api_client.force_authenticate(admin_a)
         api_client.post(task_move_url(task_a.id), {
-            'column_id': column_a2.id, 'position': 1
+            'column_id': column_a2.id, 'order': 1
         }, format='json')
         assert TaskHistory.objects.filter(task=task_a, action='moved').exists()
+
+    def test_move_without_order_appends_to_end(self, api_client, admin_a, task_a, column_a2):
+        """When order is omitted, task is placed after existing tasks in target column."""
+        existing = Task.objects.create(
+            column=column_a2, title='Existing', priority='low', position=5, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        task_a.refresh_from_db()
+        assert task_a.column_id == column_a2.id
+        # Should be appended after existing task (position = max + 1 = 6)
+        assert task_a.position == existing.position + 1
+
+    def test_move_unauthenticated_returns_401(self, api_client, task_a, column_a2):
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_move_guest_returns_403(self, api_client, guest_user, task_a, column_a2):
+        api_client.force_authenticate(guest_user)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_move_to_cross_company_column_returns_400(
+        self, api_client, admin_a, task_a, column_b
+    ):
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_b.id}, format='json')
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_move_wip_limit_exceeded_returns_400(self, api_client, admin_a, task_a, column_a2):
+        """Moving to a column at WIP capacity returns 400."""
+        column_a2.wip_limit = 1
+        column_a2.save()
+        # Fill the column to capacity with a different task
+        Task.objects.create(
+            column=column_a2, title='Blocking', priority='low', position=1, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'WIP limit reached' in str(res.data)
+
+    def test_move_wip_limit_not_exceeded_returns_200(self, api_client, admin_a, task_a, column_a2):
+        """Moving to a column under WIP capacity succeeds."""
+        column_a2.wip_limit = 2
+        column_a2.save()
+        # One task already in target column — still room for one more
+        Task.objects.create(
+            column=column_a2, title='Existing', priority='low', position=1, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_move_wip_limit_zero_means_no_limit(self, api_client, admin_a, task_a, column_a2):
+        """wip_limit=0 is treated as unlimited — any number of tasks allowed."""
+        column_a2.wip_limit = 0
+        column_a2.save()
+        for i in range(5):
+            Task.objects.create(
+                column=column_a2, title=f'Task {i}', priority='low', position=i, created_by=admin_a,
+            )
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_move_task_not_counted_in_wip_of_target(self, api_client, admin_a, task_a, column_a2):
+        """The task being moved should not count toward the WIP of the target column."""
+        # Move task_a into column_a2 first, then move it back and forth
+        task_a.column = column_a2
+        task_a.save()
+        column_a2.wip_limit = 1
+        column_a2.save()
+        # task_a is already in column_a2, wip_limit is 1 — moving it within same column is ok
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id, 'order': 0}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/crm/tasks/<id>/archive/ — Archive action
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTaskArchive:
+    def test_archive_task_returns_200(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_archive_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['detail'] == 'Task archived'
+
+    def test_archive_sets_is_deleted(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        task_a.refresh_from_db()
+        assert task_a.is_deleted is True
+
+    def test_archive_task_not_in_list(self, api_client, admin_a, task_a):
+        """Archived (soft-deleted) tasks must not appear in the task list."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(TASKS_URL)
+        ids = [t['id'] for t in res.data['results']]
+        assert task_a.id not in ids
+
+    def test_archive_unauthenticated_returns_401(self, api_client, task_a):
+        res = api_client.post(task_archive_url(task_a.id))
+        assert res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_archive_guest_returns_403(self, api_client, guest_user, task_a):
+        api_client.force_authenticate(guest_user)
+        res = api_client.post(task_archive_url(task_a.id))
+        assert res.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_archive_employee_can_archive(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        res = api_client.post(task_archive_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_archive_cross_company_task_returns_404(self, api_client, admin_a, column_b):
+        task_b = Task.objects.create(column=column_b, title='Other', priority='low', position=1)
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_archive_url(task_b.id))
+        assert res.status_code == status.HTTP_404_NOT_FOUND

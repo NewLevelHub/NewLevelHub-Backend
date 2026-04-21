@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
 
@@ -5,8 +7,23 @@ from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Commen
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
-        fields = ['id', 'name', 'color']
-        read_only_fields = ['id']
+        fields = ['id', 'name', 'color', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_color(self, value):
+        if not re.match(r'^#[0-9a-fA-F]{6}$', value):
+            raise serializers.ValidationError('Color must be a valid hex code, e.g. #ff00aa.')
+        return value.lower()
+
+    def validate(self, attrs):
+        company = self.context['request'].user.company
+        name = attrs.get('name', getattr(self.instance, 'name', None))
+        qs = Label.objects.filter(company=company, name__iexact=name)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError({'name': 'Label with this name already exists in your company.'})
+        return attrs
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):

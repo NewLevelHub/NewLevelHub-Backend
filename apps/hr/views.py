@@ -40,9 +40,15 @@ from .serializers import (
 class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsCompanyMember]
-    queryset = LeaveRequest.objects.select_related('user', 'reviewed_by')
+    queryset = LeaveRequest.objects.select_related('user', 'reviewed_by').order_by('-created_at')
     http_method_names = ['get', 'post']
     filterset_fields = ['status', 'leave_type', 'user']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.role == 'employee':
+            return qs.filter(user=self.request.user)
+        return qs
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)

@@ -378,7 +378,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 'max': company.max_employees,
             },
             'boards': {
-                'current': company.boards.count(),
+                'current': company.boards.filter(is_archived=False).count(),
                 'max': company.max_boards,
             },
             'storage': {

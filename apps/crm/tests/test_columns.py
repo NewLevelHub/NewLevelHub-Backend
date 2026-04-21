@@ -146,14 +146,14 @@ class TestColumnAuth:
         response = api_client.get(_columns_url(board.pk))
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_employee_cannot_delete_column(self, api_client, board, employee):
+    def test_employee_can_delete_column(self, api_client, board, employee):
         col = Column.objects.filter(board=board).first()
         other_col = Column.objects.filter(board=board).exclude(pk=col.pk).first()
         api_client.force_authenticate(user=employee)
         response = api_client.delete(
             _column_detail_url(board.pk, col.pk) + f'?move_to={other_col.pk}'
         )
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_204_NO_CONTENT
 
 
 # ---------------------------------------------------------------------------
@@ -427,13 +427,13 @@ class TestColumnDelete:
         response = api_client.delete(url)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_employee_cannot_delete_column_returns_403(self, api_client, board, employee):
+    def test_employee_can_delete_column_returns_204(self, api_client, board, employee):
         col = Column.objects.filter(board=board).first()
         other_col = Column.objects.filter(board=board).exclude(pk=col.pk).first()
         api_client.force_authenticate(user=employee)
         url = _column_detail_url(board.pk, col.pk) + f'?move_to={other_col.pk}'
         response = api_client.delete(url)
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_204_NO_CONTENT
 
     def test_unauthenticated_delete_returns_401(self, api_client, board):
         col = Column.objects.filter(board=board).first()

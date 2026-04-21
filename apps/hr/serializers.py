@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
 
@@ -30,7 +31,28 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LeaveBalance
-        fields = ['total_days', 'used_days', 'remaining_days']
+        fields = ['year', 'total_days', 'used_days', 'remaining_days']
+
+
+class LeaveBalanceSetSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    year = serializers.IntegerField(min_value=1900, max_value=3000)
+    total_days = serializers.IntegerField(min_value=0)
+
+    def validate_user_id(self, value):
+        if not User.objects.filter(id=value).exists():
+            raise serializers.ValidationError('User not found.')
+        return value
+
+
+class LeaveBalanceTeamSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    remaining_days = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LeaveBalance
+        fields = ['user_id', 'user_name', 'year', 'total_days', 'used_days', 'remaining_days']
 
 
 class OnboardingStepSerializer(serializers.ModelSerializer):

@@ -1,15 +1,19 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
+from apps.companies.models import CompanySettings
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
+    LeaveBalanceSetSerializer, LeaveBalanceTeamSerializer,
     OnboardingTemplateSerializer, UserOnboardingProgressSerializer,
 )
 
@@ -47,6 +51,34 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     def perform_create(self, serializer):
         serializer.save(user=self.request.user, company=self.request.user.company)
 
+    def _resolve_year(self, request):
+        year = request.query_params.get('year') or request.data.get('year')
+        if year in (None, ''):
+            return timezone.now().year
+        try:
+            parsed_year = int(year)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({'year': 'Year must be an integer.'}) from exc
+        if parsed_year < 1900 or parsed_year > 3000:
+            raise ValidationError({'year': 'Year must be between 1900 and 3000.'})
+        return parsed_year
+
+    def _default_total_days_for_user(self, user):
+        if not user.company_id:
+            return 24
+        try:
+            return CompanySettings.objects.get(company_id=user.company_id).vacation_days_per_year
+        except CompanySettings.DoesNotExist:
+            pass
+        return 24
+
+    def _get_or_create_balance(self, user, year):
+        return LeaveBalance.objects.get_or_create(
+            user=user,
+            year=year,
+            defaults={'total_days': self._default_total_days_for_user(user)},
+        )
+
     @extend_schema(
         tags=['HR'],
         summary='Approve / reject leave request',
@@ -64,12 +96,23 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         leave = self.get_object()
         ser = LeaveRequestReviewSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        leave.status = ser.validated_data['status']
+        old_status = leave.status
+        new_status = ser.validated_data['status']
+        leave.status = new_status
         leave.review_comment = ser.validated_data.get('review_comment', '')
         leave.reviewed_by = request.user
         leave.reviewed_at = timezone.now()
         leave.save()
-        # TODO: если approved — обновить LeaveBalance, добавить событие в календарь
+
+        if leave.leave_type not in ('sick_leave', 'remote'):
+            balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)
+            if old_status != 'approved' and new_status == 'approved':
+                balance.used_days += leave.duration_days
+                balance.save(update_fields=['used_days', 'updated_at'])
+            elif old_status == 'approved' and new_status != 'approved':
+                balance.used_days = max(balance.used_days - leave.duration_days, 0)
+                balance.save(update_fields=['used_days', 'updated_at'])
+
         return Response(LeaveRequestSerializer(leave).data)
 
     @extend_schema(
@@ -82,8 +125,65 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     )
     @action(detail=False, methods=['get'], url_path='balance')
     def balance(self, request):
-        bal, _ = LeaveBalance.objects.get_or_create(user=request.user)
+        year = self._resolve_year(request)
+        bal, _ = self._get_or_create_balance(request.user, year)
         return Response(LeaveBalanceSerializer(bal).data)
+
+    @extend_schema(
+        tags=['HR'],
+        summary='Set employee yearly leave balance',
+        request=LeaveBalanceSetSerializer,
+        responses={
+            200: LeaveBalanceTeamSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin only'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='balance/set', permission_classes=[IsCompanyAdmin])
+    def set_balance(self, request):
+        ser = LeaveBalanceSetSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+
+        target_user_id = ser.validated_data['user_id']
+        year = ser.validated_data['year']
+        total_days = ser.validated_data['total_days']
+        target_user = User.objects.select_related('company').get(id=target_user_id)
+
+        if request.user.role != 'superadmin' and target_user.company_id != request.user.company_id:
+            raise PermissionDenied('You can only manage balances for your company employees.')
+
+        balance, _ = self._get_or_create_balance(target_user, year)
+        balance.total_days = total_days
+        balance.save(update_fields=['total_days', 'updated_at'])
+        return Response(LeaveBalanceTeamSerializer(balance).data)
+
+    @extend_schema(
+        tags=['HR'],
+        summary='Team leave balances',
+        responses={
+            200: LeaveBalanceTeamSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin only'),
+        },
+    )
+    @action(detail=False, methods=['get'], url_path='balance/team', permission_classes=[IsCompanyAdmin])
+    def team_balance(self, request):
+        year = self._resolve_year(request)
+        if request.user.role == 'superadmin':
+            employees = User.objects.filter(role='employee')
+        else:
+            employees = User.objects.filter(
+                company_id=request.user.company_id,
+                role='employee',
+            )
+
+        balances = []
+        for employee in employees.select_related('company'):
+            bal, _ = self._get_or_create_balance(employee, year)
+            balances.append(bal)
+
+        return Response(LeaveBalanceTeamSerializer(balances, many=True).data)
 
 
 @extend_schema_view(

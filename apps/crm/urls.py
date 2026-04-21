@@ -15,6 +15,11 @@ urlpatterns = [
         name='board-columns',
     ),
     path(
+        'boards/<int:board_pk>/columns/reorder/',
+        views.ColumnViewSet.as_view({'post': 'reorder'}),
+        name='board-columns-reorder',
+    ),
+    path(
         'boards/<int:board_pk>/columns/<int:pk>/',
         views.ColumnViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='board-column-detail',

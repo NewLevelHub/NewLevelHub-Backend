@@ -4,18 +4,20 @@ from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from rest_framework.response import Response
+from rest_framework import serializers as drf_serializers
 from drf_spectacular.utils import (
     extend_schema, extend_schema_view,
-    OpenApiParameter, OpenApiExample, OpenApiResponse,
+    OpenApiParameter, OpenApiExample, OpenApiResponse, inline_serializer,
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.permissions import IsCompanyMember, IsCompanyAdmin, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
-    LabelSerializer, TaskSerializer, TaskMoveSerializer,
+    LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
     CommentSerializer, TaskHistorySerializer,
 )
 
@@ -484,51 +486,179 @@ class ColumnViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['CRM'],
         summary='List tasks',
+        description=(
+            'Returns tasks scoped to the authenticated user\'s company. '
+            'Filter by board_id, column_id, assignee_id, priority, label_ids, '
+            'deadline_from, deadline_to, or use search= for title full-text search.'
+        ),
+        parameters=[
+            OpenApiParameter(name='board_id', type=int, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter tasks by board.'),
+            OpenApiParameter(name='column_id', type=int, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter tasks by column.'),
+            OpenApiParameter(name='assignee_id', type=int, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter tasks by assignee.'),
+            OpenApiParameter(name='priority', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter by priority (low/medium/high/urgent).'),
+            OpenApiParameter(name='label_ids', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Comma-separated label IDs to filter by.'),
+            OpenApiParameter(name='deadline_from', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Deadline >= this date (YYYY-MM-DD).'),
+            OpenApiParameter(name='deadline_to', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Deadline <= this date (YYYY-MM-DD).'),
+        ],
         responses={200: TaskSerializer(many=True)},
     ),
     retrieve=extend_schema(
         tags=['CRM'],
         summary='Get task details',
-        responses={200: TaskSerializer, 404: OpenApiResponse(description='Not found')},
+        description='Returns full task card including checklists, comments_count, attachments_count, and last 10 history entries.',  # noqa: E501
+        responses={200: TaskDetailSerializer, 404: OpenApiResponse(description='Not found')},
     ),
     create=extend_schema(
         tags=['CRM'],
-        summary='Create task',
-        request=TaskSerializer,
+        operation_id='task_create',
+        summary='Создать задачу',
+        description=(
+            'Creates a task. board_id and column_id must belong to the requesting user\'s company. '
+            'assignee_id must be an employee of the same company. '
+            'label_ids must belong to the same company.'
+        ),
+        request=inline_serializer(
+            name='TaskCreateRequest',
+            fields={
+                'board_id': drf_serializers.IntegerField(
+                    help_text='ID доски',
+                ),
+                'column_id': drf_serializers.IntegerField(
+                    help_text='ID колонки на доске',
+                ),
+                'title': drf_serializers.CharField(
+                    max_length=255,
+                    help_text='Название задачи',
+                ),
+                'description': drf_serializers.CharField(
+                    required=False,
+                    allow_blank=True,
+                    help_text='Описание задачи',
+                ),
+                'priority': drf_serializers.ChoiceField(
+                    choices=['low', 'medium', 'high', 'critical'],
+                    help_text='Приоритет задачи',
+                ),
+                'deadline': drf_serializers.DateField(
+                    required=False,
+                    allow_null=True,
+                    help_text='Срок выполнения (YYYY-MM-DD)',
+                ),
+                'assignee_id': drf_serializers.IntegerField(
+                    required=False,
+                    allow_null=True,
+                    help_text='ID исполнителя (сотрудник той же компании)',
+                ),
+                'label_ids': drf_serializers.ListField(
+                    child=drf_serializers.IntegerField(),
+                    required=False,
+                    help_text='Список ID меток доски',
+                ),
+            },
+        ),
         responses={
             201: TaskSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Company members only'),
+            400: OpenApiResponse(
+                description='Validation error — assignee из другой компании, неверный board/column.',
+            ),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Forbidden — company members only.'),
         },
+        examples=[
+            OpenApiExample(
+                name='Create task example',
+                value={
+                    'board_id': 1,
+                    'column_id': 3,
+                    'title': 'Разработать API авторизации',
+                    'description': 'Реализовать JWT-аутентификацию с refresh-токенами',
+                    'priority': 'high',
+                    'deadline': '2026-05-01',
+                    'assignee_id': 42,
+                    'label_ids': [1, 2],
+                },
+                request_only=True,
+            ),
+        ],
     ),
     partial_update=extend_schema(
         tags=['CRM'],
         summary='Update task',
+        description=(
+            'Partially updates a task. Updatable: title, description, priority, deadline, assignee_id, label_ids. '
+            'When assignee changes, the new assignee receives an in-app notification.'
+        ),
         request=TaskSerializer,
         responses={200: TaskSerializer, 400: OpenApiResponse(description='Validation error')},
     ),
     destroy=extend_schema(
         tags=['CRM'],
         summary='Delete task',
+        description='Soft-deletes the task (Task extends SoftDeleteModel).',
         responses={204: OpenApiResponse(description='Deleted')},
     ),
 )
 class TaskViewSet(viewsets.ModelViewSet):
-    serializer_class = TaskSerializer
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
     search_fields = ['title']
+    filterset_class = None  # set in __init_subclass__ via get_filterset_class; assigned below
 
     def get_queryset(self):
         user = self.request.user
-        qs = Task.objects.select_related('column__board', 'assignee')
+        qs = Task.objects.select_related(
+            'column__board', 'assignee', 'created_by',
+        ).prefetch_related('labels', 'checklists__items')
         if user.role == 'superadmin':
             return qs
         if user.company_id:
-            return qs.filter(column__board__company=user.company)
+            return qs.filter(column__board__company_id=user.company_id)
         return qs.none()
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return TaskDetailSerializer
+        return TaskSerializer
+
+    def filter_queryset(self, queryset):
+        from .filters import TaskFilter
+        from django_filters.rest_framework import DjangoFilterBackend
+        from rest_framework.filters import SearchFilter
+
+        for backend in [DjangoFilterBackend(), SearchFilter()]:
+            queryset = backend.filter_queryset(self.request, queryset, self)
+
+        # Apply TaskFilter manually
+        f = TaskFilter(self.request.query_params, queryset=queryset)
+        return f.qs.distinct()
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        old_assignee_id = serializer.instance.assignee_id
+        instance = serializer.save()
+        new_assignee_id = instance.assignee_id
+
+        if new_assignee_id and new_assignee_id != old_assignee_id:
+            Notification.objects.create(
+                user_id=new_assignee_id,
+                notification_type='task_assigned',
+                title='Вам назначена задача',
+                body=instance.title,
+                url=f'/crm/tasks/{instance.pk}/',
+            )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.soft_delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
         tags=['CRM'],
@@ -545,16 +675,33 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         serializer = TaskMoveSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        target_column_id = serializer.validated_data['column_id']
+
+        # Validate that the target column exists and belongs to the same board as the task.
+        try:
+            target_column = Column.objects.select_related('board').get(pk=target_column_id)
+        except Column.DoesNotExist:
+            raise ValidationError({'column_id': 'Target column not found.'})
+
+        if target_column.board_id != task.column.board_id:
+            raise ValidationError({'column_id': 'Target column must belong to the same board as the task.'})
+
+        # Validate tenant isolation: target column's board must belong to the request user's company.
+        # Superadmin bypasses this check.
+        if request.user.role != 'superadmin':
+            if target_column.board.company_id != request.user.company_id:
+                raise ValidationError({'column_id': 'Target column does not belong to your company.'})
+
         old_col = task.column_id
-        task.column_id = serializer.validated_data['column_id']
+        task.column_id = target_column_id
         task.position = serializer.validated_data['position']
         task.save(update_fields=['column', 'position'])
-        # TODO: проверить WIP-лимит колонки, записать TaskHistory
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
             old_value=str(old_col), new_value=str(task.column_id),
         )
-        return Response(TaskSerializer(task).data)
+        return Response(TaskSerializer(task, context={'request': request}).data)
 
     @extend_schema(
         tags=['CRM'],
@@ -563,8 +710,14 @@ class TaskViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=['get'], url_path='my')
     def my_tasks(self, request):
-        qs = self.get_queryset().filter(assignee=request.user, is_archived=False)
-        serializer = TaskSerializer(qs, many=True)
+        queryset = self.filter_queryset(
+            self.get_queryset().filter(assignee=request.user, is_archived=False)
+        )
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
 
     @extend_schema(
@@ -575,7 +728,12 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='history')
     def history(self, request, pk=None):
         task = self.get_object()
-        return Response(TaskHistorySerializer(task.history.all(), many=True).data)
+        # Limit to the 50 most recent entries for consistent, bounded responses.
+        entries = task.history.all()[:50]
+        page = self.paginate_queryset(entries)
+        if page is not None:
+            return self.get_paginated_response(TaskHistorySerializer(page, many=True).data)
+        return Response(TaskHistorySerializer(entries, many=True).data)
 
 
 @extend_schema_view(

@@ -328,6 +328,50 @@ class CompanyMemberSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class CompanyDirectoryListSerializer(serializers.ModelSerializer):
+    """Directory row for company team page."""
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'avatar',
+            'full_name',
+            'position',
+            'email',
+            'phone',
+            'role',
+            'is_active',
+            'last_login',
+        ]
+        read_only_fields = fields
+
+
+class CompanyDirectoryDetailSerializer(serializers.ModelSerializer):
+    """Directory profile with activity counters."""
+    full_name = serializers.CharField(read_only=True)
+    tasks_count = serializers.IntegerField(read_only=True)
+    bookings_last_30_days = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'avatar',
+            'full_name',
+            'position',
+            'email',
+            'phone',
+            'role',
+            'is_active',
+            'last_login',
+            'tasks_count',
+            'bookings_last_30_days',
+        ]
+        read_only_fields = fields
+
+
 class CompanyMemberActivitySerializer(serializers.Serializer):
     """Activity summary for a single company member."""
     last_login = serializers.DateTimeField(allow_null=True)

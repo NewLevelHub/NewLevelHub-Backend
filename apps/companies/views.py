@@ -10,6 +10,7 @@ from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import (
@@ -25,7 +26,7 @@ from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
 from apps.users.models import User
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
-from .filters import CompanyFilter, CompanyMemberFilter
+from .filters import CompanyFilter, CompanyMemberFilter, CompanyDirectoryFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
     CompanySerializer,
@@ -37,6 +38,8 @@ from .serializers import (
     InvitationCreateSerializer,
     InvitationListSerializer,
     CompanyMemberSerializer,
+    CompanyDirectoryListSerializer,
+    CompanyDirectoryDetailSerializer,
     CompanyMemberActivitySerializer,
     MemberDeactivateSerializer,
     MemberRemoveSerializer,
@@ -857,6 +860,139 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
         send_invitation_email.delay(new_invitation.id)
         return Response({'detail': 'Invitation resent'})
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='Company employees directory',
+    parameters=[
+        OpenApiParameter(
+            name='search',
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Search by first_name, last_name, or email.',
+        ),
+        OpenApiParameter(
+            name='position',
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Filter by position (icontains).',
+        ),
+        OpenApiParameter(
+            name='role',
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Filter by role.',
+        ),
+        OpenApiParameter(
+            name='ordering',
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Order by full_name or date_joined.',
+        ),
+    ],
+    responses={
+        200: CompanyDirectoryListSerializer(many=True),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Company not found'),
+    },
+)
+class CompanyDirectoryView(GenericAPIView):
+    """
+    GET /api/v1/companies/<company_id>/directory/
+
+    Returns company members for Team page cards.
+    Access: company members of the same company and superadmin.
+    """
+
+    permission_classes = [IsCompanyMember]
+    serializer_class = CompanyDirectoryListSerializer
+
+    def _get_company(self, request, company_id):
+        company_qs = Company.objects.all()
+        if request.user.role in ('company_admin', 'employee'):
+            if request.user.company_id != company_id:
+                raise PermissionDenied('You can only view directory of your own company.')
+            company_qs = company_qs.filter(id=request.user.company_id)
+        return get_object_or_404(company_qs, id=company_id)
+
+    def get(self, request, company_id):
+        company = self._get_company(request, company_id)
+
+        qs = User.objects.filter(company=company)
+        directory_filter = CompanyDirectoryFilter(request.query_params, queryset=qs)
+        qs = directory_filter.qs
+
+        ordering_param = request.query_params.get('ordering', '')
+        if ordering_param in ('date_joined', '-date_joined'):
+            qs = qs.order_by(ordering_param)
+        elif ordering_param in ('full_name', '-full_name'):
+            prefix = '-' if ordering_param.startswith('-') else ''
+            qs = qs.order_by(f'{prefix}first_name', f'{prefix}last_name')
+
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='Company directory profile',
+    responses={
+        200: CompanyDirectoryDetailSerializer,
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Forbidden'),
+        404: OpenApiResponse(description='Company or user not found'),
+    },
+)
+class CompanyDirectoryProfileView(APIView):
+    """
+    GET /api/v1/companies/<company_id>/directory/<user_id>/
+
+    Returns contacts + tasks count + bookings for last 30 days + last_login.
+    Access: company members of the same company and superadmin.
+    """
+
+    permission_classes = [IsCompanyMember]
+
+    def _get_company(self, request, company_id):
+        company_qs = Company.objects.all()
+        if request.user.role in ('company_admin', 'employee'):
+            if request.user.company_id != company_id:
+                raise PermissionDenied('You can only view directory of your own company.')
+            company_qs = company_qs.filter(id=request.user.company_id)
+        return get_object_or_404(company_qs, id=company_id)
+
+    def get(self, request, company_id, user_id):
+        company = self._get_company(request, company_id)
+        member = get_object_or_404(User, id=user_id, company=company)
+        now = timezone.now()
+        thirty_days_ahead = now + timedelta(days=30)
+
+        tasks_count = Task.objects.filter(
+            assignee=member,
+            column__board__company=company,
+        ).count()
+        bookings_last_30_days = Booking.objects.filter(
+            user=member,
+            company=company,
+            start_time__gte=now,
+            start_time__lte=thirty_days_ahead,
+        ).count()
+
+        member.tasks_count = tasks_count
+        member.bookings_last_30_days = bookings_last_30_days
+        serializer = CompanyDirectoryDetailSerializer(member)
+        return Response(serializer.data)
 
 
 @extend_schema(

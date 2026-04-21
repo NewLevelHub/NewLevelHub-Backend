@@ -46,3 +46,20 @@ class CompanyMemberFilter(django_filters.FilterSet):
             | Q(first_name__icontains=value)
             | Q(last_name__icontains=value)
         )
+
+
+class CompanyDirectoryFilter(django_filters.FilterSet):
+    role = django_filters.ChoiceFilter(choices=User.ROLE_CHOICES)
+    position = django_filters.CharFilter(lookup_expr='icontains')
+    search = django_filters.CharFilter(method='filter_search')
+
+    class Meta:
+        model = User
+        fields = ['role', 'position']
+
+    def filter_search(self, queryset, name, value):
+        return queryset.filter(
+            Q(email__icontains=value)
+            | Q(first_name__icontains=value)
+            | Q(last_name__icontains=value)
+        )

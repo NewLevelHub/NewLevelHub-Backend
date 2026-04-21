@@ -16,6 +16,16 @@ invitation_revoke = views.InvitationViewSet.as_view({'post': 'revoke'})
 invitation_resend = views.InvitationViewSet.as_view({'post': 'resend'})
 
 urlpatterns = [
+    path(
+        '<int:company_id>/directory/',
+        views.CompanyDirectoryView.as_view(),
+        name='company-directory',
+    ),
+    path(
+        '<int:company_id>/directory/<int:user_id>/',
+        views.CompanyDirectoryProfileView.as_view(),
+        name='company-directory-profile',
+    ),
     path('<int:company_id>/invitations/', invitation_list, name='company-invitations'),
     path(
         '<int:company_id>/invitations/<int:id>/revoke/',

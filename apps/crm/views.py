@@ -652,6 +652,7 @@ class CommentViewSet(viewsets.ModelViewSet):
 class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LabelSerializer
     queryset = Label.objects.all()
+    permission_classes = [IsCompanyMember]
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_permissions(self):

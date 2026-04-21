@@ -11,7 +11,7 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
-from apps.core.permissions import IsCompanyMember, IsCompanyAdmin, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
@@ -166,24 +166,19 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         summary='Archive board',
         description=(
             'Marks the board as archived (sets `is_archived=True`). '
-            'Restricted to `company_admin` or `superadmin`; employees receive 403. '
+            'Available to all company members (company_admin, employee) and superadmin. '
             'Archived boards are excluded from the default list response.'
         ),
         request=None,
         responses={
             200: BoardSerializer,
             401: OpenApiResponse(description='Not authenticated.'),
-            403: OpenApiResponse(description='Company admin or superadmin only.'),
+            403: OpenApiResponse(description='Company members only.'),
             404: OpenApiResponse(description='Board not found or not accessible.'),
         },
     )
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
-        if request.user.role not in ('superadmin', 'company_admin'):
-            return Response(
-                {'detail': 'Only company admins can archive boards.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         user = request.user
         if user.role == 'superadmin':
             board = Board.objects.filter(pk=pk).first()
@@ -201,7 +196,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         summary='Unarchive board',
         description=(
             'Marks the board as active (sets `is_archived=False`). '
-            'Restricted to `company_admin` or `superadmin`; employees receive 403. '
+            'Available to all company members (company_admin, employee) and superadmin. '
             'Returns 400 if the company has already reached its plan limit of active boards. '
             'If the board is already active the action is idempotent and returns 200.'
         ),
@@ -224,17 +219,12 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
                 ],
             ),
             401: OpenApiResponse(description='Not authenticated.'),
-            403: OpenApiResponse(description='Company admin or superadmin only.'),
+            403: OpenApiResponse(description='Company members only.'),
             404: OpenApiResponse(description='Board not found or not accessible.'),
         },
     )
     @action(detail=True, methods=['post'], url_path='unarchive')
     def unarchive(self, request, pk=None):
-        if request.user.role not in ('superadmin', 'company_admin'):
-            return Response(
-                {'detail': 'Only company admins can unarchive boards.'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
         user = request.user
         if user.role == 'superadmin':
             board = Board.objects.filter(pk=pk).first()
@@ -296,7 +286,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         responses={
             204: OpenApiResponse(description='Column deleted, tasks moved'),
             400: OpenApiResponse(description='move_to missing, last column, or wrong board'),
-            403: OpenApiResponse(description='Company admin required'),
+            403: OpenApiResponse(description='Company members only'),
             404: OpenApiResponse(description='Column or board not found'),
         },
     ),
@@ -305,8 +295,6 @@ class ColumnViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_permissions(self):
-        if self.action == 'destroy':
-            return [IsCompanyAdmin(), IsEmailVerifiedOrSuperAdmin()]
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
 
     def _get_board_or_403(self):
@@ -639,16 +627,25 @@ class TaskViewSet(viewsets.ModelViewSet):
         return f.qs.distinct()
 
     def perform_create(self, serializer):
-        serializer.save(created_by=self.request.user)
+        task = serializer.save(created_by=self.request.user)
+        if task.assignee and task.assignee != self.request.user:
+            Notification.objects.create(
+                user=task.assignee,
+                notification_type='task_assigned',
+                title='Вам назначена задача',
+                body=task.title,
+                url=f'/crm/tasks/{task.pk}/',
+            )
 
     def perform_update(self, serializer):
         old_assignee_id = serializer.instance.assignee_id
         instance = serializer.save()
         new_assignee_id = instance.assignee_id
+        new_assignee = instance.assignee
 
-        if new_assignee_id and new_assignee_id != old_assignee_id:
+        if new_assignee and new_assignee_id != old_assignee_id and new_assignee != self.request.user:
             Notification.objects.create(
-                user_id=new_assignee_id,
+                user=new_assignee,
                 notification_type='task_assigned',
                 title='Вам назначена задача',
                 body=instance.title,

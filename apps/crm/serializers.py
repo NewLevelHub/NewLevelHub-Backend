@@ -1,5 +1,15 @@
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
+
 from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
+
+User = get_user_model()
+
+
+class AssigneeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'avatar']
 
 
 class LabelSerializer(serializers.ModelSerializer):
@@ -50,9 +60,22 @@ class TaskHistorySerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
+    """
+    List serializer — lightweight, no nested history.
+    Used for list action and as the base for writes.
+    """
     label_ids = serializers.PrimaryKeyRelatedField(
         queryset=Label.objects.all(), many=True, source='labels', required=False,
     )
+    assignee_id = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(), source='assignee', required=False, allow_null=True,
+        write_only=True,
+    )
+    assignee = AssigneeSerializer(read_only=True)
+    column_id = serializers.PrimaryKeyRelatedField(
+        queryset=Column.objects.all(), source='column',
+    )
+    board_id = serializers.IntegerField(write_only=True)
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
@@ -61,13 +84,101 @@ class TaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
-            'id', 'column', 'title', 'description', 'priority', 'position',
-            'assignee', 'assignee_name', 'created_by', 'deadline',
+            'id', 'column_id', 'board_id', 'title', 'description', 'priority', 'position',
+            'assignee_id', 'assignee', 'assignee_name', 'created_by', 'deadline',
             'label_ids', 'labels', 'is_archived',
             'checklists', 'comments_count', 'attachments_count',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_by', 'position', 'is_archived', 'created_at', 'updated_at']
+
+    def _get_company(self):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return request.user.company if request.user.role != 'superadmin' else None
+        return None
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = request.user if request else None
+        company = user.company if (user and user.role != 'superadmin') else None
+
+        board_id = attrs.pop('board_id', None)
+
+        # On create, board_id is required to validate column ownership.
+        # On update (partial), board_id may be absent; derive it from the instance.
+        instance = getattr(self, 'instance', None)
+
+        if board_id is not None:
+            # Validate board belongs to company
+            from .models import Board as BoardModel
+            board_qs = BoardModel.objects.filter(pk=board_id)
+            if company:
+                board_qs = board_qs.filter(company=company)
+            if not board_qs.exists():
+                raise serializers.ValidationError({'board_id': 'Board not found or does not belong to your company.'})
+            self._validated_board_id = board_id
+        elif instance is not None:
+            self._validated_board_id = instance.column.board_id
+        else:
+            raise serializers.ValidationError({'board_id': 'This field is required.'})
+
+        # Validate column belongs to board
+        column = attrs.get('column')
+        if column is not None:
+            if column.board_id != self._validated_board_id:
+                raise serializers.ValidationError({'column_id': 'Column does not belong to the specified board.'})
+
+        # Validate assignee belongs to same company
+        assignee = attrs.get('assignee')
+        if assignee is not None:
+            if company and assignee.company_id != company.id:
+                raise serializers.ValidationError(
+                    {'assignee_id': 'Assignee must be an employee of the same company.'}
+                )
+
+        # Validate labels belong to the board's company.
+        # Superadmin has company=None and is intentionally allowed to attach any label.
+        labels = attrs.get('labels')
+        if labels and company is not None:
+            invalid = [lb for lb in labels if lb.company_id != company.id]
+            if invalid:
+                raise serializers.ValidationError(
+                    {'label_ids': 'All labels must belong to your company.'}
+                )
+
+        return attrs
+
+    def create(self, validated_data):
+        labels = validated_data.pop('labels', [])
+        task = Task.objects.create(**validated_data)
+        if labels:
+            task.labels.set(labels)
+        return task
+
+    def update(self, instance, validated_data):
+        labels = validated_data.pop('labels', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if labels is not None:
+            instance.labels.set(labels)
+        return instance
+
+
+class TaskDetailSerializer(TaskSerializer):
+    """
+    Detail serializer — adds nested history (last 10 entries).
+    Used for retrieve action only.
+    """
+    history = serializers.SerializerMethodField()
+
+    class Meta(TaskSerializer.Meta):
+        fields = TaskSerializer.Meta.fields + ['history']
+
+    def get_history(self, obj):
+        entries = obj.history.all()[:10]
+        return TaskHistorySerializer(entries, many=True).data
 
 
 class TaskMoveSerializer(serializers.Serializer):

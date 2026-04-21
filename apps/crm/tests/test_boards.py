@@ -330,13 +330,13 @@ class TestBoardRetrieveUpdateDelete:
 
 @pytest.mark.django_db
 class TestBoardArchive:
-    def test_employee_archive_returns_403(self, api_client, employee_a, board_a):
+    def test_employee_can_archive_board(self, api_client, employee_a, board_a):
         api_client.force_authenticate(user=employee_a)
         response = api_client.post(archive_url(board_a.id))
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_200_OK
         board_a.refresh_from_db()
-        assert board_a.is_archived is False
+        assert board_a.is_archived is True
 
     def test_admin_can_archive_board(self, api_client, admin_a, board_a):
         api_client.force_authenticate(user=admin_a)
@@ -447,14 +447,14 @@ class TestBoardUnarchive:
         assert response.data['id'] == board_a.id
         assert response.data['is_archived'] is False
 
-    def test_unarchive_by_employee_returns_403(self, api_client, employee_a, archived_board_a):
-        """Employees are not allowed to unarchive boards."""
+    def test_employee_can_unarchive_board(self, api_client, employee_a, archived_board_a):
+        """Employees are allowed to unarchive boards."""
         api_client.force_authenticate(user=employee_a)
         response = api_client.post(unarchive_url(archived_board_a.id))
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_200_OK
         archived_board_a.refresh_from_db()
-        assert archived_board_a.is_archived is True
+        assert archived_board_a.is_archived is False
 
     def test_unarchive_superadmin_any_company(self, api_client, superadmin, admin_b, company_b):
         """Superadmin can unarchive a board belonging to any company."""

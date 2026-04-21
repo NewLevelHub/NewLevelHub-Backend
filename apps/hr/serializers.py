@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
@@ -6,19 +7,47 @@ from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingSt
 class LeaveRequestSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.full_name', read_only=True)
     duration_days = serializers.IntegerField(read_only=True)
+    reviewer = serializers.PrimaryKeyRelatedField(source='reviewed_by', read_only=True)
 
     class Meta:
         model = LeaveRequest
         fields = [
             'id', 'user', 'user_name', 'company', 'leave_type', 'status',
             'start_date', 'end_date', 'duration_days', 'comment',
-            'reviewed_by', 'review_comment', 'reviewed_at',
+            'reviewed_by', 'reviewer', 'review_comment', 'reviewed_at',
             'created_at',
         ]
         read_only_fields = [
             'id', 'user', 'company', 'status',
             'reviewed_by', 'review_comment', 'reviewed_at', 'created_at',
         ]
+
+    def validate(self, attrs):
+        start_date = attrs.get('start_date')
+        end_date = attrs.get('end_date')
+
+        if start_date and end_date and start_date > end_date:
+            raise serializers.ValidationError({'start_date': 'start_date must be less than or equal to end_date.'})
+
+        if start_date and start_date < timezone.localdate():
+            raise serializers.ValidationError({'start_date': 'start_date must be today or later.'})
+
+        if start_date and end_date:
+            user = self.instance.user if self.instance else self.context['request'].user
+            overlap_qs = LeaveRequest.objects.filter(
+                user=user,
+                status='approved',
+                start_date__lte=end_date,
+                end_date__gte=start_date,
+            )
+            if self.instance:
+                overlap_qs = overlap_qs.exclude(pk=self.instance.pk)
+            if overlap_qs.exists():
+                raise serializers.ValidationError(
+                    {'non_field_errors': ['Cannot request leave on dates overlapping with approved leave.']}
+                )
+
+        return attrs
 
 
 class LeaveRequestReviewSerializer(serializers.Serializer):

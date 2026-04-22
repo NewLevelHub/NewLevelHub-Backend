@@ -257,7 +257,9 @@ class TestLeaveListAccessAndFilters:
         ids = [item['id'] for item in _results(response)]
         assert ids == [approved_remote.pk]
 
-    def test_year_filter_returns_only_requests_for_selected_start_year(self, api_client, admin_a, employee_a, company_a):
+    def test_year_filter_returns_only_requests_for_selected_start_year(
+        self, api_client, admin_a, employee_a, company_a
+    ):
         leave_2025 = create_leave(
             user=employee_a,
             company=company_a,

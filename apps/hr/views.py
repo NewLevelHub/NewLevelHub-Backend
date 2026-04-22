@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
@@ -51,7 +52,18 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     def get_queryset(self):
         qs = super().get_queryset()
         if self.request.user.role == 'employee':
-            return qs.filter(user=self.request.user)
+            qs = qs.filter(user=self.request.user)
+
+        year = self.request.query_params.get('year')
+        if year not in (None, ''):
+            try:
+                parsed_year = int(year)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({'year': 'Year must be an integer.'}) from exc
+            if parsed_year < 1900 or parsed_year > 3000:
+                raise ValidationError({'year': 'Year must be between 1900 and 3000.'})
+            qs = qs.filter(start_date__year=parsed_year)
+
         return qs
 
     def perform_create(self, serializer):
@@ -99,25 +111,48 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     )
     @action(detail=True, methods=['post'], url_path='review', permission_classes=[IsCompanyAdmin])
     def review(self, request, pk=None):
-        leave = self.get_object()
         ser = LeaveRequestReviewSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        old_status = leave.status
         new_status = ser.validated_data['status']
-        leave.status = new_status
-        leave.review_comment = ser.validated_data.get('review_comment', '')
-        leave.reviewed_by = request.user
-        leave.reviewed_at = timezone.now()
-        leave.save()
 
-        if leave.leave_type not in ('sick_leave', 'remote'):
-            balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)
-            if old_status != 'approved' and new_status == 'approved':
-                balance.used_days += leave.duration_days
-                balance.save(update_fields=['used_days', 'updated_at'])
-            elif old_status == 'approved' and new_status != 'approved':
-                balance.used_days = max(balance.used_days - leave.duration_days, 0)
-                balance.save(update_fields=['used_days', 'updated_at'])
+        with transaction.atomic():
+            leave = LeaveRequest.objects.select_for_update().select_related('user').get(pk=pk)
+            old_status = leave.status
+
+            if new_status == 'approved':
+                # Lock the user row to serialize concurrent approvals for the same employee.
+                User.objects.select_for_update().only('id').get(pk=leave.user_id)
+                overlap_exists = LeaveRequest.objects.filter(
+                    user_id=leave.user_id,
+                    status='approved',
+                    start_date__lte=leave.end_date,
+                    end_date__gte=leave.start_date,
+                ).exclude(pk=leave.pk).exists()
+                if overlap_exists:
+                    raise ValidationError(
+                        {'non_field_errors': ['Cannot approve leave on dates overlapping with approved leave.']}
+                    )
+
+                if leave.leave_type not in ('sick_leave', 'remote') and old_status != 'approved':
+                    balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)
+                    remaining_days = max(balance.total_days - balance.used_days, 0)
+                    if leave.duration_days > remaining_days:
+                        raise ValidationError({'non_field_errors': ['Not enough leave balance for selected dates.']})
+
+            leave.status = new_status
+            leave.review_comment = ser.validated_data.get('review_comment', '')
+            leave.reviewed_by = request.user
+            leave.reviewed_at = timezone.now()
+            leave.save()
+
+            if leave.leave_type not in ('sick_leave', 'remote'):
+                balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)
+                if old_status != 'approved' and new_status == 'approved':
+                    balance.used_days += leave.duration_days
+                    balance.save(update_fields=['used_days', 'updated_at'])
+                elif old_status == 'approved' and new_status != 'approved':
+                    balance.used_days = max(balance.used_days - leave.duration_days, 0)
+                    balance.save(update_fields=['used_days', 'updated_at'])
 
         return Response(LeaveRequestSerializer(leave).data)
 

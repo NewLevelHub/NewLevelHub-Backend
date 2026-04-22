@@ -1,5 +1,6 @@
 from django.utils import timezone
 from rest_framework import serializers
+from apps.companies.models import CompanySettings
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
@@ -22,9 +23,18 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'reviewed_by', 'review_comment', 'reviewed_at', 'created_at',
         ]
 
+    def _default_total_days_for_user(self, user):
+        if not user.company_id:
+            return 24
+        try:
+            return CompanySettings.objects.get(company_id=user.company_id).vacation_days_per_year
+        except CompanySettings.DoesNotExist:
+            return 24
+
     def validate(self, attrs):
         start_date = attrs.get('start_date')
         end_date = attrs.get('end_date')
+        leave_type = attrs.get('leave_type')
 
         if start_date and end_date and start_date > end_date:
             raise serializers.ValidationError({'start_date': 'start_date must be less than or equal to end_date.'})
@@ -46,6 +56,21 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'non_field_errors': ['Cannot request leave on dates overlapping with approved leave.']}
                 )
+
+            if leave_type in ('vacation', 'day_off'):
+                duration_days = (end_date - start_date).days + 1
+                balance = LeaveBalance.objects.filter(user=user, year=start_date.year).first()
+                if balance is None:
+                    total_days = self._default_total_days_for_user(user)
+                    used_days = 0
+                else:
+                    total_days = balance.total_days
+                    used_days = balance.used_days
+                remaining_days = max(total_days - used_days, 0)
+                if duration_days > remaining_days:
+                    raise serializers.ValidationError(
+                        {'non_field_errors': ['Not enough leave balance for selected dates.']}
+                    )
 
         return attrs
 

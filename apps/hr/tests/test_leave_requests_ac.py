@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from django.utils import timezone
@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.companies.models import Company
-from apps.hr.models import LeaveRequest
+from apps.hr.models import LeaveBalance, LeaveRequest
 from apps.users.models import User
 
 LEAVES_URL = '/api/v1/hr/leaves/'
@@ -172,6 +172,26 @@ class TestLeaveCreateValidation:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_create_vacation_without_remaining_days_returns_400(self, api_client, employee_a):
+        today = timezone.localdate()
+        LeaveBalance.objects.create(
+            user=employee_a,
+            year=(today + timedelta(days=10)).year,
+            total_days=2,
+            used_days=2,
+        )
+
+        auth(api_client, employee_a)
+        payload = {
+            'leave_type': 'vacation',
+            'start_date': _iso(today + timedelta(days=10)),
+            'end_date': _iso(today + timedelta(days=11)),
+        }
+        response = api_client.post(LEAVES_URL, payload, format='json')
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data['detail']['non_field_errors'][0] == 'Not enough leave balance for selected dates.'
+
 
 @pytest.mark.django_db
 class TestLeaveListAccessAndFilters:
@@ -236,6 +256,30 @@ class TestLeaveListAccessAndFilters:
         assert response.status_code == status.HTTP_200_OK
         ids = [item['id'] for item in _results(response)]
         assert ids == [approved_remote.pk]
+
+    def test_year_filter_returns_only_requests_for_selected_start_year(self, api_client, admin_a, employee_a, company_a):
+        leave_2025 = create_leave(
+            user=employee_a,
+            company=company_a,
+            leave_type='vacation',
+            start_date=date(2025, 5, 2),
+            end_date=date(2025, 5, 3),
+        )
+        leave_2026 = create_leave(
+            user=employee_a,
+            company=company_a,
+            leave_type='vacation',
+            start_date=date(2026, 5, 2),
+            end_date=date(2026, 5, 3),
+        )
+
+        auth(api_client, admin_a)
+        response = api_client.get(LEAVES_URL, {'year': 2025})
+
+        assert response.status_code == status.HTTP_200_OK
+        ids = {item['id'] for item in _results(response)}
+        assert leave_2025.pk in ids
+        assert leave_2026.pk not in ids
 
 
 @pytest.mark.django_db

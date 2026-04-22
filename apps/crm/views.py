@@ -11,7 +11,7 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
-from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsCompanyAdmin
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
@@ -20,6 +20,18 @@ from .serializers import (
     LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
     CommentSerializer, TaskHistorySerializer,
 )
+
+
+def _normalize_positions(column):
+    """Re-number task positions in a column to be sequential (1, 2, 3, …).
+
+    Uses SoftDeleteManager (Task.objects) so only active (non-deleted) tasks
+    are counted. Uses bulk .update() per row to avoid triggering signals.
+    """
+    tasks = Task.objects.filter(column=column).order_by('position', 'created_at')
+    for idx, task in enumerate(tasks, start=1):
+        if task.position != idx:
+            Task.objects.filter(pk=task.pk).update(position=idx)
 
 
 @extend_schema_view(
@@ -115,6 +127,8 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Board.objects.none()
         user = self.request.user
         if user.role == 'superadmin':
             qs = Board.objects.all()
@@ -315,6 +329,8 @@ class ColumnViewSet(viewsets.ModelViewSet):
         return board
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Column.objects.none()
         board = self._get_board_or_403()
         return Column.objects.filter(board=board).prefetch_related('tasks').order_by('position')
 
@@ -342,7 +358,9 @@ class ColumnViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.instance
-        new_position = serializer.validated_data.get('position')
+        # Pop position first so that a null value sent by the client is never
+        # written to the DB (the column has a NOT NULL constraint).
+        new_position = serializer.validated_data.pop('position', None)
 
         if new_position is not None and new_position != instance.position:
             board = instance.board
@@ -627,7 +645,15 @@ class TaskViewSet(viewsets.ModelViewSet):
         return f.qs.distinct()
 
     def perform_create(self, serializer):
+        column = serializer.validated_data.get('column')
+        if column and column.wip_limit > 0:
+            active_count = Task.objects.filter(column=column, is_archived=False).count()
+            if active_count >= column.wip_limit:
+                raise ValidationError(f'WIP limit reached (max {column.wip_limit} tasks)')
         task = serializer.save(created_by=self.request.user)
+        # Normalize positions so the new task gets a clean sequential number
+        # at the end of the column rather than inheriting any gaps.
+        _normalize_positions(task.column)
         if task.assignee and task.assignee != self.request.user:
             Notification.objects.create(
                 user=task.assignee,
@@ -654,16 +680,24 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        column = instance.column
         instance.soft_delete()
+        _normalize_positions(column)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
         tags=['CRM'],
         summary='Move task (drag & drop)',
+        description=(
+            'Moves a task to a target column. The target column must belong to the same board '
+            'and the same company. If the column has a WIP limit set (wip_limit > 0), the move '
+            'is rejected when the target column already has that many active tasks. '
+            'If `position` is omitted, the task is appended to the end of the target column.'
+        ),
         request=TaskMoveSerializer,
         responses={
             200: TaskSerializer,
-            400: OpenApiResponse(description='Validation error'),
+            400: OpenApiResponse(description='Validation error or WIP limit reached'),
             404: OpenApiResponse(description='Task not found'),
         },
     )
@@ -673,27 +707,55 @@ class TaskViewSet(viewsets.ModelViewSet):
         serializer = TaskMoveSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        target_column_id = serializer.validated_data['column_id']
+        target_column = serializer.validated_data['column_id']  # already a Column instance
+        target_column_obj = Column.objects.select_related('board').get(pk=target_column.pk)
 
-        # Validate that the target column exists and belongs to the same board as the task.
-        try:
-            target_column = Column.objects.select_related('board').get(pk=target_column_id)
-        except Column.DoesNotExist:
-            raise ValidationError({'column_id': 'Target column not found.'})
-
-        if target_column.board_id != task.column.board_id:
+        if target_column_obj.board_id != task.column.board_id:
             raise ValidationError({'column_id': 'Target column must belong to the same board as the task.'})
 
         # Validate tenant isolation: target column's board must belong to the request user's company.
         # Superadmin bypasses this check.
         if request.user.role != 'superadmin':
-            if target_column.board.company_id != request.user.company_id:
+            if target_column_obj.board.company_id != request.user.company_id:
                 raise ValidationError({'column_id': 'Target column does not belong to your company.'})
 
+        # WIP limit check: wip_limit == 0 means no limit.
+        # Task.objects (SoftDeleteManager) already excludes is_deleted=True.
+        if target_column_obj.wip_limit > 0:
+            active_count = Task.objects.filter(
+                column=target_column_obj,
+                is_archived=False,
+            ).exclude(pk=task.pk).count()
+            if active_count >= target_column_obj.wip_limit:
+                raise ValidationError(
+                    f'WIP limit reached (max {target_column_obj.wip_limit} tasks)'
+                )
+
+        old_column = task.column
         old_col = task.column_id
-        task.column_id = target_column_id
-        task.position = serializer.validated_data['position']
+
+        # Determine position: use provided position or append to end.
+        order = serializer.validated_data.get('position')
+        if order is not None:
+            new_position = order
+        else:
+            max_pos = (
+                Task.objects.filter(column=target_column_obj)
+                .exclude(pk=task.pk)
+                .aggregate(models.Max('position'))['position__max']
+            )
+            new_position = (max_pos or 0) + 1
+
+        task.column = target_column_obj
+        task.position = new_position
         task.save(update_fields=['column', 'position'])
+
+        # Re-normalize both columns so positions are always sequential.
+        _normalize_positions(old_column)
+        _normalize_positions(target_column_obj)
+
+        task.refresh_from_db()
+
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
             old_value=str(old_col), new_value=str(task.column_id),
@@ -731,6 +793,33 @@ class TaskViewSet(viewsets.ModelViewSet):
         if page is not None:
             return self.get_paginated_response(TaskHistorySerializer(page, many=True).data)
         return Response(TaskHistorySerializer(entries, many=True).data)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Archive task',
+        description=(
+            'Soft-deletes the task by calling task.soft_delete() (sets is_deleted=True). '
+            'Archived tasks are excluded from all list queries. '
+            'Permission: company members only (employee, company_admin, superadmin).'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='TaskArchiveResponse',
+                fields={'detail': drf_serializers.CharField()},
+            ),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only.'),
+            404: OpenApiResponse(description='Task not found.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive(self, request, pk=None):
+        task = self.get_object()
+        column = task.column
+        task.soft_delete()
+        _normalize_positions(column)
+        return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(

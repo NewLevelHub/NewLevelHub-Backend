@@ -692,7 +692,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             'Moves a task to a target column. The target column must belong to the same board '
             'and the same company. If the column has a WIP limit set (wip_limit > 0), the move '
             'is rejected when the target column already has that many active tasks. '
-            'If `order` is omitted, the task is appended to the end of the target column.'
+            'If `position` is omitted, the task is appended to the end of the target column.'
         ),
         request=TaskMoveSerializer,
         responses={
@@ -734,8 +734,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         old_column = task.column
         old_col = task.column_id
 
-        # Determine position: use provided order or append to end.
-        order = serializer.validated_data.get('order')
+        # Determine position: use provided position or append to end.
+        order = serializer.validated_data.get('position')
         if order is not None:
             new_position = order
         else:

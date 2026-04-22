@@ -15,6 +15,18 @@ from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifi
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
+
+
+def _normalize_positions(column):
+    """Re-number task positions in a column to be sequential (1, 2, 3, …).
+
+    Uses SoftDeleteManager (Task.objects) so only active (non-deleted) tasks
+    are counted. Uses bulk .update() per row to avoid triggering signals.
+    """
+    tasks = Task.objects.filter(column=column).order_by('position', 'created_at')
+    for idx, task in enumerate(tasks, start=1):
+        if task.position != idx:
+            Task.objects.filter(pk=task.pk).update(position=idx)
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
     LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
@@ -634,6 +646,9 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         task = serializer.save(created_by=self.request.user)
+        # Normalize positions so the new task gets a clean sequential number
+        # at the end of the column rather than inheriting any gaps.
+        _normalize_positions(task.column)
         if task.assignee and task.assignee != self.request.user:
             Notification.objects.create(
                 user=task.assignee,
@@ -660,7 +675,9 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        column = instance.column
         instance.soft_delete()
+        _normalize_positions(column)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
@@ -709,6 +726,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                     f'WIP limit reached (max {target_column_obj.wip_limit} tasks)'
                 )
 
+        old_column = task.column
         old_col = task.column_id
 
         # Determine position: use provided order or append to end.
@@ -726,6 +744,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         task.column = target_column_obj
         task.position = new_position
         task.save(update_fields=['column', 'position'])
+
+        # Re-normalize both columns so positions are always sequential.
+        _normalize_positions(old_column)
+        _normalize_positions(target_column_obj)
+
+        task.refresh_from_db()
 
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
@@ -787,7 +811,9 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
         task = self.get_object()
+        column = task.column
         task.soft_delete()
+        _normalize_positions(column)
         return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
 
 

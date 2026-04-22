@@ -526,8 +526,8 @@ class TestTaskMove:
         assert TaskHistory.objects.filter(task=task_a, action='moved').exists()
 
     def test_move_without_order_appends_to_end(self, api_client, admin_a, task_a, column_a2):
-        """When order is omitted, task is placed after existing tasks in target column."""
-        existing = Task.objects.create(
+        """When order is omitted, task is placed at the end and positions are normalised."""
+        Task.objects.create(
             column=column_a2, title='Existing', priority='low', position=5, created_by=admin_a,
         )
         api_client.force_authenticate(admin_a)
@@ -535,8 +535,12 @@ class TestTaskMove:
         assert res.status_code == status.HTTP_200_OK
         task_a.refresh_from_db()
         assert task_a.column_id == column_a2.id
-        # Should be appended after existing task (position = max + 1 = 6)
-        assert task_a.position == existing.position + 1
+        # After normalisation: existing task → 1, moved task → 2 (appended to end).
+        positions = list(
+            Task.objects.filter(column=column_a2).order_by('position').values_list('position', flat=True)
+        )
+        assert positions == [1, 2]
+        assert task_a.position == 2
 
     def test_move_unauthenticated_returns_401(self, api_client, task_a, column_a2):
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
@@ -649,3 +653,102 @@ class TestTaskArchive:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_archive_url(task_b.id))
         assert res.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# Position normalization
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTaskPositionNormalization:
+    """Positions must always be sequential (1, 2, 3, …) with no gaps."""
+
+    def test_create_sets_sequential_position(self, api_client, admin_a, column_a, board_a):
+        """Tasks created one after another receive sequential positions."""
+        api_client.force_authenticate(admin_a)
+        ids = []
+        for i in range(3):
+            res = api_client.post(TASKS_URL, {
+                'board_id': board_a.id,
+                'column_id': column_a.id,
+                'title': f'Task {i}',
+                'priority': 'low',
+            }, format='json')
+            assert res.status_code == status.HTTP_201_CREATED
+            ids.append(res.data['id'])
+
+        positions = list(
+            Task.objects.filter(column=column_a).order_by('position').values_list('position', flat=True)
+        )
+        assert positions == list(range(1, len(positions) + 1)), f"Gaps found: {positions}"
+
+    def test_delete_normalizes_remaining_positions(self, api_client, admin_a, column_a, board_a):
+        """After deleting a task the remaining tasks must have no gaps."""
+        # Create tasks with artificial gaps to simulate pre-existing gap state.
+        t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
+        t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=5, created_by=admin_a)
+        t3 = Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
+
+        api_client.force_authenticate(admin_a)
+        api_client.delete(task_url(t2.id))
+
+        # t2 is soft-deleted; only t1 and t3 remain active.
+        positions = list(
+            Task.objects.filter(column=column_a).order_by('position').values_list('position', flat=True)
+        )
+        assert positions == [1, 2], f"Expected [1, 2], got {positions}"
+
+    def test_archive_normalizes_remaining_positions(self, api_client, admin_a, column_a, board_a):
+        """After archiving a task the remaining tasks must have no gaps."""
+        t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
+        t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=5, created_by=admin_a)
+        t3 = Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
+
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(t1.id))
+
+        # t1 is soft-deleted; t2 and t3 remain and must be renumbered.
+        positions = list(
+            Task.objects.filter(column=column_a).order_by('position').values_list('position', flat=True)
+        )
+        assert positions == [1, 2], f"Expected [1, 2], got {positions}"
+
+    def test_move_normalizes_source_and_target_columns(self, api_client, admin_a, column_a, column_a2, board_a):
+        """Moving a task re-normalizes positions in both the source and the target column."""
+        # Source column: tasks with gaps.
+        t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
+        t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=10, created_by=admin_a)
+        # Target column: task with a high position.
+        t3 = Task.objects.create(column=column_a2, title='T3', priority='low', position=99, created_by=admin_a)
+
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(t1.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+
+        # Source column (column_a) now has only t2 — must be at position 1.
+        src_positions = list(
+            Task.objects.filter(column=column_a).order_by('position').values_list('position', flat=True)
+        )
+        assert src_positions == [1], f"Source column gaps: {src_positions}"
+
+        # Target column (column_a2) now has t3 and t1 — must be sequential.
+        tgt_positions = list(
+            Task.objects.filter(column=column_a2).order_by('position').values_list('position', flat=True)
+        )
+        assert tgt_positions == list(range(1, len(tgt_positions) + 1)), f"Target column gaps: {tgt_positions}"
+
+    def test_move_without_order_appends_sequentially(self, api_client, admin_a, column_a, column_a2, board_a):
+        """Moving without an explicit order places the task at the next sequential position."""
+        t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
+        # Target column already has two tasks with a gap.
+        Task.objects.create(column=column_a2, title='E1', priority='low', position=1, created_by=admin_a)
+        Task.objects.create(column=column_a2, title='E2', priority='low', position=7, created_by=admin_a)
+
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(task_move_url(t1.id), {'column_id': column_a2.id}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+
+        tgt_positions = list(
+            Task.objects.filter(column=column_a2).order_by('position').values_list('position', flat=True)
+        )
+        assert tgt_positions == [1, 2, 3], f"Expected [1, 2, 3], got {tgt_positions}"

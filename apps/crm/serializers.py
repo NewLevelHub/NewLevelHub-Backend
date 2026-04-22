@@ -1,3 +1,5 @@
+import re
+
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
@@ -15,8 +17,23 @@ class AssigneeSerializer(serializers.ModelSerializer):
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
-        fields = ['id', 'name', 'color']
-        read_only_fields = ['id']
+        fields = ['id', 'name', 'color', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_color(self, value):
+        if not re.match(r'^#[0-9a-fA-F]{6}$', value):
+            raise serializers.ValidationError('Color must be a valid hex code, e.g. #ff00aa.')
+        return value.lower()
+
+    def validate(self, attrs):
+        company = self.context['request'].user.company
+        name = attrs.get('name', getattr(self.instance, 'name', None))
+        qs = Label.objects.filter(company=company, name__iexact=name)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError({'name': 'Label with this name already exists in your company.'})
+        return attrs
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):
@@ -79,13 +96,12 @@ class TaskSerializer(serializers.ModelSerializer):
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
-    assignee_name = serializers.CharField(source='assignee.full_name', read_only=True, default=None)
 
     class Meta:
         model = Task
         fields = [
             'id', 'column_id', 'board_id', 'title', 'description', 'priority', 'position',
-            'assignee_id', 'assignee', 'assignee_name', 'created_by', 'deadline',
+            'assignee_id', 'assignee', 'created_by', 'deadline',
             'label_ids', 'labels', 'is_archived',
             'checklists', 'comments_count', 'attachments_count',
             'created_at', 'updated_at',
@@ -201,7 +217,7 @@ class ColumnSerializer(serializers.ModelSerializer):
 class ColumnWriteSerializer(serializers.ModelSerializer):
     """Used for create / partial_update — no nested task data."""
     wip_limit = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=0)
-    position = serializers.IntegerField(required=False, min_value=1)
+    position = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
     class Meta:
         model = Column

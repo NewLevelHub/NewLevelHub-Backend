@@ -11,7 +11,7 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
-from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
@@ -115,6 +115,8 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Board.objects.none()
         user = self.request.user
         if user.role == 'superadmin':
             qs = Board.objects.all()
@@ -315,6 +317,8 @@ class ColumnViewSet(viewsets.ModelViewSet):
         return board
 
     def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return Column.objects.none()
         board = self._get_board_or_403()
         return Column.objects.filter(board=board).prefetch_related('tasks').order_by('position')
 
@@ -342,7 +346,9 @@ class ColumnViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.instance
-        new_position = serializer.validated_data.get('position')
+        # Pop position first so that a null value sent by the client is never
+        # written to the DB (the column has a NOT NULL constraint).
+        new_position = serializer.validated_data.pop('position', None)
 
         if new_position is not None and new_position != instance.position:
             board = instance.board
@@ -819,19 +825,50 @@ class CommentViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['CRM'],
         summary='List labels',
+        description='Returns all labels scoped to the authenticated user\'s company.',
         responses={200: LabelSerializer(many=True)},
     ),
     create=extend_schema(
         tags=['CRM'],
         summary='Create label',
+        description='Creates a label. Name must be unique within the company. Color is a hex code.',
         request=LabelSerializer,
         responses={
             201: LabelSerializer,
+            400: OpenApiResponse(description='Validation error (duplicate name or invalid color)'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['CRM'],
+        summary='Update label',
+        description='Updates name and/or color. Restricted to company_admin or superadmin.',
+        request=LabelSerializer,
+        responses={
+            200: LabelSerializer,
             400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company admin required'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete label',
+        description=(
+            'Deletes a label. M2M relation with tasks is automatically removed. '
+            'Restricted to company_admin or superadmin.'
+        ),
+        responses={
+            204: OpenApiResponse(description='Label deleted'),
+            403: OpenApiResponse(description='Company admin required'),
         },
     ),
 )
 class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LabelSerializer
-    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
     queryset = Label.objects.all()
+    permission_classes = [IsCompanyMember]
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action in ('partial_update', 'destroy'):
+            return [IsCompanyAdmin(), IsEmailVerifiedOrSuperAdmin()]
+        return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]

@@ -195,7 +195,6 @@ class TestTaskCreate:
             'assignee_id': employee_a.id,
         }, format='json')
         assert res.status_code == status.HTTP_201_CREATED
-        assert res.data['assignee_name'] == employee_a.full_name
 
     def test_create_with_labels(self, api_client, admin_a, column_a, board_a, label_a):
         api_client.force_authenticate(admin_a)

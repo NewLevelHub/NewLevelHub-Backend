@@ -2,6 +2,7 @@ from rest_framework import viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework import status
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 from apps.companies.limits import (
@@ -48,11 +49,93 @@ class FolderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'superadmin':
-            return Folder.objects.all()
-        return Folder.objects.filter(owner=user) | Folder.objects.filter(company=user.company, scope='company')
+            queryset = Folder.objects.all()
+        else:
+            queryset = (
+                Folder.objects.filter(owner=user, scope='personal')
+                | Folder.objects.filter(company=user.company, scope='company')
+            ).distinct()
+
+        scope = self.request.query_params.get('scope')
+        if scope in ('personal', 'company'):
+            queryset = queryset.filter(scope=scope)
+
+        parent_id = self.request.query_params.get('parent_id')
+        if parent_id is not None:
+            if parent_id == 'null':
+                queryset = queryset.filter(parent__isnull=True)
+            else:
+                try:
+                    queryset = queryset.filter(parent_id=int(parent_id))
+                except (TypeError, ValueError):
+                    raise ValidationError({'parent_id': 'Must be an integer or "null".'})
+        return queryset.order_by('-created_at')
+
+    def _resolve_scope(self):
+        if 'is_company_shared' in self.request.data:
+            raw = self.request.data.get('is_company_shared')
+            return 'company' if str(raw).lower() in ('1', 'true', 'yes', 'on') else 'personal'
+        requested_scope = self.request.data.get('scope')
+        if requested_scope in ('personal', 'company'):
+            return requested_scope
+        return 'personal'
+
+    def _resolve_parent(self, scope):
+        parent_id = self.request.data.get('parent_id', self.request.data.get('parent'))
+        if parent_id in (None, '', 'null'):
+            return None
+        try:
+            parent_id = int(parent_id)
+        except (TypeError, ValueError):
+            raise ValidationError({'parent_id': 'Must be an integer, null, or empty.'})
+
+        try:
+            parent = Folder.objects.get(pk=parent_id)
+        except Folder.DoesNotExist:
+            raise ValidationError({'parent_id': 'Parent folder not found.'})
+
+        user = self.request.user
+        if scope == 'personal':
+            if parent.scope != 'personal' or parent.owner_id != user.id:
+                raise ValidationError({'parent_id': 'Personal parent folder is not accessible.'})
+        else:
+            if user.role != 'superadmin' and (parent.scope != 'company' or parent.company_id != user.company_id):
+                raise ValidationError({'parent_id': 'Company parent folder is not accessible.'})
+        return parent
+
+    def create(self, request, *args, **kwargs):
+        scope = self._resolve_scope()
+        parent = self._resolve_parent(scope)
+
+        payload = {'name': request.data.get('name'), 'scope': scope, 'parent': parent.id if parent else None}
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user, company=self.request.user.company)
+
+    def retrieve(self, request, *args, **kwargs):
+        folder = self.get_object()
+        user = request.user
+        data = self.get_serializer(folder).data
+
+        if folder.scope == 'personal':
+            child_folders = Folder.objects.filter(parent=folder, scope='personal', owner=user)
+            files = File.objects.filter(folder=folder, owner=user)
+        else:
+            if user.role == 'superadmin':
+                child_folders = Folder.objects.filter(parent=folder, scope='company')
+                files = File.objects.filter(folder=folder)
+            else:
+                child_folders = Folder.objects.filter(parent=folder, scope='company', company=user.company)
+                files = File.objects.filter(folder=folder, company=user.company)
+
+        data['folders'] = FolderSerializer(child_folders, many=True).data
+        data['files'] = FileSerializer(files, many=True).data
+        return Response(data)
 
 
 @extend_schema_view(

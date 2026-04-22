@@ -10,7 +10,7 @@ class LeaveRequestAdmin(admin.ModelAdmin):
 
 @admin.register(LeaveBalance)
 class LeaveBalanceAdmin(admin.ModelAdmin):
-    list_display = ['user', 'total_days', 'used_days', 'remaining_days']
+    list_display = ['user', 'year', 'total_days', 'used_days', 'remaining_days']
 
 
 class OnboardingStepInline(admin.TabularInline):

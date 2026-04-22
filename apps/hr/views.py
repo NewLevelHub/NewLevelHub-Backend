@@ -17,7 +17,7 @@ from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardi
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
     LeaveBalanceSetSerializer, LeaveBalanceTeamSerializer,
-    OnboardingTemplateSerializer, UserOnboardingProgressSerializer,
+    OnboardingTemplateSerializer,
 )
 
 

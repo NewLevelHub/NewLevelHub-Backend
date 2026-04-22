@@ -1,5 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
+from apps.companies.models import CompanySettings
+from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
 
@@ -21,9 +23,18 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             'reviewed_by', 'review_comment', 'reviewed_at', 'created_at',
         ]
 
+    def _default_total_days_for_user(self, user):
+        if not user.company_id:
+            return 24
+        try:
+            return CompanySettings.objects.get(company_id=user.company_id).vacation_days_per_year
+        except CompanySettings.DoesNotExist:
+            return 24
+
     def validate(self, attrs):
         start_date = attrs.get('start_date')
         end_date = attrs.get('end_date')
+        leave_type = attrs.get('leave_type')
 
         if start_date and end_date and start_date > end_date:
             raise serializers.ValidationError({'start_date': 'start_date must be less than or equal to end_date.'})
@@ -46,6 +57,21 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                     {'non_field_errors': ['Cannot request leave on dates overlapping with approved leave.']}
                 )
 
+            if leave_type in ('vacation', 'day_off'):
+                duration_days = (end_date - start_date).days + 1
+                balance = LeaveBalance.objects.filter(user=user, year=start_date.year).first()
+                if balance is None:
+                    total_days = self._default_total_days_for_user(user)
+                    used_days = 0
+                else:
+                    total_days = balance.total_days
+                    used_days = balance.used_days
+                remaining_days = max(total_days - used_days, 0)
+                if duration_days > remaining_days:
+                    raise serializers.ValidationError(
+                        {'non_field_errors': ['Not enough leave balance for selected dates.']}
+                    )
+
         return attrs
 
 
@@ -59,7 +85,28 @@ class LeaveBalanceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LeaveBalance
-        fields = ['total_days', 'used_days', 'remaining_days']
+        fields = ['year', 'total_days', 'used_days', 'remaining_days']
+
+
+class LeaveBalanceSetSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    year = serializers.IntegerField(min_value=1900, max_value=3000)
+    total_days = serializers.IntegerField(min_value=0)
+
+    def validate_user_id(self, value):
+        if not User.objects.filter(id=value).exists():
+            raise serializers.ValidationError('User not found.')
+        return value
+
+
+class LeaveBalanceTeamSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    remaining_days = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = LeaveBalance
+        fields = ['user_id', 'user_name', 'year', 'total_days', 'used_days', 'remaining_days']
 
 
 class OnboardingStepSerializer(serializers.ModelSerializer):

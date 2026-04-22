@@ -1,0 +1,17 @@
+[
+  {
+    "identifier": "DEV-51",
+    "title": "Подключение пермишенов ко всем ViewSet-ам + unit-тесты",
+    "description": "Применить созданные Permission-классы и CompanyIsolationMixin ко всем существующим ViewSet-ам.\n\nЗависит от: Permission-классы и CompanyIsolationMixin (DEV-50).",
+    "block": "Блок 1 — Пользователи и роли",
+    "labels": ["backend"],
+    "area": "auth",
+    "parallel": false,
+    "dependsOn": ["DEV-50"],
+    "acceptanceCriteria": [
+      "Пермишены подключены к CompanyViewSet, BookingViewSet, ResourceViewSet",
+      "Написаны unit-тесты на каждый Permission-класс",
+      "Тесты запускаются через pytest и проходят"
+    ]
+  }
+]

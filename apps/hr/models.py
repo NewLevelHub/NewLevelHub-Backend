@@ -1,6 +1,12 @@
+from datetime import date
+
 from django.conf import settings
 from django.db import models
 from apps.core.models import TimeStampedModel
+
+
+def current_year():
+    return date.today().year
 
 
 class LeaveRequest(TimeStampedModel):
@@ -44,12 +50,14 @@ class LeaveRequest(TimeStampedModel):
 
 
 class LeaveBalance(TimeStampedModel):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='leave_balance')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='leave_balances')
+    year = models.PositiveIntegerField(default=current_year, db_index=True)
     total_days = models.PositiveIntegerField(default=24)
     used_days = models.PositiveIntegerField(default=0)
 
     class Meta:
         db_table = 'hr_leave_balances'
+        unique_together = ['user', 'year']
 
     @property
     def remaining_days(self):

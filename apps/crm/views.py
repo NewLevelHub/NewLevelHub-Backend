@@ -11,7 +11,7 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
-from apps.core.permissions import IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory

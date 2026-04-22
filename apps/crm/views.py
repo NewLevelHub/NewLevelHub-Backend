@@ -15,6 +15,11 @@ from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifi
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory
+from .serializers import (
+    BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
+    LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
+    CommentSerializer, TaskHistorySerializer,
+)
 
 
 def _normalize_positions(column):
@@ -27,11 +32,6 @@ def _normalize_positions(column):
     for idx, task in enumerate(tasks, start=1):
         if task.position != idx:
             Task.objects.filter(pk=task.pk).update(position=idx)
-from .serializers import (
-    BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
-    LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
-    CommentSerializer, TaskHistorySerializer,
-)
 
 
 @extend_schema_view(

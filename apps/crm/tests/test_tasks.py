@@ -685,9 +685,9 @@ class TestTaskPositionNormalization:
     def test_delete_normalizes_remaining_positions(self, api_client, admin_a, column_a, board_a):
         """After deleting a task the remaining tasks must have no gaps."""
         # Create tasks with artificial gaps to simulate pre-existing gap state.
-        t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
+        Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
         t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=5, created_by=admin_a)
-        t3 = Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
+        Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
 
         api_client.force_authenticate(admin_a)
         api_client.delete(task_url(t2.id))
@@ -701,8 +701,8 @@ class TestTaskPositionNormalization:
     def test_archive_normalizes_remaining_positions(self, api_client, admin_a, column_a, board_a):
         """After archiving a task the remaining tasks must have no gaps."""
         t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
-        t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=5, created_by=admin_a)
-        t3 = Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
+        Task.objects.create(column=column_a, title='T2', priority='low', position=5, created_by=admin_a)
+        Task.objects.create(column=column_a, title='T3', priority='low', position=12, created_by=admin_a)
 
         api_client.force_authenticate(admin_a)
         api_client.post(task_archive_url(t1.id))
@@ -717,9 +717,9 @@ class TestTaskPositionNormalization:
         """Moving a task re-normalizes positions in both the source and the target column."""
         # Source column: tasks with gaps.
         t1 = Task.objects.create(column=column_a, title='T1', priority='low', position=1, created_by=admin_a)
-        t2 = Task.objects.create(column=column_a, title='T2', priority='low', position=10, created_by=admin_a)
+        Task.objects.create(column=column_a, title='T2', priority='low', position=10, created_by=admin_a)
         # Target column: task with a high position.
-        t3 = Task.objects.create(column=column_a2, title='T3', priority='low', position=99, created_by=admin_a)
+        Task.objects.create(column=column_a2, title='T3', priority='low', position=99, created_by=admin_a)
 
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(t1.id), {'column_id': column_a2.id}, format='json')

@@ -604,7 +604,7 @@ class TestTaskMove:
         column_a2.save()
         # task_a is already in column_a2, wip_limit is 1 — moving it within same column is ok
         api_client.force_authenticate(admin_a)
-        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id, 'order': 0}, format='json')
+        res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id, 'order': 1}, format='json')
         assert res.status_code == status.HTTP_200_OK
 
 

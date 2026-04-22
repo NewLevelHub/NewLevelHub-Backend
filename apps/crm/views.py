@@ -645,6 +645,11 @@ class TaskViewSet(viewsets.ModelViewSet):
         return f.qs.distinct()
 
     def perform_create(self, serializer):
+        column = serializer.validated_data.get('column')
+        if column and column.wip_limit > 0:
+            active_count = Task.objects.filter(column=column, is_archived=False).count()
+            if active_count >= column.wip_limit:
+                raise ValidationError(f'WIP limit reached (max {column.wip_limit} tasks)')
         task = serializer.save(created_by=self.request.user)
         # Normalize positions so the new task gets a clean sequential number
         # at the end of the column rather than inheriting any gaps.

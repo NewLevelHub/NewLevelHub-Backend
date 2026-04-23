@@ -112,6 +112,15 @@ class Comment(TimeStampedModel):
         db_table = 'crm_comments'
         ordering = ['created_at']
 
+    @property
+    def company(self):
+        """Proxy company from the parent task's board, used by IsOwnerOrAdmin."""
+        return self.task.column.board.company
+
+    @property
+    def company_id(self):
+        return self.task.column.board.company_id
+
 
 class TaskAttachment(TimeStampedModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='attachments')

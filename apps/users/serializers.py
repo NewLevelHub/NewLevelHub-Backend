@@ -10,6 +10,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
 from apps.companies.models import Invitation
+from apps.hr.tasks import initialize_user_onboarding_progress
 from .models import User
 
 
@@ -172,6 +173,8 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'email': 'A user with this email is already registered.'},
                 ) from exc
+
+            initialize_user_onboarding_progress(user)
 
             invitation.is_used = True
             invitation.used_at = timezone.now()

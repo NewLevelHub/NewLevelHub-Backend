@@ -201,6 +201,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.bookings.tasks.mark_no_show_bookings',
         'schedule': crontab(minute='*/5'),
     },
+    'cleanup-deleted-storage-files': {
+        'task': 'apps.storage.tasks.cleanup_deleted_files',
+        'schedule': crontab(hour=3, minute=0),
+    },
 }
 
 # Email
@@ -217,9 +221,11 @@ MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))
 
-# File upload limits
-FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+# File upload limits (defaults to 100 MB for preview/staging uploads).
+DEFAULT_UPLOAD_LIMIT_MB = int(os.getenv('UPLOAD_MAX_SIZE_MB', 100))
+DEFAULT_UPLOAD_LIMIT_BYTES = DEFAULT_UPLOAD_LIMIT_MB * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('FILE_UPLOAD_MAX_MEMORY_SIZE', DEFAULT_UPLOAD_LIMIT_BYTES))
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', DEFAULT_UPLOAD_LIMIT_BYTES))
 
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False

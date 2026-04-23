@@ -14,6 +14,17 @@ class FolderSerializer(serializers.ModelSerializer):
 
 class FileSerializer(serializers.ModelSerializer):
     owner_name = serializers.CharField(source='owner.full_name', read_only=True)
+    uploaded_by = serializers.CharField(source='owner.full_name', read_only=True)
+    size = serializers.IntegerField(source='file_size', read_only=True)
+    mime_type = serializers.CharField(source='content_type', read_only=True)
+    download_url = serializers.SerializerMethodField()
+    folder_id = serializers.PrimaryKeyRelatedField(
+        source='folder',
+        queryset=Folder.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
 
     class Meta:
         model = File
@@ -21,8 +32,15 @@ class FileSerializer(serializers.ModelSerializer):
             'id', 'name', 'file', 'file_size', 'content_type',
             'folder', 'owner', 'owner_name', 'company',
             'created_at', 'updated_at',
+            'size', 'mime_type', 'download_url', 'uploaded_by', 'folder_id',
         ]
         read_only_fields = ['id', 'owner', 'company', 'file_size', 'content_type', 'created_at', 'updated_at']
+
+    def get_download_url(self, obj):
+        request = self.context.get('request')
+        if not request:
+            return f'/api/v1/storage/files/{obj.id}/download/'
+        return request.build_absolute_uri(f'/api/v1/storage/files/{obj.id}/download/')
 
 
 class FileShareSerializer(serializers.ModelSerializer):

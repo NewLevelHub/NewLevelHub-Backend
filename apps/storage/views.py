@@ -1,9 +1,9 @@
-from rest_framework import viewsets
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework import status
+from django.db.models import F, Sum
+from django.http import FileResponse
+from rest_framework import status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
-from django.db.models import Sum
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 from apps.companies.limits import (
     get_company_storage_used_bytes,
@@ -164,44 +164,104 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsCompanyMember]
     search_fields = ['name']
-    ordering_fields = ['name', 'file_size', 'created_at']
+    ordering_fields = ['name', 'file_size', 'size', 'created_at']
 
     def get_queryset(self):
         user = self.request.user
         if user.role == 'superadmin':
-            return File.objects.all()
+            return File.objects.all().annotate(size=F('file_size')).order_by('-created_at')
         own = File.objects.filter(owner=user)
         shared = File.objects.filter(company=user.company)
-        return (own | shared).distinct()
+        return (own | shared).distinct().annotate(size=F('file_size')).order_by('-created_at')
+
+    def _resolve_folder(self, folder_id):
+        if folder_id in (None, '', 'null'):
+            return None
+        try:
+            folder = Folder.objects.get(pk=int(folder_id))
+        except (TypeError, ValueError, Folder.DoesNotExist):
+            raise ValidationError({'folder_id': 'Folder not found.'})
+
+        user = self.request.user
+        if folder.scope == 'personal' and folder.owner_id != user.id:
+            raise ValidationError({'folder_id': 'Personal folder is not accessible.'})
+        if folder.scope == 'company' and user.role != 'superadmin' and folder.company_id != user.company_id:
+            raise ValidationError({'folder_id': 'Company folder is not accessible.'})
+        return folder
 
     def create(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get('file')
+        if uploaded_file is None:
+            return Response({'detail': 'File is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded_size = uploaded_file.size if uploaded_file else 0
+        if uploaded_size > 100 * 1024 * 1024:
+            return Response({'detail': 'File size exceeds 100 MB'}, status=status.HTTP_400_BAD_REQUEST)
+
         company = request.user.company
-        current_storage_used = get_company_storage_used_bytes(company)
-        storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
-        if current_storage_used >= storage_limit_bytes:
-            return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        if company is not None:
+            current_storage_used = get_company_storage_used_bytes(company)
+            storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
+            if current_storage_used + uploaded_size > storage_limit_bytes:
+                return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            current_storage_used = 0
 
         response = super().create(request, *args, **kwargs)
-        uploaded_file = request.FILES.get('file')
-        uploaded_size = uploaded_file.size if uploaded_file else 0
-        projected_used_gb = (current_storage_used + uploaded_size) / (1024 ** 3)
-        notify_company_admins_limit_thresholds(
-            company=company,
-            metric='storage',
-            current_value=round(projected_used_gb, 2),
-            limit_value=company.storage_limit_gb,
-        )
+        if company is not None:
+            projected_used_gb = (current_storage_used + uploaded_size) / (1024 ** 3)
+            notify_company_admins_limit_thresholds(
+                company=company,
+                metric='storage',
+                current_value=round(projected_used_gb, 2),
+                limit_value=company.storage_limit_gb,
+            )
         return response
 
     def perform_create(self, serializer):
         f = self.request.FILES.get('file')
+        folder = self._resolve_folder(self.request.data.get('folder_id', self.request.data.get('folder')))
         serializer.save(
             owner=self.request.user,
             company=self.request.user.company,
             file_size=f.size if f else 0,
             content_type=f.content_type if f else '',
+            folder=folder,
         )
-        # TODO: проверить квоту хранилища компании
+
+    def perform_destroy(self, instance):
+        instance.soft_delete()
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Download file as attachment',
+        responses={200: OpenApiResponse(description='File content'), 404: OpenApiResponse(description='Not found')},
+    )
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        file_obj = self.get_object()
+        file_handle = file_obj.file.open('rb')
+        return FileResponse(
+            file_handle,
+            as_attachment=True,
+            filename=file_obj.name,
+            content_type=file_obj.content_type or 'application/octet-stream',
+        )
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Move file to folder',
+        request=None,
+        responses={200: FileSerializer, 400: OpenApiResponse(description='Validation error')},
+    )
+    @action(detail=True, methods=['post'])
+    def move(self, request, pk=None):
+        file_obj = self.get_object()
+        folder = self._resolve_folder(request.data.get('folder_id', request.data.get('folder')))
+        file_obj.folder = folder
+        file_obj.save(update_fields=['folder', 'updated_at'])
+        serializer = self.get_serializer(file_obj)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(

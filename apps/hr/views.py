@@ -1,6 +1,6 @@
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
@@ -120,7 +120,16 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         new_status = ser.validated_data['status']
 
         with transaction.atomic():
-            leave = LeaveRequest.objects.select_for_update().select_related('user').get(pk=pk)
+            leave = (
+                self.get_queryset()
+                .select_related(None)
+                .select_for_update()
+                .select_related('user')
+                .filter(pk=pk)
+                .first()
+            )
+            if leave is None:
+                raise NotFound('Not found.')
             old_status = leave.status
 
             if new_status == 'approved':

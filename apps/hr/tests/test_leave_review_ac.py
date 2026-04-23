@@ -64,6 +64,23 @@ def superadmin(db):
     )
 
 
+@pytest.fixture
+def company_two(db):
+    return Company.objects.create(name='Review AC Co 2', plan='basic')
+
+
+@pytest.fixture
+def outsider_admin(db, company_two):
+    return User.objects.create_user(
+        email='review-outsider-admin@ac.test',
+        password='pass',
+        first_name='Outsider',
+        last_name='Admin',
+        role='company_admin',
+        company=company_two,
+    )
+
+
 def _create_pending_vacation(employee):
     return LeaveRequest.objects.create(
         user=employee,
@@ -100,6 +117,23 @@ class TestLeaveReviewAcceptanceCriteria:
         response = api_client.post(_review_url(leave.id), {'status': 'approved'}, format='json')
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_review_non_existing_leave_returns_404(self, api_client, company_admin):
+        _auth(api_client, company_admin)
+        response = api_client.post(_review_url(999999), {'status': 'approved'}, format='json')
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_cross_company_review_is_forbidden_and_leave_not_changed(
+        self, api_client, outsider_admin, employee
+    ):
+        leave = _create_pending_vacation(employee)
+        _auth(api_client, outsider_admin)
+
+        response = api_client.post(_review_url(leave.id), {'status': 'approved'}, format='json')
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        leave.refresh_from_db()
+        assert leave.status == 'pending'
 
     def test_approve_vacation_returns_400_when_balance_insufficient(self, api_client, company_admin, employee):
         leave = _create_pending_vacation(employee)

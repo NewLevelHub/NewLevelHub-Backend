@@ -110,19 +110,41 @@ class LeaveBalanceTeamSerializer(serializers.ModelSerializer):
 
 
 class OnboardingStepSerializer(serializers.ModelSerializer):
+    order = serializers.IntegerField(source='position')
+
     class Meta:
         model = OnboardingStep
-        fields = ['id', 'title', 'description', 'url', 'position']
+        fields = ['id', 'title', 'description', 'url', 'order']
         read_only_fields = ['id']
 
 
 class OnboardingTemplateSerializer(serializers.ModelSerializer):
-    steps = OnboardingStepSerializer(many=True, read_only=True)
+    name = serializers.CharField(source='title')
+    steps = OnboardingStepSerializer(many=True)
 
     class Meta:
         model = OnboardingTemplate
-        fields = ['id', 'title', 'is_active', 'steps', 'created_at']
+        fields = ['id', 'name', 'is_active', 'steps', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+    def create(self, validated_data):
+        steps_data = validated_data.pop('steps', [])
+        template = OnboardingTemplate.objects.create(**validated_data)
+        for step_data in steps_data:
+            OnboardingStep.objects.create(template=template, **step_data)
+        return template
+
+    def update(self, instance, validated_data):
+        steps_data = validated_data.pop('steps', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if steps_data is not None:
+            instance.steps.all().delete()
+            for step_data in steps_data:
+                OnboardingStep.objects.create(template=instance, **step_data)
+        return instance
 
 
 class UserOnboardingProgressSerializer(serializers.ModelSerializer):

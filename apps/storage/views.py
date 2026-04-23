@@ -191,24 +191,31 @@ class FileViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get('file')
+        if uploaded_file is None:
+            return Response({'detail': 'File is required'}, status=status.HTTP_400_BAD_REQUEST)
+
         uploaded_size = uploaded_file.size if uploaded_file else 0
         if uploaded_size > 100 * 1024 * 1024:
             return Response({'detail': 'File size exceeds 100 MB'}, status=status.HTTP_400_BAD_REQUEST)
 
         company = request.user.company
-        current_storage_used = get_company_storage_used_bytes(company)
-        storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
-        if current_storage_used + uploaded_size > storage_limit_bytes:
-            return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        if company is not None:
+            current_storage_used = get_company_storage_used_bytes(company)
+            storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
+            if current_storage_used + uploaded_size > storage_limit_bytes:
+                return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            current_storage_used = 0
 
         response = super().create(request, *args, **kwargs)
-        projected_used_gb = (current_storage_used + uploaded_size) / (1024 ** 3)
-        notify_company_admins_limit_thresholds(
-            company=company,
-            metric='storage',
-            current_value=round(projected_used_gb, 2),
-            limit_value=company.storage_limit_gb,
-        )
+        if company is not None:
+            projected_used_gb = (current_storage_used + uploaded_size) / (1024 ** 3)
+            notify_company_admins_limit_thresholds(
+                company=company,
+                metric='storage',
+                current_value=round(projected_used_gb, 2),
+                limit_value=company.storage_limit_gb,
+            )
         return response
 
     def perform_create(self, serializer):

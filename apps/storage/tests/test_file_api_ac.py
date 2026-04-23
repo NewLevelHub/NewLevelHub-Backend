@@ -33,6 +33,18 @@ def company_member(db, company):
     )
 
 
+@pytest.fixture
+def guest_user(db):
+    return User.objects.create_user(
+        email='guest@files.co',
+        password='pass',
+        first_name='Guest',
+        last_name='User',
+        role='guest',
+        company=None,
+    )
+
+
 def _files_url():
     return '/api/v1/storage/files/'
 
@@ -90,6 +102,17 @@ class TestFileApiAcceptanceCriteria:
         response = api_client.post(
             _files_url(),
             {'name': 'oversized.bin', 'file': oversized},
+            format='multipart',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_post_upload_without_file_returns_400(self, api_client, company_member):
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.post(
+            _files_url(),
+            {'name': 'missing-file.txt'},
             format='multipart',
         )
 
@@ -344,3 +367,10 @@ class TestFileApiAcceptanceCriteria:
 
         assert not File.all_objects.filter(id=old_deleted.id).exists()
         assert File.all_objects.filter(id=recent_deleted.id).exists()
+
+    def test_guest_cannot_access_storage_files_list(self, api_client, guest_user):
+        api_client.force_authenticate(user=guest_user)
+
+        response = api_client.get(_files_url())
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN

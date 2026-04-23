@@ -31,7 +31,7 @@ urlpatterns = [
     ),
     path(
         'tasks/<int:task_pk>/comments/<int:pk>/',
-        views.CommentViewSet.as_view({'delete': 'destroy'}),
+        views.CommentViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='task-comment-detail',
     ),
     # Checklist endpoints

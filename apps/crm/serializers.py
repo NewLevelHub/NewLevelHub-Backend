@@ -72,12 +72,23 @@ class ChecklistSerializer(serializers.ModelSerializer):
         return {'total': total, 'completed': completed}
 
 
+class CommentAuthorSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name', 'avatar']
+
+    def get_full_name(self, obj):
+        return obj.full_name
+
+
 class CommentSerializer(serializers.ModelSerializer):
-    author_name = serializers.CharField(source='author.full_name', read_only=True)
+    author = CommentAuthorSerializer(read_only=True)
 
     class Meta:
         model = Comment
-        fields = ['id', 'author', 'author_name', 'text', 'created_at']
+        fields = ['id', 'text', 'author', 'created_at']
         read_only_fields = ['id', 'author', 'created_at']
 
 

@@ -3,14 +3,17 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.response import Response
 from rest_framework import serializers as drf_serializers
+from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import (
     extend_schema, extend_schema_view,
     OpenApiParameter, OpenApiExample, OpenApiResponse, inline_serializer,
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
+from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
@@ -64,7 +67,24 @@ def _normalize_positions(column):
     retrieve=extend_schema(
         tags=['CRM'],
         summary='Get board',
-        description='Returns full board detail including nested columns and their tasks.',
+        description=(
+            'Returns full board detail including nested columns and their tasks. '
+            'Pass `view=list` to get a flat paginated list of all tasks on the board '
+            'with filters applied. Default (kanban) view returns columns with nested tasks.'
+        ),
+        parameters=[
+            OpenApiParameter(
+                name='view',
+                type=str,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                enum=['kanban', 'list'],
+                description=(
+                    '`kanban` (default) — returns columns with nested tasks. '
+                    '`list` — returns a flat paginated task list with filters applied.'
+                ),
+            ),
+        ],
         responses={
             200: BoardSerializer,
             404: OpenApiResponse(description='Board not found or not accessible.'),
@@ -174,6 +194,44 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         # Колонки по умолчанию
         for i, name in enumerate(['К выполнению', 'В работе', 'Готово']):
             Column.objects.create(board=board, name=name, position=i)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        view_mode = request.query_params.get('view', 'kanban')
+
+        if view_mode == 'list':
+            from .filters import TaskFilter
+            tasks_qs = Task.objects.select_related(
+                'column__board', 'assignee', 'created_by',
+            ).prefetch_related('labels', 'checklists__items').filter(
+                column__board=instance,
+            )
+            # Apply filters
+            task_filter = TaskFilter(request.query_params, queryset=tasks_qs)
+            tasks_qs = task_filter.qs
+
+            # Apply search via SearchFilter
+            search_filter = SearchFilter()
+            self.search_fields = ['title']
+            tasks_qs = search_filter.filter_queryset(request, tasks_qs, self)
+
+            # Apply ordering
+            ordering_filter = OrderingFilter()
+            self.ordering_fields = ['priority', 'deadline', 'created_at']
+            self.ordering = ['created_at']
+            tasks_qs = ordering_filter.filter_queryset(request, tasks_qs, self)
+
+            tasks_qs = tasks_qs.distinct()
+            paginator = StandardPagination()
+            page = paginator.paginate_queryset(tasks_qs, request, view=self)
+            if page is not None:
+                serializer = TaskSerializer(page, many=True, context={'request': request})
+                return paginator.get_paginated_response(serializer.data)
+            serializer = TaskSerializer(tasks_qs, many=True, context={'request': request})
+            return Response(serializer.data)
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
     @extend_schema(
         tags=['CRM'],
@@ -613,8 +671,11 @@ class ColumnViewSet(viewsets.ModelViewSet):
 )
 class TaskViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title']
-    filterset_class = None  # set in __init_subclass__ via get_filterset_class; assigned below
+    ordering_fields = ['priority', 'deadline', 'created_at']
+    ordering = ['created_at']
+    filterset_class = None  # TaskFilter applied manually in filter_queryset
 
     def get_queryset(self):
         user = self.request.user
@@ -634,15 +695,17 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def filter_queryset(self, queryset):
         from .filters import TaskFilter
-        from django_filters.rest_framework import DjangoFilterBackend
-        from rest_framework.filters import SearchFilter
 
-        for backend in [DjangoFilterBackend(), SearchFilter()]:
-            queryset = backend.filter_queryset(self.request, queryset, self)
-
-        # Apply TaskFilter manually
+        # Apply TaskFilter (handles assignee_id, priority, label_ids, deadline enum,
+        # board_id, column_id, search via icontains, deadline_from/deadline_to)
         f = TaskFilter(self.request.query_params, queryset=queryset)
-        return f.qs.distinct()
+        queryset = f.qs
+
+        # Apply ordering via OrderingFilter
+        ordering_filter = OrderingFilter()
+        queryset = ordering_filter.filter_queryset(self.request, queryset, self)
+
+        return queryset.distinct()
 
     def perform_create(self, serializer):
         column = serializer.validated_data.get('column')
@@ -765,13 +828,43 @@ class TaskViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=['CRM'],
         summary='My tasks across all boards',
+        description=(
+            'Returns all tasks assigned to the current user scoped to their company. '
+            'Supports all task filters: `board_id`, `column_id`, `priority`, `label_ids`, '
+            '`deadline` (overdue/today/this_week), `deadline_from`, `deadline_to`, `search`. '
+            'Ordering: `ordering=priority`, `ordering=deadline`, `ordering=-created_at`, etc. '
+            'Response is a flat paginated list; each task includes `board_id` and `board_title` fields.'
+        ),
+        parameters=[
+            OpenApiParameter(name='board_id', type=int, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter by board.'),
+            OpenApiParameter(name='column_id', type=int, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter by column.'),
+            OpenApiParameter(name='priority', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Filter by priority (low/medium/high/urgent).'),
+            OpenApiParameter(name='label_ids', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Comma-separated label IDs.'),
+            OpenApiParameter(
+                name='deadline', type=str, location=OpenApiParameter.QUERY,
+                required=False, enum=['overdue', 'today', 'this_week'],
+                description='Deadline shortcut filter.',
+            ),
+            OpenApiParameter(name='deadline_from', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Deadline >= this date (YYYY-MM-DD).'),
+            OpenApiParameter(name='deadline_to', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Deadline <= this date (YYYY-MM-DD).'),
+            OpenApiParameter(name='search', type=str, location=OpenApiParameter.QUERY,
+                             required=False, description='Search by task title (case-insensitive).'),
+            OpenApiParameter(name='ordering', type=str, location=OpenApiParameter.QUERY,
+                             required=False,
+                             description='Order results. Options: priority, deadline, created_at (prefix - for desc).'),
+        ],
         responses={200: TaskSerializer(many=True)},
     )
     @action(detail=False, methods=['get'], url_path='my')
     def my_tasks(self, request):
-        queryset = self.filter_queryset(
-            self.get_queryset().filter(assignee=request.user, is_archived=False)
-        )
+        base_qs = self.get_queryset().filter(assignee=request.user, is_archived=False)
+        queryset = self.filter_queryset(base_qs)
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)

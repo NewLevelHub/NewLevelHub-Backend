@@ -239,6 +239,9 @@ class TestFileSharesAcceptanceCriteria:
         assert response.status_code == status.HTTP_201_CREATED
         after = Notification.objects.filter(user=recipient).count()
         assert after == before + 1
+        notification = Notification.objects.filter(user=recipient).order_by('-created_at').first()
+        assert notification is not None
+        assert notification.url == f'/files?shared_file_id={shared_file.id}'
 
     def test_view_permission_allows_metadata_but_denies_download(self, api_client, sharer, recipient, shared_file):
         FileShare.objects.create(file=shared_file, shared_by=sharer, shared_with=recipient, permission='view')

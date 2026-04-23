@@ -376,7 +376,7 @@ class FileShareViewSet(viewsets.ModelViewSet):
             notification_type='announcement_company',
             title='File shared with you',
             body=f'{share.shared_by.full_name} shared "{share.file.name}" with you.',
-            url=f'/storage/files/{share.file_id}',
+            url=f'/files?shared_file_id={share.file_id}',
         )
 
 

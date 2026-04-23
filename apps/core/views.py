@@ -10,6 +10,7 @@ import rest_framework.fields as fields
 from apps.core.permissions import IsCompanyMember
 from apps.hr.models import LeaveRequest
 
+
 @extend_schema(
     tags=['System'],
     summary='Health check',

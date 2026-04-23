@@ -75,7 +75,10 @@ class FileShareSerializer(serializers.ModelSerializer):
         normalized_data = data.copy()
         if normalized_data.get('file') in (None, '') and normalized_data.get('file_id') not in (None, ''):
             normalized_data['file'] = normalized_data.get('file_id')
-        if normalized_data.get('shared_with') in (None, '') and normalized_data.get('shared_with_user_id') not in (None, ''):
+        if (
+            normalized_data.get('shared_with') in (None, '')
+            and normalized_data.get('shared_with_user_id') not in (None, '')
+        ):
             normalized_data['shared_with'] = normalized_data.get('shared_with_user_id')
         return super().to_internal_value(normalized_data)
 

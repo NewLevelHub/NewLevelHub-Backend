@@ -208,7 +208,12 @@ class TestFileSharesAcceptanceCriteria:
         assert share.permission == 'full'
 
     def test_delete_share_revokes_access(self, api_client, sharer, recipient, shared_file):
-        share = FileShare.objects.create(file=shared_file, shared_by=sharer, shared_with=recipient, permission='download')
+        share = FileShare.objects.create(
+            file=shared_file,
+            shared_by=sharer,
+            shared_with=recipient,
+            permission='download',
+        )
         api_client.force_authenticate(user=sharer)
 
         response = api_client.delete(_share_detail_url(share.id))

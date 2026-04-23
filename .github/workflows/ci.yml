@@ -221,8 +221,27 @@ jobs:
               echo "Database $PREVIEW_DB_NAME already exists — keeping existing data"
             fi
 
+            # Email links must always point to frontend (not backend preview).
+            DEFAULT_FRONTEND_URL=$(grep -E '^FRONTEND_URL=' .env.staging | head -1 | cut -d= -f2- | tr -d "' \"")
+            FRONTEND_URL="${DEFAULT_FRONTEND_URL:-https://staging.newlevelhub.kz}"
+            if [ "$TICKET" != "noticket" ]; then
+              MATCHED_FE_SLUG=$(docker ps --format '{{.Names}}' \
+                | sed -n "s/^nlh_fe_\\(fe-${TICKET}-pr[0-9][0-9]*\\)$/\\1/p" \
+                | awk '{ pr = $0; sub(/^.*-pr/, "", pr); print pr " " $0 }' \
+                | sort -nr \
+                | awk 'NR==1 { print $2 }')
+              if [ -n "$MATCHED_FE_SLUG" ]; then
+                FRONTEND_URL="https://${MATCHED_FE_SLUG}.staging.newlevelhub.kz"
+                echo "Using matched frontend preview for ticket ${TICKET}: ${FRONTEND_URL}"
+              else
+                echo "WARNING: no running frontend preview matched ticket ${TICKET}; using fallback FRONTEND_URL=${FRONTEND_URL}"
+              fi
+            else
+              echo "No ticket in branch name; using fallback FRONTEND_URL=${FRONTEND_URL}"
+            fi
+
             echo "--- [3/5] Docker: deploy containers ---"
-            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT
+            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL
             docker compose \
               --project-name "$PR_SLUG" \
               --env-file .env.staging \

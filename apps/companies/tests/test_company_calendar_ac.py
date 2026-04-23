@@ -131,7 +131,7 @@ class TestCompanyCalendarAggregateAC:
             end_time=_dt_for(target_day, 10),
             status='confirmed',
         )
-        leave = LeaveRequest.objects.create(
+        LeaveRequest.objects.create(
             user=colleague,
             company=company,
             leave_type='vacation',

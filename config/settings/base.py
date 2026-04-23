@@ -201,6 +201,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.bookings.tasks.mark_no_show_bookings',
         'schedule': crontab(minute='*/5'),
     },
+    'cleanup-deleted-storage-files': {
+        'task': 'apps.storage.tasks.cleanup_deleted_files',
+        'schedule': crontab(hour=3, minute=0),
+    },
 }
 
 # Email

@@ -23,8 +23,6 @@ from .serializers import (
 )
 
 
-
-
 def _normalize_positions(column):
     """Re-number task positions in a column to be sequential (1, 2, 3, …).
 

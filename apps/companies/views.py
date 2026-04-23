@@ -1,8 +1,8 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
@@ -22,8 +22,10 @@ from drf_spectacular.utils import (
 )
 
 from apps.bookings.models import Booking
+from apps.access.models import GuestPass
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
+from apps.hr.models import LeaveRequest
 from apps.users.models import User
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from .filters import CompanyFilter, CompanyMemberFilter, CompanyDirectoryFilter
@@ -50,6 +52,9 @@ from .tasks import send_invitation_email
 logger = logging.getLogger(__name__)
 
 
+CALENDAR_EVENT_TYPES = {'booking', 'task_deadline', 'leave', 'guest_visit'}
+
+
 def _blacklist_user_tokens(user):
     """Blacklist all outstanding refresh tokens for the given user."""
     outstanding = OutstandingToken.objects.filter(user=user).exclude(
@@ -59,6 +64,131 @@ def _blacklist_user_tokens(user):
         [BlacklistedToken(token=t) for t in outstanding],
         ignore_conflicts=True,
     )
+
+
+def _parse_bool_query_param(raw_value, field_name):
+    if raw_value in (None, ''):
+        return None
+    normalized = str(raw_value).strip().lower()
+    if normalized in ('true', '1'):
+        return True
+    if normalized in ('false', '0'):
+        return False
+    raise ValidationError({field_name: 'Must be a boolean: true/false.'})
+
+
+def _parse_date_query_param(raw_value, field_name):
+    if not raw_value:
+        raise ValidationError({field_name: 'This query parameter is required (YYYY-MM-DD).'})
+    try:
+        return datetime.strptime(str(raw_value), '%Y-%m-%d').date()
+    except (TypeError, ValueError) as exc:
+        raise ValidationError({field_name: 'Invalid date format. Use YYYY-MM-DD.'}) from exc
+
+
+def _day_bounds(local_day):
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(local_day, time.min), tz)
+    end = timezone.make_aware(datetime.combine(local_day + timedelta(days=1), time.min), tz)
+    return start, end
+
+
+def _resolve_calendar_company(request, company_id):
+    company_qs = Company.objects.all()
+    if request.user.role in ('company_admin', 'employee'):
+        if request.user.company_id != company_id:
+            raise PermissionDenied('You can only access calendar of your own company.')
+        company_qs = company_qs.filter(id=request.user.company_id)
+    return get_object_or_404(company_qs, id=company_id)
+
+
+def _serialize_calendar_user(user):
+    return {'id': user.id, 'full_name': user.full_name}
+
+
+def _build_company_calendar_events(*, company, date_from, date_to, user_id=None, event_type=None):
+    range_start, _ = _day_bounds(date_from)
+    _, range_end = _day_bounds(date_to)
+    events = []
+
+    if event_type in (None, 'booking'):
+        bookings = Booking.objects.filter(
+            company_id=company.id,
+            status='confirmed',
+            start_time__lt=range_end,
+            end_time__gt=range_start,
+        ).select_related('resource', 'user')
+        if user_id is not None:
+            bookings = bookings.filter(user_id=user_id)
+        for booking in bookings:
+            events.append({
+                'type': 'booking',
+                'title': booking.resource.name,
+                'start': booking.start_time.isoformat(),
+                'end': booking.end_time.isoformat(),
+                'user': _serialize_calendar_user(booking.user),
+            })
+
+    if event_type in (None, 'task_deadline'):
+        tasks = Task.objects.filter(
+            column__board__company_id=company.id,
+            is_archived=False,
+            deadline__isnull=False,
+            deadline__gte=range_start,
+            deadline__lt=range_end,
+        ).select_related('assignee', 'created_by')
+        if user_id is not None:
+            tasks = tasks.filter(Q(assignee_id=user_id) | Q(created_by_id=user_id))
+        for task in tasks:
+            task_user = task.assignee or task.created_by
+            if task_user is None:
+                continue
+            events.append({
+                'type': 'task_deadline',
+                'title': task.title,
+                'start': task.deadline.isoformat(),
+                'end': task.deadline.isoformat(),
+                'user': _serialize_calendar_user(task_user),
+            })
+
+    if event_type in (None, 'leave'):
+        leaves = LeaveRequest.objects.filter(
+            company_id=company.id,
+            status='approved',
+            start_date__lte=date_to,
+            end_date__gte=date_from,
+        ).select_related('user')
+        if user_id is not None:
+            leaves = leaves.filter(user_id=user_id)
+        for leave in leaves:
+            leave_start, _ = _day_bounds(leave.start_date)
+            _, leave_end = _day_bounds(leave.end_date)
+            events.append({
+                'type': 'leave',
+                'title': f'{leave.user.full_name} — {leave.leave_type}',
+                'start': leave_start.isoformat(),
+                'end': leave_end.isoformat(),
+                'user': _serialize_calendar_user(leave.user),
+            })
+
+    if event_type in (None, 'guest_visit'):
+        guest_passes = GuestPass.objects.filter(
+            company_id=company.id,
+            valid_from__lt=range_end,
+            valid_until__gt=range_start,
+        ).select_related('created_by')
+        if user_id is not None:
+            guest_passes = guest_passes.filter(created_by_id=user_id)
+        for guest_pass in guest_passes:
+            events.append({
+                'type': 'guest_visit',
+                'title': guest_pass.guest_name,
+                'start': guest_pass.valid_from.isoformat(),
+                'end': guest_pass.valid_until.isoformat(),
+                'user': _serialize_calendar_user(guest_pass.created_by),
+            })
+
+    return sorted(events, key=lambda item: (item['start'], item['end'], item['type']))
 
 
 @extend_schema_view(
@@ -1053,3 +1183,75 @@ class CompanyMemberActivityView(APIView):
         }
         serializer = CompanyMemberActivitySerializer(data)
         return Response(serializer.data)
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='Aggregated company calendar events',
+    responses={200: OpenApiResponse(description='List of company calendar events')},
+)
+class CompanyCalendarView(APIView):
+    permission_classes = [IsCompanyMember]
+
+    def get(self, request, company_id):
+        company = _resolve_calendar_company(request, company_id)
+        date_from = _parse_date_query_param(request.query_params.get('date_from'), 'date_from')
+        date_to = _parse_date_query_param(request.query_params.get('date_to'), 'date_to')
+        if date_from > date_to:
+            raise ValidationError({'detail': 'date_from must be less than or equal to date_to.'})
+
+        user_id = request.query_params.get('user_id')
+        if user_id not in (None, ''):
+            try:
+                user_id = int(user_id)
+            except (TypeError, ValueError) as exc:
+                raise ValidationError({'user_id': 'Must be an integer.'}) from exc
+
+        event_type = request.query_params.get('event_type')
+        if event_type and event_type not in CALENDAR_EVENT_TYPES:
+            raise ValidationError({'event_type': f'Unsupported value. Use one of: {sorted(CALENDAR_EVENT_TYPES)}'})
+
+        my_only = _parse_bool_query_param(request.query_params.get('my'), 'my')
+        if my_only:
+            user_id = request.user.id
+
+        events = _build_company_calendar_events(
+            company=company,
+            date_from=date_from,
+            date_to=date_to,
+            user_id=user_id,
+            event_type=event_type,
+        )
+        return Response(events)
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='Busy slots for user by day',
+    responses={200: OpenApiResponse(description='Busy slots for selected user and day')},
+)
+class CompanyCalendarBusyView(APIView):
+    permission_classes = [IsCompanyMember]
+
+    def get(self, request, company_id):
+        company = _resolve_calendar_company(request, company_id)
+        user_id_raw = request.query_params.get('user_id')
+        if user_id_raw in (None, ''):
+            raise ValidationError({'user_id': 'This query parameter is required.'})
+        try:
+            user_id = int(user_id_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError({'user_id': 'Must be an integer.'}) from exc
+
+        if not User.objects.filter(id=user_id, company_id=company.id).exists():
+            raise ValidationError({'user_id': 'User not found in this company.'})
+
+        target_date = _parse_date_query_param(request.query_params.get('date'), 'date')
+        events = _build_company_calendar_events(
+            company=company,
+            date_from=target_date,
+            date_to=target_date,
+            user_id=user_id,
+        )
+        slots = [{'start': item['start'], 'end': item['end'], 'type': item['type']} for item in events]
+        return Response(slots)

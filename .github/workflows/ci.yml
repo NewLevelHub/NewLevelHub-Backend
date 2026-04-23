@@ -5,6 +5,11 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, closed]
 
+# New pushes to the same PR cancel older in-progress runs.
+concurrency:
+  group: backend-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
@@ -15,10 +20,46 @@ env:
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
 
 jobs:
-  quality:
-    name: Lint and tests
+  changes:
+    name: Detect change scope
     runs-on: ubuntu-latest
     if: |
+      github.event.action != 'closed' &&
+      github.event.pull_request.draft == false
+    outputs:
+      quality_changed: ${{ steps.filter.outputs.quality }}
+      deploy_changed: ${{ steps.filter.outputs.deploy }}
+    steps:
+      - name: Check changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            quality:
+              - 'apps/**'
+              - 'config/**'
+              - 'templates/**'
+              - 'manage.py'
+              - 'requirements*.txt'
+              - 'setup.cfg'
+            deploy:
+              - 'apps/**'
+              - 'config/**'
+              - 'templates/**'
+              - 'Dockerfile'
+              - 'docker-compose.preview.yml'
+              - 'manage.py'
+              - 'requirements*.txt'
+              - 'setup.cfg'
+              - '.github/workflows/ci.yml'
+              - 'nginx/preview.conf'
+
+  quality:
+    name: Lint and tests
+    needs: changes
+    runs-on: ubuntu-latest
+    if: |
+      needs.changes.outputs.quality_changed == 'true' &&
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false
 
@@ -49,8 +90,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install flake8
+          pip install -r requirements.txt flake8
 
       - name: Run linting
         run: flake8 apps/ config/ --max-line-length=120 --exclude=migrations
@@ -66,13 +106,16 @@ jobs:
           SECRET_KEY: test-secret-key
         run: |
           python manage.py migrate
-          pytest --cov-report=xml
+          pytest --no-cov -q
 
   build_and_push:
     name: Build and push Docker image
-    needs: quality
+    needs: [changes, quality]
     runs-on: ubuntu-latest
     if: |
+      always() &&
+      needs.changes.outputs.deploy_changed == 'true' &&
+      (needs.changes.outputs.quality_changed != 'true' || needs.quality.result == 'success') &&
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.fork == false
@@ -110,12 +153,15 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ${{ steps.image_meta.outputs.image_ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy_preview:
     name: Deploy PR preview
-    needs: build_and_push
+    needs: [changes, build_and_push]
     runs-on: ubuntu-latest
     if: |
+      needs.changes.outputs.deploy_changed == 'true' &&
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.fork == false
@@ -250,22 +296,33 @@ jobs:
 
             echo "--- [4/5] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
-            for i in $(seq 1 60); do
-              STATUS=$(docker inspect --format='{{.State.Health.Status}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "none")
+            READY=0
+            MAX_WAIT_SECONDS=120
+            POLL_INTERVAL=2
+            MAX_ATTEMPTS=$((MAX_WAIT_SECONDS / POLL_INTERVAL))
+            for i in $(seq 1 "$MAX_ATTEMPTS"); do
               IS_RUNNING=$(docker inspect --format='{{.State.Running}}' "$BACKEND_CONTAINER" 2>/dev/null || echo "false")
-              # backend has no healthcheck — poll gunicorn port instead
-              if docker exec "$BACKEND_CONTAINER" sh -c 'nc -z localhost 8000' >/dev/null 2>&1; then
-                echo "Backend is ready after ${i}s"
+              # Use Python socket probe (more reliable than nc availability in image).
+              if docker exec "$BACKEND_CONTAINER" python -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1', 8000)); s.close()" >/dev/null 2>&1; then
+                echo "Backend is ready after $((i * POLL_INTERVAL))s"
+                READY=1
                 break
               fi
               if [ "$IS_RUNNING" != "true" ]; then
                 echo "ERROR: backend container stopped unexpectedly"
-                docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -30
+                docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -60
                 exit 1
               fi
-              echo "Waiting for backend... (${i}/60)"
-              sleep 3
+              if [ $((i % 5)) -eq 0 ]; then
+                echo "Waiting for backend... (${i}/${MAX_ATTEMPTS})"
+              fi
+              sleep "$POLL_INTERVAL"
             done
+            if [ "$READY" -ne 1 ]; then
+              echo "ERROR: backend did not become ready in ${MAX_WAIT_SECONDS}s"
+              docker compose --project-name "$PR_SLUG" -f "$COMPOSE_FILE" logs backend | tail -80
+              exit 1
+            fi
 
             echo "--- [5a/5] Writing nginx config ---"
             sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
@@ -280,7 +337,7 @@ jobs:
                     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
                     proxy_set_header X-Forwarded-Proto \$scheme;
                     proxy_read_timeout 300;
-                    client_max_body_size 20M;
+                    client_max_body_size 100M;
                 }
             }
             NGINXEOF
@@ -288,15 +345,20 @@ jobs:
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
-            echo "--- [5b/5] Getting SSL certificate ---"
-            sleep 2
-            sudo certbot --nginx \
-              -d "${PR_SLUG}.staging.newlevelhub.kz" \
-              --non-interactive \
-              --agree-tos \
-              -m "admin@newlevelhub.kz" \
-              --redirect \
-              2>&1 | tail -10
+            echo "--- [5b/5] Ensuring SSL certificate ---"
+            CERT_PATH="/etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem"
+            if [ -f "$CERT_PATH" ]; then
+              echo "Certificate already exists for ${PR_SLUG}; skipping certbot issue step"
+            else
+              sleep 2
+              sudo certbot --nginx \
+                -d "${PR_SLUG}.staging.newlevelhub.kz" \
+                --non-interactive \
+                --agree-tos \
+                -m "admin@newlevelhub.kz" \
+                --redirect \
+                2>&1 | tail -10
+            fi
 
             echo ""
             echo "=== Preview deployed successfully ==="
@@ -522,7 +584,7 @@ jobs:
   notify:
     name: Slack notification
     runs-on: ubuntu-latest
-    needs: [quality, build_and_push, deploy_preview]
+    needs: [changes, quality, build_and_push, deploy_preview]
     if: |
       always() &&
       github.event.pull_request.draft == false &&
@@ -550,7 +612,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.quality.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Tests passed (fork — no preview)' || needs.build_and_push.result == 'success' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.changes.outputs.deploy_changed == 'false' && ':fast_forward: Heavy CI skipped (no deploy-impacting changes)' || needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.quality.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Tests passed (fork — no preview)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Build passed (deploy skipped)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'failure' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

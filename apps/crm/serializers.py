@@ -116,13 +116,12 @@ class TaskSerializer(serializers.ModelSerializer):
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
-    assignee_name = serializers.CharField(source='assignee.full_name', read_only=True, default=None)
 
     class Meta:
         model = Task
         fields = [
             'id', 'column_id', 'board_id', 'title', 'description', 'priority', 'position',
-            'assignee_id', 'assignee', 'assignee_name', 'created_by', 'deadline',
+            'assignee_id', 'assignee', 'created_by', 'deadline',
             'label_ids', 'labels', 'is_archived',
             'checklists', 'comments_count', 'attachments_count',
             'created_at', 'updated_at',
@@ -220,8 +219,8 @@ class TaskDetailSerializer(TaskSerializer):
 
 class TaskMoveSerializer(serializers.Serializer):
     """Перемещение задачи между колонками / изменение позиции."""
-    column_id = serializers.IntegerField()
-    position = serializers.IntegerField()
+    column_id = serializers.PrimaryKeyRelatedField(queryset=Column.objects.all())
+    position = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
 
 class ColumnSerializer(serializers.ModelSerializer):
@@ -238,7 +237,7 @@ class ColumnSerializer(serializers.ModelSerializer):
 class ColumnWriteSerializer(serializers.ModelSerializer):
     """Used for create / partial_update — no nested task data."""
     wip_limit = serializers.IntegerField(required=False, allow_null=True, min_value=0, default=0)
-    position = serializers.IntegerField(required=False, min_value=1)
+    position = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
     class Meta:
         model = Column

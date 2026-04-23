@@ -23,16 +23,6 @@ from .serializers import (
 )
 
 
-def _normalize_positions(column):
-    """Re-number task positions in a column to be sequential (1, 2, 3, …).
-
-    Uses SoftDeleteManager (Task.objects) so only active (non-deleted) tasks
-    are counted. Uses bulk .update() per row to avoid triggering signals.
-    """
-    tasks = Task.objects.filter(column=column).order_by('position', 'created_at')
-    for idx, task in enumerate(tasks, start=1):
-        if task.position != idx:
-            Task.objects.filter(pk=task.pk).update(position=idx)
 
 
 def _normalize_positions(column):

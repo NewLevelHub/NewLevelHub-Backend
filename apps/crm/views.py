@@ -665,8 +665,36 @@ class TaskViewSet(viewsets.ModelViewSet):
             )
 
     def perform_update(self, serializer):
-        old_assignee_id = serializer.instance.assignee_id
+        task = serializer.instance
+        validated = serializer.validated_data
+
+        # Capture old scalar field values before saving — only for fields explicitly in the PATCH request.
+        tracked_scalar_fields = {
+            'title': task.title,
+            'description': task.description,
+            'priority': task.priority,
+            'deadline': str(task.deadline) if task.deadline else '',
+            'assignee': task.assignee_id,
+            'column': task.column_id,
+        }
+        # Determine which tracked fields were actually sent in this PATCH.
+        requested_tracked = set()
+        for field_key, vd_key in [
+            ('title', 'title'), ('description', 'description'), ('priority', 'priority'),
+            ('deadline', 'deadline'), ('assignee', 'assignee'), ('column', 'column'),
+        ]:
+            if vd_key in validated:
+                requested_tracked.add(field_key)
+
+        # Capture old label IDs before saving.
+        old_label_ids = set(task.labels.values_list('id', flat=True))
+        labels_in_request = 'labels' in validated
+
+        old_assignee_id = task.assignee_id
+
         instance = serializer.save()
+        instance.refresh_from_db()
+
         new_assignee_id = instance.assignee_id
         new_assignee = instance.assignee
 
@@ -678,6 +706,49 @@ class TaskViewSet(viewsets.ModelViewSet):
                 body=instance.title,
                 url=f'/crm/tasks/{instance.pk}/',
             )
+
+        # Log changes to scalar fields that were explicitly sent and actually changed.
+        new_scalar_values = {
+            'title': instance.title,
+            'description': instance.description,
+            'priority': instance.priority,
+            'deadline': str(instance.deadline) if instance.deadline else '',
+            'assignee': instance.assignee_id,
+            'column': instance.column_id,
+        }
+        for field_key in requested_tracked:
+            old_val = tracked_scalar_fields[field_key]
+            new_val = new_scalar_values[field_key]
+            old_str = str(old_val) if old_val is not None else ''
+            new_str = str(new_val) if new_val is not None else ''
+            if old_str != new_str:
+                TaskHistory.objects.create(
+                    task=instance,
+                    user=self.request.user,
+                    action=f'updated_{field_key}',
+                    old_value=old_str,
+                    new_value=new_str,
+                )
+
+        # Log label changes.
+        if labels_in_request:
+            new_label_ids = set(instance.labels.values_list('id', flat=True))
+            for lid in new_label_ids - old_label_ids:
+                TaskHistory.objects.create(
+                    task=instance,
+                    user=self.request.user,
+                    action='label_added',
+                    old_value='',
+                    new_value=str(lid),
+                )
+            for lid in old_label_ids - new_label_ids:
+                TaskHistory.objects.create(
+                    task=instance,
+                    user=self.request.user,
+                    action='label_removed',
+                    old_value=str(lid),
+                    new_value='',
+                )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -820,6 +891,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         column = task.column
         task.soft_delete()
         _normalize_positions(column)
+        TaskHistory.objects.create(
+            task=task,
+            user=request.user,
+            action='archived',
+            old_value='False',
+            new_value='True',
+        )
         return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
 
 

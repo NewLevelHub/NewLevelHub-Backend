@@ -37,19 +37,39 @@ class LabelSerializer(serializers.ModelSerializer):
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):
+    is_completed = serializers.BooleanField(source='is_done', read_only=True)
+    order = serializers.IntegerField(source='position', read_only=True)
+
     class Meta:
         model = ChecklistItem
-        fields = ['id', 'text', 'is_done', 'position']
-        read_only_fields = ['id']
+        fields = ['id', 'text', 'is_completed', 'order']
+        read_only_fields = ['id', 'is_completed', 'order']
+
+
+class ChecklistItemWriteSerializer(serializers.ModelSerializer):
+    """Used for PATCH on a single item — all fields optional, order >= 1."""
+    is_completed = serializers.BooleanField(source='is_done', required=False)
+    order = serializers.IntegerField(source='position', required=False, min_value=1)
+
+    class Meta:
+        model = ChecklistItem
+        fields = ['text', 'is_completed', 'order']
 
 
 class ChecklistSerializer(serializers.ModelSerializer):
     items = ChecklistItemSerializer(many=True, read_only=True)
+    checklist_progress = serializers.SerializerMethodField()
 
     class Meta:
         model = Checklist
-        fields = ['id', 'title', 'items']
+        fields = ['id', 'title', 'items', 'checklist_progress']
         read_only_fields = ['id']
+
+    def get_checklist_progress(self, obj):
+        all_items = list(obj.items.all())
+        total = len(all_items)
+        completed = sum(1 for item in all_items if item.is_done)
+        return {'total': total, 'completed': completed}
 
 
 class CommentAuthorSerializer(serializers.ModelSerializer):

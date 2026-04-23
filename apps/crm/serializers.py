@@ -37,27 +37,58 @@ class LabelSerializer(serializers.ModelSerializer):
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):
+    is_completed = serializers.BooleanField(source='is_done', read_only=True)
+    order = serializers.IntegerField(source='position', read_only=True)
+
     class Meta:
         model = ChecklistItem
-        fields = ['id', 'text', 'is_done', 'position']
-        read_only_fields = ['id']
+        fields = ['id', 'text', 'is_completed', 'order']
+        read_only_fields = ['id', 'is_completed', 'order']
+
+
+class ChecklistItemWriteSerializer(serializers.ModelSerializer):
+    """Used for PATCH on a single item — all fields optional, order >= 1."""
+    is_completed = serializers.BooleanField(source='is_done', required=False)
+    order = serializers.IntegerField(source='position', required=False, min_value=1)
+
+    class Meta:
+        model = ChecklistItem
+        fields = ['text', 'is_completed', 'order']
 
 
 class ChecklistSerializer(serializers.ModelSerializer):
     items = ChecklistItemSerializer(many=True, read_only=True)
+    checklist_progress = serializers.SerializerMethodField()
 
     class Meta:
         model = Checklist
-        fields = ['id', 'title', 'items']
+        fields = ['id', 'title', 'items', 'checklist_progress']
         read_only_fields = ['id']
+
+    def get_checklist_progress(self, obj):
+        all_items = list(obj.items.all())
+        total = len(all_items)
+        completed = sum(1 for item in all_items if item.is_done)
+        return {'total': total, 'completed': completed}
+
+
+class CommentAuthorSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name', 'avatar']
+
+    def get_full_name(self, obj):
+        return obj.full_name
 
 
 class CommentSerializer(serializers.ModelSerializer):
-    author_name = serializers.CharField(source='author.full_name', read_only=True)
+    author = CommentAuthorSerializer(read_only=True)
 
     class Meta:
         model = Comment
-        fields = ['id', 'author', 'author_name', 'text', 'created_at']
+        fields = ['id', 'text', 'author', 'created_at']
         read_only_fields = ['id', 'author', 'created_at']
 
 

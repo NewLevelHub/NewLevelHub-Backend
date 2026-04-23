@@ -31,7 +31,28 @@ urlpatterns = [
     ),
     path(
         'tasks/<int:task_pk>/comments/<int:pk>/',
-        views.CommentViewSet.as_view({'delete': 'destroy'}),
+        views.CommentViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='task-comment-detail',
+    ),
+    # Checklist endpoints
+    path(
+        'tasks/<int:task_pk>/checklists/',
+        views.ChecklistViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='task-checklists',
+    ),
+    path(
+        'checklists/<int:pk>/',
+        views.ChecklistViewSet.as_view({'delete': 'destroy'}),
+        name='checklist-detail',
+    ),
+    path(
+        'checklists/<int:checklist_pk>/items/',
+        views.ChecklistItemViewSet.as_view({'post': 'create'}),
+        name='checklist-items',
+    ),
+    path(
+        'items/<int:pk>/',
+        views.ChecklistItemViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
+        name='checklist-item-detail',
     ),
 ]

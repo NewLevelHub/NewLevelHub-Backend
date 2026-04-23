@@ -14,14 +14,15 @@ from drf_spectacular.utils import (
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
-from .models import Board, Column, Label, Task, Comment, TaskHistory
+from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
     LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
     CommentSerializer, TaskHistorySerializer,
+    ChecklistSerializer, ChecklistItemSerializer, ChecklistItemWriteSerializer,
 )
 
 
@@ -918,31 +919,113 @@ class TaskViewSet(viewsets.ModelViewSet):
 @extend_schema_view(
     list=extend_schema(
         tags=['CRM'],
-        summary='List comments',
-        responses={200: CommentSerializer(many=True)},
+        summary='List comments for a task',
+        description='Returns all comments for the specified task, ordered by creation time ascending.',
+        responses={
+            200: CommentSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only or task not accessible.'),
+            404: OpenApiResponse(description='Task not found.'),
+        },
     ),
     create=extend_schema(
         tags=['CRM'],
-        summary='Add comment',
+        summary='Add comment to a task',
+        description=(
+            'Creates a comment on the specified task. '
+            'Author is auto-set to the authenticated user. '
+            'After creation, notifies the task assignee and creator (if different from the comment author).'
+        ),
         request=CommentSerializer,
         responses={
             201: CommentSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Company members only'),
+            400: OpenApiResponse(description='Validation error.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only or task belongs to another company.'),
+        },
+    ),
+    partial_update=extend_schema(
+        tags=['CRM'],
+        summary='Edit a comment',
+        description='Only the comment author can edit their own comment. Body: {text}.',
+        request=CommentSerializer,
+        responses={
+            200: CommentSerializer,
+            400: OpenApiResponse(description='Validation error.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Only the author can edit this comment.'),
+            404: OpenApiResponse(description='Comment not found.'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete a comment',
+        description='Author or company_admin can delete a comment.',
+        responses={
+            204: OpenApiResponse(description='Comment deleted.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Only the author or company admin can delete this comment.'),
+            404: OpenApiResponse(description='Comment not found.'),
         },
     ),
 )
 class CommentViewSet(viewsets.ModelViewSet):
     serializer_class = CommentSerializer
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
-    http_method_names = ['get', 'post', 'delete']
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+
+    def get_permissions(self):
+        if self.action in ('partial_update', 'destroy'):
+            perm = IsOwnerOrAdmin()
+            perm.owner_field = 'author'
+            return [perm, IsEmailVerifiedOrSuperAdmin()]
+        return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
+
+    def _get_task_or_403(self):
+        """
+        Fetch the task identified by URL kwarg ``task_pk``.
+        Raises NotFound if the task does not exist.
+        Raises PermissionDenied if the task belongs to a different company (non-superadmin users only).
+        """
+        task_pk = self.kwargs.get('task_pk')
+        try:
+            task = Task.objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
+        except Task.DoesNotExist:
+            raise NotFound('Task not found.')
+        user = self.request.user
+        if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this task.')
+        return task
 
     def get_queryset(self):
-        return Comment.objects.filter(task_id=self.kwargs.get('task_pk'))
+        if getattr(self, 'swagger_fake_view', False):
+            return Comment.objects.none()
+        self._get_task_or_403()
+        return Comment.objects.filter(task_id=self.kwargs.get('task_pk')).select_related('author')
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user, task_id=self.kwargs.get('task_pk'))
-        # TODO: уведомление assignee задачи
+        task = self._get_task_or_403()
+        comment = serializer.save(author=self.request.user, task=task)
+        self._notify_task_participants(task, comment)
+
+    def _notify_task_participants(self, task, comment):
+        """Notify task assignee and creator when a new comment is posted, skipping the author."""
+        author = comment.author
+        recipients = set()
+
+        if task.assignee and task.assignee != author:
+            recipients.add(task.assignee)
+        if task.created_by and task.created_by != author:
+            recipients.add(task.created_by)
+
+        for recipient in recipients:
+            Notification.objects.create(
+                user=recipient,
+                notification_type='task_comment',
+                title='Новый комментарий к задаче',
+                body=task.title,
+                url=f'/crm/tasks/{task.pk}/',
+            )
 
 
 @extend_schema_view(
@@ -996,3 +1079,181 @@ class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if self.action in ('partial_update', 'destroy'):
             return [IsCompanyAdmin(), IsEmailVerifiedOrSuperAdmin()]
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
+
+
+class ChecklistViewSet(viewsets.ViewSet):
+    """
+    Checklists nested under a task.
+
+    Routes:
+      POST   /crm/tasks/<task_id>/checklists/   — create checklist
+      GET    /crm/tasks/<task_id>/checklists/   — list checklists
+      DELETE /crm/checklists/<id>/              — delete checklist
+    """
+    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+
+    def _get_task_or_403(self, task_id):
+        """Return the Task if it belongs to the request user's company; raise otherwise."""
+        user = self.request.user
+        try:
+            task = Task.objects.select_related('column__board').get(pk=task_id)
+        except Task.DoesNotExist:
+            raise NotFound('Task not found.')
+        if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this task.')
+        return task
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='List checklists for a task',
+        responses={200: ChecklistSerializer(many=True)},
+    )
+    def list(self, request, task_pk=None):
+        task = self._get_task_or_403(task_pk)
+        checklists = Checklist.objects.filter(task=task).prefetch_related('items')
+        return Response(ChecklistSerializer(checklists, many=True).data)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Create checklist for a task',
+        request=ChecklistSerializer,
+        responses={
+            201: ChecklistSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Task not found'),
+        },
+    )
+    def create(self, request, task_pk=None):
+        task = self._get_task_or_403(task_pk)
+        serializer = ChecklistSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        checklist = Checklist.objects.create(task=task, title=serializer.validated_data['title'])
+        return Response(ChecklistSerializer(checklist).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Delete checklist (cascades to items)',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Checklist not found'),
+        },
+    )
+    def destroy(self, request, pk=None):
+        user = request.user
+        try:
+            checklist = Checklist.objects.select_related('task__column__board').get(pk=pk)
+        except Checklist.DoesNotExist:
+            raise NotFound('Checklist not found.')
+        if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this checklist.')
+        checklist.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ChecklistItemViewSet(viewsets.ViewSet):
+    """
+    Checklist items.
+
+    Routes:
+      POST   /crm/checklists/<id>/items/   — add item to checklist
+      PATCH  /crm/items/<id>/              — update item
+      DELETE /crm/items/<id>/              — delete item, re-normalise order
+    """
+    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+
+    def _get_checklist_or_403(self, checklist_id):
+        user = self.request.user
+        try:
+            checklist = Checklist.objects.select_related('task__column__board').get(pk=checklist_id)
+        except Checklist.DoesNotExist:
+            raise NotFound('Checklist not found.')
+        if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this checklist.')
+        return checklist
+
+    def _get_item_or_403(self, item_id):
+        user = self.request.user
+        try:
+            item = ChecklistItem.objects.select_related('checklist__task__column__board').get(pk=item_id)
+        except ChecklistItem.DoesNotExist:
+            raise NotFound('Item not found.')
+        if user.role != 'superadmin' and item.checklist.task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this item.')
+        return item
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Add item to checklist',
+        request=ChecklistItemWriteSerializer,
+        responses={
+            201: ChecklistItemSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Checklist not found'),
+        },
+    )
+    def create(self, request, checklist_pk=None):
+        checklist = self._get_checklist_or_403(checklist_pk)
+        serializer = ChecklistItemWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        last_position = (
+            ChecklistItem.objects.filter(checklist=checklist)
+            .order_by('-position')
+            .values_list('position', flat=True)
+            .first()
+        )
+        next_position = (last_position or 0) + 1
+
+        item = ChecklistItem.objects.create(
+            checklist=checklist,
+            text=serializer.validated_data['text'],
+            is_done=serializer.validated_data.get('is_done', False),
+            position=next_position,
+        )
+        return Response(ChecklistItemSerializer(item).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Update checklist item',
+        request=ChecklistItemWriteSerializer,
+        responses={
+            200: ChecklistItemSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Item not found'),
+        },
+    )
+    def partial_update(self, request, pk=None):
+        item = self._get_item_or_403(pk)
+        serializer = ChecklistItemWriteSerializer(item, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        # Re-fetch to get clean state
+        item.refresh_from_db()
+        return Response(ChecklistItemSerializer(item).data)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Delete checklist item and re-normalise order',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Item not found'),
+        },
+    )
+    def destroy(self, request, pk=None):
+        item = self._get_item_or_403(pk)
+        checklist = item.checklist
+        item.delete()
+
+        # Re-normalise positions for the remaining items in this checklist
+        remaining = ChecklistItem.objects.filter(checklist=checklist).order_by('position')
+        for idx, remaining_item in enumerate(remaining, start=1):
+            if remaining_item.position != idx:
+                remaining_item.position = idx
+                remaining_item.save(update_fields=['position'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)

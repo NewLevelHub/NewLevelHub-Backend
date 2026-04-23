@@ -3,13 +3,14 @@ from django.http import FileResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 from apps.companies.limits import (
     get_company_storage_used_bytes,
     notify_company_admins_limit_thresholds,
 )
 from apps.core.permissions import IsCompanyMember
+from apps.notifications.models import Notification
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
 
@@ -165,6 +166,7 @@ class FileViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCompanyMember]
     search_fields = ['name']
     ordering_fields = ['name', 'file_size', 'size', 'created_at']
+    _PERMISSION_LEVELS = {'view': 1, 'download': 2, 'full': 3}
 
     def get_queryset(self):
         user = self.request.user
@@ -188,6 +190,23 @@ class FileViewSet(viewsets.ModelViewSet):
         if folder.scope == 'company' and user.role != 'superadmin' and folder.company_id != user.company_id:
             raise ValidationError({'folder_id': 'Company folder is not accessible.'})
         return folder
+
+    def _get_share_for_user(self, file_obj, user):
+        return FileShare.objects.filter(file=file_obj, shared_with=user).first()
+
+    def _ensure_file_permission(self, file_obj, required_permission):
+        user = self.request.user
+        if user.role == 'superadmin' or file_obj.owner_id == user.id:
+            return
+
+        share = self._get_share_for_user(file_obj, user)
+        if share is None:
+            raise PermissionDenied('You do not have access to this file.')
+
+        share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
+        required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
+        if share_level < required_level:
+            raise PermissionDenied('You do not have enough permissions for this file action.')
 
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get('file')
@@ -232,6 +251,27 @@ class FileViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.soft_delete()
 
+    def retrieve(self, request, *args, **kwargs):
+        file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'view')
+        serializer = self.get_serializer(file_obj)
+        return Response(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'full')
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'full')
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'full')
+        return super().destroy(request, *args, **kwargs)
+
     @extend_schema(
         tags=['Storage'],
         summary='Download file as attachment',
@@ -240,6 +280,7 @@ class FileViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
         file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'download')
         file_handle = file_obj.file.open('rb')
         return FileResponse(
             file_handle,
@@ -257,11 +298,30 @@ class FileViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def move(self, request, pk=None):
         file_obj = self.get_object()
+        self._ensure_file_permission(file_obj, 'full')
         folder = self._resolve_folder(request.data.get('folder_id', request.data.get('folder')))
         file_obj.folder = folder
         file_obj.save(update_fields=['folder', 'updated_at'])
         serializer = self.get_serializer(file_obj)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='List shares for file',
+        responses={200: FileShareSerializer(many=True), 403: OpenApiResponse(description='Forbidden')},
+    )
+    @action(detail=True, methods=['get'])
+    def shares(self, request, pk=None):
+        file_obj = self.get_object()
+        if request.user.role != 'superadmin' and file_obj.owner_id != request.user.id:
+            raise PermissionDenied('Only the file owner can see share recipients.')
+
+        queryset = FileShare.objects.filter(file=file_obj).order_by('-created_at')
+        page = self.paginate_queryset(queryset)
+        serializer = FileShareSerializer(page if page is not None else queryset, many=True, context={'request': request})
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 @extend_schema_view(
@@ -292,16 +352,32 @@ class FileViewSet(viewsets.ModelViewSet):
 class FileShareViewSet(viewsets.ModelViewSet):
     serializer_class = FileShareSerializer
     permission_classes = [IsCompanyMember]
-    http_method_names = ['get', 'post', 'delete']
+    http_method_names = ['get', 'post', 'patch', 'delete']
 
     def get_queryset(self):
+        user = self.request.user
+        shared_with_me = str(self.request.query_params.get('shared_with_me', '')).lower() in ('1', 'true', 'yes', 'on')
+
+        if shared_with_me:
+            return FileShare.objects.filter(shared_with=user).order_by('-created_at')
+
+        if self.request.method in ('PATCH', 'PUT', 'DELETE'):
+            return FileShare.objects.filter(shared_by=user).order_by('-created_at')
+
         return (
-            FileShare.objects.filter(shared_by=self.request.user)
-            | FileShare.objects.filter(shared_with=self.request.user)
-        )
+            FileShare.objects.filter(shared_by=user)
+            | FileShare.objects.filter(shared_with=user)
+        ).order_by('-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(shared_by=self.request.user)
+        share = serializer.save(shared_by=self.request.user)
+        Notification.objects.create(
+            user=share.shared_with,
+            notification_type='announcement_company',
+            title='File shared with you',
+            body=f'{share.shared_by.full_name} shared "{share.file.name}" with you.',
+            url=f'/storage/files/{share.file_id}',
+        )
 
 
 @extend_schema(

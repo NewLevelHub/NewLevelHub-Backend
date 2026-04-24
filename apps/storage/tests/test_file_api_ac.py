@@ -7,7 +7,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.companies.models import Company
-from apps.storage.models import File, Folder
+from apps.storage.models import File, Folder, FileShare
 from apps.users.models import User
 
 
@@ -29,6 +29,18 @@ def company_member(db, company):
         first_name='File',
         last_name='Member',
         role='employee',
+        company=company,
+    )
+
+
+@pytest.fixture
+def company_admin(db, company):
+    return User.objects.create_user(
+        email='admin@files.co',
+        password='pass',
+        first_name='Company',
+        last_name='Admin',
+        role='company_admin',
         company=company,
     )
 
@@ -372,5 +384,157 @@ class TestFileApiAcceptanceCriteria:
         api_client.force_authenticate(user=guest_user)
 
         response = api_client.get(_files_url())
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_company_admin_does_not_see_other_users_personal_files(self, api_client, company_member, company_admin):
+        File.objects.create(
+            name='private-notes.txt',
+            file=_upload('private-notes.txt', size=12),
+            file_size=12,
+            content_type='text/plain',
+            owner=company_member,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Private',
+                scope='personal',
+                owner=company_member,
+                company=company_member.company,
+            ),
+        )
+        api_client.force_authenticate(user=company_admin)
+
+        response = api_client.get(_files_url(), {'search': 'private'})
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['count'] == 0
+        assert response.data['results'] == []
+
+    def test_company_member_sees_company_files_but_not_other_personal_files(
+        self,
+        api_client,
+        company_member,
+        company_admin,
+    ):
+        File.objects.create(
+            name='team-doc.txt',
+            file=_upload('team-doc.txt', size=12),
+            file_size=12,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Team',
+                scope='company',
+                owner=company_admin,
+                company=company_member.company,
+            ),
+        )
+        File.objects.create(
+            name='admin-private.txt',
+            file=_upload('admin-private.txt', size=12),
+            file_size=12,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Admin private',
+                scope='personal',
+                owner=company_admin,
+                company=company_member.company,
+            ),
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.get(_files_url())
+
+        assert response.status_code == status.HTTP_200_OK
+        names = {item['name'] for item in response.data['results']}
+        assert 'team-doc.txt' in names
+        assert 'admin-private.txt' not in names
+
+    def test_shared_personal_file_is_visible_to_recipient_in_search(self, api_client, company_member, company_admin):
+        personal_file = File.objects.create(
+            name='payroll-private.txt',
+            file=_upload('payroll-private.txt', size=12),
+            file_size=12,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Admin private',
+                scope='personal',
+                owner=company_admin,
+                company=company_member.company,
+            ),
+        )
+        FileShare.objects.create(
+            file=personal_file,
+            shared_by=company_admin,
+            shared_with=company_member,
+            permission='view',
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.get(_files_url(), {'search': 'payroll'})
+
+        assert response.status_code == status.HTTP_200_OK
+        names = [item['name'] for item in response.data['results']]
+        assert names == ['payroll-private.txt']
+
+    def test_company_member_can_download_company_file_without_explicit_share(
+        self,
+        api_client,
+        company_member,
+        company_admin,
+    ):
+        company_file = File.objects.create(
+            name='team-guide.txt',
+            file=_upload('team-guide.txt', size=24),
+            file_size=24,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Company docs',
+                scope='company',
+                owner=company_admin,
+                company=company_member.company,
+            ),
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.get(_file_download_url(company_file.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'attachment' in response.headers.get('Content-Disposition', '')
+
+    def test_company_member_cannot_modify_company_file_of_another_user(
+        self,
+        api_client,
+        company_member,
+        company_admin,
+    ):
+        company_file = File.objects.create(
+            name='team-rules.txt',
+            file=_upload('team-rules.txt', size=24),
+            file_size=24,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Company docs',
+                scope='company',
+                owner=company_admin,
+                company=company_member.company,
+            ),
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.patch(
+            _file_detail_url(company_file.id),
+            {'name': 'hacked-name.txt'},
+            format='json',
+        )
 
         assert response.status_code == status.HTTP_403_FORBIDDEN

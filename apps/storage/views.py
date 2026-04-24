@@ -172,9 +172,26 @@ class FileViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'superadmin':
             return File.objects.all().annotate(size=F('file_size')).order_by('-created_at')
-        own = File.objects.filter(owner=user)
-        shared = File.objects.filter(company=user.company)
-        return (own | shared).distinct().annotate(size=F('file_size')).order_by('-created_at')
+
+        # Company scope is visible to all company members.
+        company_files = File.objects.filter(company=user.company, folder__scope='company')
+
+        # Personal scope is visible only to the owner, plus explicitly shared files.
+        personal_owned = File.objects.filter(owner=user, folder__scope='personal')
+        personal_shared = File.objects.filter(shares__shared_with=user, folder__scope='personal')
+
+        # Keep compatibility for legacy rows without folder:
+        # owner keeps access; non-owners must use explicit sharing.
+        legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
+        legacy_shared = File.objects.filter(shares__shared_with=user, folder__isnull=True)
+
+        return (
+            company_files
+            | personal_owned
+            | personal_shared
+            | legacy_owned
+            | legacy_shared
+        ).distinct().annotate(size=F('file_size')).order_by('-created_at')
 
     def _resolve_folder(self, folder_id):
         if folder_id in (None, '', 'null'):
@@ -197,6 +214,16 @@ class FileViewSet(viewsets.ModelViewSet):
     def _ensure_file_permission(self, file_obj, required_permission):
         user = self.request.user
         if user.role == 'superadmin' or file_obj.owner_id == user.id:
+            return
+
+        folder = getattr(file_obj, 'folder', None)
+        if (
+            folder is not None
+            and folder.scope == 'company'
+            and user.company_id is not None
+            and file_obj.company_id == user.company_id
+            and required_permission in ('view', 'download')
+        ):
             return
 
         share = self._get_share_for_user(file_obj, user)

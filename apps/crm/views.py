@@ -1239,6 +1239,44 @@ class ChecklistViewSet(viewsets.ViewSet):
 
     @extend_schema(
         tags=['CRM'],
+        summary='Обновить чеклист',
+        operation_id='checklist_partial_update',
+        request=inline_serializer(
+            name='ChecklistPatchRequest',
+            fields={
+                'title': drf_serializers.CharField(required=False, help_text='Название чеклиста'),
+            },
+        ),
+        responses={
+            200: ChecklistSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Forbidden — company members only.'),
+            404: OpenApiResponse(description='Checklist not found.'),
+        },
+        examples=[
+            OpenApiExample(
+                name='Rename checklist',
+                value={'title': 'Definition of Done'},
+                request_only=True,
+            ),
+        ],
+    )
+    def partial_update(self, request, pk=None):
+        user = request.user
+        try:
+            checklist = Checklist.objects.select_related('task__column__board').get(pk=pk)
+        except Checklist.DoesNotExist:
+            raise NotFound('Checklist not found.')
+        if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this checklist.')
+        serializer = ChecklistSerializer(checklist, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ChecklistSerializer(checklist).data)
+
+    @extend_schema(
+        tags=['CRM'],
         summary='Delete checklist (cascades to items)',
         responses={
             204: OpenApiResponse(description='Deleted'),

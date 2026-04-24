@@ -1240,13 +1240,27 @@ class ChecklistViewSet(viewsets.ViewSet):
     @extend_schema(
         tags=['CRM'],
         summary='Обновить чеклист',
-        request=ChecklistSerializer,
+        operation_id='checklist_partial_update',
+        request=inline_serializer(
+            name='ChecklistPatchRequest',
+            fields={
+                'title': drf_serializers.CharField(required=False, help_text='Название чеклиста'),
+            },
+        ),
         responses={
             200: ChecklistSerializer,
             400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Company members only'),
-            404: OpenApiResponse(description='Checklist not found'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Forbidden — company members only.'),
+            404: OpenApiResponse(description='Checklist not found.'),
         },
+        examples=[
+            OpenApiExample(
+                name='Rename checklist',
+                value={'title': 'Definition of Done'},
+                request_only=True,
+            ),
+        ],
     )
     def partial_update(self, request, pk=None):
         user = request.user

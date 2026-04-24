@@ -14,6 +14,14 @@ class AssigneeSerializer(serializers.ModelSerializer):
         fields = ['id', 'first_name', 'last_name', 'avatar']
 
 
+class LabelMinimalSerializer(serializers.ModelSerializer):
+    """Lightweight read-only serializer used for nested label objects in task responses."""
+
+    class Meta:
+        model = Label
+        fields = ['id', 'name', 'color']
+
+
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
@@ -124,8 +132,9 @@ class TaskSerializer(serializers.ModelSerializer):
     Used for list action and as the base for writes.
     """
     label_ids = serializers.PrimaryKeyRelatedField(
-        queryset=Label.objects.all(), many=True, source='labels', required=False,
+        queryset=Label.objects.all(), many=True, source='labels', required=False, write_only=True,
     )
+    labels = LabelMinimalSerializer(many=True, read_only=True)
     assignee_id = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.all(), source='assignee', required=False, allow_null=True,
         write_only=True,

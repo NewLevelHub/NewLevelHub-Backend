@@ -157,12 +157,12 @@ class TestPatchHistoryScalarFields:
         api_client.patch(task_url(task_a.id), {'assignee_id': employee_a.id}, format='json')
         assert TaskHistory.objects.filter(task=task_a, action='updated_assignee').exists()
 
-    def test_patch_assignee_history_records_ids(self, api_client, admin_a, employee_a, task_a):
+    def test_patch_assignee_history_records_full_names(self, api_client, admin_a, employee_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'assignee_id': employee_a.id}, format='json')
         entry = TaskHistory.objects.get(task=task_a, action='updated_assignee')
-        assert entry.old_value == 'None' or entry.old_value == ''
-        assert entry.new_value == str(employee_a.id)
+        assert entry.old_value == ''
+        assert entry.new_value == employee_a.full_name
 
     def test_patch_same_value_does_not_create_history(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)
@@ -197,7 +197,7 @@ class TestPatchHistoryLabels:
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'label_ids': [label_a.id]}, format='json')
         assert TaskHistory.objects.filter(
-            task=task_a, action='label_added', new_value=str(label_a.id)
+            task=task_a, action='label_added', new_value=label_a.name
         ).exists()
 
     def test_removing_label_creates_label_removed_entry(self, api_client, admin_a, task_a, label_a):
@@ -206,7 +206,7 @@ class TestPatchHistoryLabels:
         # Remove label by sending empty list
         api_client.patch(task_url(task_a.id), {'label_ids': []}, format='json')
         assert TaskHistory.objects.filter(
-            task=task_a, action='label_removed', old_value=str(label_a.id)
+            task=task_a, action='label_removed', old_value=label_a.name
         ).exists()
 
     def test_swapping_labels_creates_both_entries(self, api_client, admin_a, task_a, label_a, label_b):
@@ -277,12 +277,11 @@ class TestMoveHistory:
         assert TaskHistory.objects.filter(task=task_a, action='moved').exists()
 
     def test_move_records_old_and_new_column(self, api_client, admin_a, task_a, column_a, column_a2):
-        old_col_id = task_a.column_id
         api_client.force_authenticate(admin_a)
         api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
         entry = TaskHistory.objects.get(task=task_a, action='moved')
-        assert entry.old_value == str(old_col_id)
-        assert entry.new_value == str(column_a2.id)
+        assert entry.old_value == column_a.name
+        assert entry.new_value == column_a2.name
 
     def test_patch_column_also_logs_updated_column(self, api_client, admin_a, task_a, column_a2, board_a):
         """PATCH with column_id in body (not via move action) should log updated_column."""

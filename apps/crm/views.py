@@ -731,14 +731,19 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = serializer.instance
         validated = serializer.validated_data
 
-        # Capture old scalar field values before saving — only for fields explicitly in the PATCH request.
+        # Prefetch relational fields needed for human-readable history values.
+        task_prefetched = Task.objects.select_related('assignee', 'column').prefetch_related('labels').get(
+            pk=task.pk
+        )
+
+        # Capture old human-readable field values before saving.
         tracked_scalar_fields = {
-            'title': task.title,
-            'description': task.description,
-            'priority': task.priority,
-            'deadline': str(task.deadline) if task.deadline else '',
-            'assignee': task.assignee_id,
-            'column': task.column_id,
+            'title': task_prefetched.title,
+            'description': task_prefetched.description,
+            'priority': task_prefetched.priority,
+            'deadline': str(task_prefetched.deadline) if task_prefetched.deadline else '',
+            'assignee': task_prefetched.assignee.full_name if task_prefetched.assignee else '',
+            'column': task_prefetched.column.name,
         }
         # Determine which tracked fields were actually sent in this PATCH.
         requested_tracked = set()
@@ -750,66 +755,68 @@ class TaskViewSet(viewsets.ModelViewSet):
                 requested_tracked.add(field_key)
 
         # Capture old label IDs before saving.
-        old_label_ids = set(task.labels.values_list('id', flat=True))
+        old_label_ids = set(task_prefetched.labels.values_list('id', flat=True))
+        old_label_names = {
+            label.id: label.name for label in task_prefetched.labels.all()
+        }
         labels_in_request = 'labels' in validated
 
-        old_assignee_id = task.assignee_id
+        old_assignee_id = task_prefetched.assignee_id
 
         instance = serializer.save()
-        instance.refresh_from_db()
+        new_instance = Task.objects.select_related('assignee', 'column').get(pk=instance.pk)
 
-        new_assignee_id = instance.assignee_id
-        new_assignee = instance.assignee
+        new_assignee_id = new_instance.assignee_id
+        new_assignee = new_instance.assignee
 
         if new_assignee and new_assignee_id != old_assignee_id and new_assignee != self.request.user:
             Notification.objects.create(
                 user=new_assignee,
                 notification_type='task_assigned',
                 title='Вам назначена задача',
-                body=instance.title,
-                url=f'/crm/tasks/{instance.pk}/',
+                body=new_instance.title,
+                url=f'/crm/tasks/{new_instance.pk}/',
             )
 
         # Log changes to scalar fields that were explicitly sent and actually changed.
         new_scalar_values = {
-            'title': instance.title,
-            'description': instance.description,
-            'priority': instance.priority,
-            'deadline': str(instance.deadline) if instance.deadline else '',
-            'assignee': instance.assignee_id,
-            'column': instance.column_id,
+            'title': new_instance.title,
+            'description': new_instance.description,
+            'priority': new_instance.priority,
+            'deadline': str(new_instance.deadline) if new_instance.deadline else '',
+            'assignee': new_instance.assignee.full_name if new_instance.assignee else '',
+            'column': new_instance.column.name,
         }
         for field_key in requested_tracked:
             old_val = tracked_scalar_fields[field_key]
             new_val = new_scalar_values[field_key]
-            old_str = str(old_val) if old_val is not None else ''
-            new_str = str(new_val) if new_val is not None else ''
-            if old_str != new_str:
+            if old_val != new_val:
                 TaskHistory.objects.create(
-                    task=instance,
+                    task=new_instance,
                     user=self.request.user,
                     action=f'updated_{field_key}',
-                    old_value=old_str,
-                    new_value=new_str,
+                    old_value=old_val,
+                    new_value=new_val,
                 )
 
-        # Log label changes.
+        # Log label changes using label names instead of IDs.
         if labels_in_request:
-            new_label_ids = set(instance.labels.values_list('id', flat=True))
+            new_label_ids = set(new_instance.labels.values_list('id', flat=True))
+            new_label_names = {label.id: label.name for label in new_instance.labels.all()}
             for lid in new_label_ids - old_label_ids:
                 TaskHistory.objects.create(
-                    task=instance,
+                    task=new_instance,
                     user=self.request.user,
                     action='label_added',
                     old_value='',
-                    new_value=str(lid),
+                    new_value=new_label_names.get(lid, str(lid)),
                 )
             for lid in old_label_ids - new_label_ids:
                 TaskHistory.objects.create(
-                    task=instance,
+                    task=new_instance,
                     user=self.request.user,
                     action='label_removed',
-                    old_value=str(lid),
+                    old_value=old_label_names.get(lid, str(lid)),
                     new_value='',
                 )
 
@@ -867,7 +874,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 )
 
         old_column = task.column
-        old_col = task.column_id
+        old_column_name = old_column.name
 
         # Determine position: use provided position or append to end.
         order = serializer.validated_data.get('position')
@@ -893,7 +900,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
-            old_value=str(old_col), new_value=str(task.column_id),
+            old_value=old_column_name, new_value=target_column_obj.name,
         )
         return Response(TaskSerializer(task, context={'request': request}).data)
 

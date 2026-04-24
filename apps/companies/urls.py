@@ -17,6 +17,16 @@ invitation_resend = views.InvitationViewSet.as_view({'post': 'resend'})
 
 urlpatterns = [
     path(
+        '<int:company_id>/calendar/',
+        views.CompanyCalendarView.as_view(),
+        name='company-calendar',
+    ),
+    path(
+        '<int:company_id>/calendar/busy/',
+        views.CompanyCalendarBusyView.as_view(),
+        name='company-calendar-busy',
+    ),
+    path(
         '<int:company_id>/directory/',
         views.CompanyDirectoryView.as_view(),
         name='company-directory',

@@ -196,9 +196,15 @@ class FileViewSet(viewsets.ModelViewSet):
         scope = self.request.query_params.get('scope')
         if scope in ('personal', 'company'):
             if scope == 'company':
-                queryset = queryset.filter(Q(folder__scope='company') | Q(folder__isnull=True, company_id=user.company_id))
+                queryset = queryset.filter(
+                    Q(folder__scope='company')
+                    | Q(folder__isnull=True, company_id=user.company_id)
+                )
             else:
-                queryset = queryset.filter(Q(folder__scope='personal') | Q(folder__isnull=True, company__isnull=True))
+                queryset = queryset.filter(
+                    Q(folder__scope='personal')
+                    | Q(folder__isnull=True, company__isnull=True)
+                )
 
         folder_id = self.request.query_params.get('folder_id')
         if folder_id is not None:

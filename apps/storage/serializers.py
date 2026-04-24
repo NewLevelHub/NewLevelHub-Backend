@@ -45,11 +45,61 @@ class FileSerializer(serializers.ModelSerializer):
 
 class FileShareSerializer(serializers.ModelSerializer):
     shared_with_name = serializers.CharField(source='shared_with.full_name', read_only=True)
+    shared_by_name = serializers.CharField(source='shared_by.full_name', read_only=True)
+    file_name = serializers.CharField(source='file.name', read_only=True)
+    file_owner_id = serializers.IntegerField(source='file.owner_id', read_only=True)
+    file_owner_name = serializers.CharField(source='file.owner.full_name', read_only=True)
+    file_id = serializers.IntegerField(read_only=True)
+    shared_with_user_id = serializers.IntegerField(source='shared_with_id', read_only=True)
 
     class Meta:
         model = FileShare
-        fields = ['id', 'file', 'shared_with', 'shared_with_name', 'shared_by', 'permission', 'created_at']
+        fields = [
+            'id',
+            'file',
+            'file_id',
+            'shared_with',
+            'shared_with_user_id',
+            'shared_with_name',
+            'shared_by',
+            'shared_by_name',
+            'file_name',
+            'file_owner_id',
+            'file_owner_name',
+            'permission',
+            'created_at',
+        ]
         read_only_fields = ['id', 'shared_by', 'created_at']
+
+    def to_internal_value(self, data):
+        normalized_data = data.copy()
+        if normalized_data.get('file') in (None, '') and normalized_data.get('file_id') not in (None, ''):
+            normalized_data['file'] = normalized_data.get('file_id')
+        if (
+            normalized_data.get('shared_with') in (None, '')
+            and normalized_data.get('shared_with_user_id') not in (None, '')
+        ):
+            normalized_data['shared_with'] = normalized_data.get('shared_with_user_id')
+        return super().to_internal_value(normalized_data)
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if request is None or request.user.is_anonymous:
+            return attrs
+
+        file_obj = attrs.get('file') or getattr(self.instance, 'file', None)
+        shared_with = attrs.get('shared_with') or getattr(self.instance, 'shared_with', None)
+
+        if file_obj and self.instance is None and file_obj.owner_id != request.user.id:
+            raise serializers.ValidationError({'file': 'Only the file owner can share this file.'})
+
+        if shared_with and shared_with.company_id != request.user.company_id:
+            raise serializers.ValidationError({'shared_with': 'User must belong to your company.'})
+
+        if file_obj and shared_with and file_obj.company_id != shared_with.company_id:
+            raise serializers.ValidationError({'shared_with': 'User must belong to the same company as file owner.'})
+
+        return attrs
 
 
 class StorageUsageSerializer(serializers.Serializer):

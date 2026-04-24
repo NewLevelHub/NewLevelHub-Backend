@@ -1,3 +1,5 @@
+import json
+
 from django.db import models
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -728,19 +730,116 @@ class TaskViewSet(viewsets.ModelViewSet):
             )
 
     def perform_update(self, serializer):
-        old_assignee_id = serializer.instance.assignee_id
+        task = serializer.instance
+        validated = serializer.validated_data
+
+        # Prefetch relational fields needed for human-readable history values.
+        task_prefetched = Task.objects.select_related('assignee', 'column').prefetch_related('labels').get(
+            pk=task.pk
+        )
+
+        def _deadline_str(dt):
+            """Normalise a deadline datetime to an ISO-8601 date string for comparison.
+
+            deadline is stored as DateTimeField but is typically supplied as a date.
+            Using isoformat() on the date portion avoids false mismatches caused by
+            timezone suffix differences between the captured value and the DB-round-
+            tripped value (e.g. '+06:00' vs 'UTC' representations).
+            """
+            if dt is None:
+                return ''
+            return dt.date().isoformat()
+
+        # Capture old human-readable field values before saving.
+        tracked_scalar_fields = {
+            'title': task_prefetched.title,
+            'description': task_prefetched.description,
+            'priority': task_prefetched.priority,
+            'deadline': _deadline_str(task_prefetched.deadline),
+            'assignee': task_prefetched.assignee.full_name if task_prefetched.assignee else '',
+            'column': task_prefetched.column.name,
+        }
+        # Determine which tracked fields were actually sent in this PATCH.
+        # validated_data keys for relational fields use the source name:
+        #   - assignee_id (write field) → source='assignee' → key 'assignee' in validated_data
+        #   - column_id  (write field) → source='column'   → key 'column'   in validated_data
+        requested_tracked = set()
+        for field_key, vd_key in [
+            ('title', 'title'), ('description', 'description'), ('priority', 'priority'),
+            ('deadline', 'deadline'), ('assignee', 'assignee'), ('column', 'column'),
+        ]:
+            if vd_key in validated:
+                requested_tracked.add(field_key)
+
+        # Capture old label IDs before saving.
+        old_label_ids = set(task_prefetched.labels.values_list('id', flat=True))
+        old_label_info = {
+            label.id: json.dumps({'name': label.name, 'color': label.color})
+            for label in task_prefetched.labels.all()
+        }
+        labels_in_request = 'labels' in validated
+
+        old_assignee_id = task_prefetched.assignee_id
+
         instance = serializer.save()
-        new_assignee_id = instance.assignee_id
-        new_assignee = instance.assignee
+        new_instance = Task.objects.select_related('assignee', 'column').get(pk=instance.pk)
+
+        new_assignee_id = new_instance.assignee_id
+        new_assignee = new_instance.assignee
 
         if new_assignee and new_assignee_id != old_assignee_id and new_assignee != self.request.user:
             Notification.objects.create(
                 user=new_assignee,
                 notification_type='task_assigned',
                 title='Вам назначена задача',
-                body=instance.title,
-                url=f'/crm/tasks/{instance.pk}/',
+                body=new_instance.title,
+                url=f'/crm/tasks/{new_instance.pk}/',
             )
+
+        # Log changes to scalar fields that were explicitly sent and actually changed.
+        new_scalar_values = {
+            'title': new_instance.title,
+            'description': new_instance.description,
+            'priority': new_instance.priority,
+            'deadline': _deadline_str(new_instance.deadline),
+            'assignee': new_instance.assignee.full_name if new_instance.assignee else '',
+            'column': new_instance.column.name,
+        }
+        for field_key in requested_tracked:
+            old_val = tracked_scalar_fields[field_key]
+            new_val = new_scalar_values[field_key]
+            if old_val != new_val:
+                TaskHistory.objects.create(
+                    task=new_instance,
+                    user=self.request.user,
+                    action=f'updated_{field_key}',
+                    old_value=old_val,
+                    new_value=new_val,
+                )
+
+        # Log label changes using JSON-serialised label info (name + color) instead of plain names.
+        if labels_in_request:
+            new_label_ids = set(new_instance.labels.values_list('id', flat=True))
+            new_label_info = {
+                label.id: json.dumps({'name': label.name, 'color': label.color})
+                for label in new_instance.labels.all()
+            }
+            for lid in new_label_ids - old_label_ids:
+                TaskHistory.objects.create(
+                    task=new_instance,
+                    user=self.request.user,
+                    action='label_added',
+                    old_value='',
+                    new_value=new_label_info.get(lid, str(lid)),
+                )
+            for lid in old_label_ids - new_label_ids:
+                TaskHistory.objects.create(
+                    task=new_instance,
+                    user=self.request.user,
+                    action='label_removed',
+                    old_value=old_label_info.get(lid, str(lid)),
+                    new_value='',
+                )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -796,7 +895,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                 )
 
         old_column = task.column
-        old_col = task.column_id
+        old_column_name = old_column.name
 
         # Determine position: use provided position or append to end.
         order = serializer.validated_data.get('position')
@@ -822,7 +921,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
-            old_value=str(old_col), new_value=str(task.column_id),
+            old_value=old_column_name, new_value=target_column_obj.name,
         )
         return Response(TaskSerializer(task, context={'request': request}).data)
 
@@ -913,6 +1012,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         column = task.column
         task.soft_delete()
         _normalize_positions(column)
+        TaskHistory.objects.create(
+            task=task,
+            user=request.user,
+            action='archived',
+            old_value='False',
+            new_value='True',
+        )
         return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
 
 

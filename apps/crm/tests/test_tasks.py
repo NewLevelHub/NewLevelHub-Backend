@@ -206,7 +206,10 @@ class TestTaskCreate:
             'label_ids': [label_a.id],
         }, format='json')
         assert res.status_code == status.HTTP_201_CREATED
-        assert label_a.id in res.data['labels']
+        label_ids_in_response = [lbl['id'] for lbl in res.data['labels']]
+        assert label_a.id in label_ids_in_response
+        assert any(lbl['name'] == label_a.name and lbl['color'] == label_a.color
+                   for lbl in res.data['labels'])
 
     def test_invalid_board_returns_400(self, api_client, admin_a, column_a):
         api_client.force_authenticate(admin_a)
@@ -452,7 +455,10 @@ class TestTaskUpdate:
         api_client.force_authenticate(admin_a)
         res = api_client.patch(task_url(task_a.id), {'label_ids': [label_a.id]}, format='json')
         assert res.status_code == status.HTTP_200_OK
-        assert label_a.id in res.data['labels']
+        label_ids_in_response = [lbl['id'] for lbl in res.data['labels']]
+        assert label_a.id in label_ids_in_response
+        assert any(lbl['name'] == label_a.name and lbl['color'] == label_a.color
+                   for lbl in res.data['labels'])
 
     def test_update_priority(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)

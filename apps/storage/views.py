@@ -222,7 +222,10 @@ class FileViewSet(viewsets.ModelViewSet):
             and folder.scope == 'company'
             and user.company_id is not None
             and file_obj.company_id == user.company_id
-            and required_permission in ('view', 'download')
+            and (
+                required_permission in ('view', 'download')
+                or (required_permission == 'full' and user.role == 'company_admin')
+            )
         ):
             return
 

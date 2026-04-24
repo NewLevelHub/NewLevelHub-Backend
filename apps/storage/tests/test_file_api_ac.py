@@ -538,3 +538,35 @@ class TestFileApiAcceptanceCriteria:
         )
 
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_company_admin_can_rename_company_file_uploaded_by_employee(
+        self,
+        api_client,
+        company_member,
+        company_admin,
+    ):
+        company_file = File.objects.create(
+            name='employee-upload.txt',
+            file=_upload('employee-upload.txt', size=24),
+            file_size=24,
+            content_type='text/plain',
+            owner=company_member,
+            company=company_member.company,
+            folder=Folder.objects.create(
+                name='Company uploads',
+                scope='company',
+                owner=company_member,
+                company=company_member.company,
+            ),
+        )
+        api_client.force_authenticate(user=company_admin)
+
+        response = api_client.patch(
+            _file_detail_url(company_file.id),
+            {'name': 'renamed-by-admin.txt'},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        company_file.refresh_from_db()
+        assert company_file.name == 'renamed-by-admin.txt'

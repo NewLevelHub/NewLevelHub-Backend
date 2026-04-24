@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Q, Sum
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
@@ -138,7 +138,9 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
             deadline__lt=range_end,
         ).select_related('assignee', 'created_by')
         if user_id is not None:
-            tasks = tasks.filter(Q(assignee_id=user_id) | Q(created_by_id=user_id))
+            # "My" task deadlines in calendar are tied to the current assignee.
+            # A task must disappear from "Только мои" after reassignment.
+            tasks = tasks.filter(assignee_id=user_id)
         for task in tasks:
             task_user = task.assignee or task.created_by
             if task_user is None:

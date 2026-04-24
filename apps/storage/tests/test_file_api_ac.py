@@ -103,6 +103,73 @@ class TestFileApiAcceptanceCriteria:
         created = File.objects.get(id=response.data['id'])
         assert created.folder_id == target_folder.id
 
+    def test_get_list_with_folder_id_null_returns_root_files(self, api_client, company_member):
+        File.objects.create(
+            name='root.txt',
+            file=_upload('root.txt', size=10),
+            file_size=10,
+            content_type='text/plain',
+            owner=company_member,
+            company=company_member.company,
+            folder=None,
+        )
+        nested_folder = Folder.objects.create(
+            name='Nested',
+            scope='personal',
+            owner=company_member,
+            company=company_member.company,
+            parent=None,
+        )
+        File.objects.create(
+            name='nested.txt',
+            file=_upload('nested.txt', size=10),
+            file_size=10,
+            content_type='text/plain',
+            owner=company_member,
+            company=company_member.company,
+            folder=nested_folder,
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.get(_files_url(), {'folder_id': 'null'})
+
+        assert response.status_code == status.HTTP_200_OK
+        names = [item['name'] for item in response.data['results']]
+        assert names == ['root.txt']
+
+    def test_get_root_files_are_split_by_scope(self, api_client, company_member):
+        File.objects.create(
+            name='personal-root.txt',
+            file=_upload('personal-root.txt', size=10),
+            file_size=10,
+            content_type='text/plain',
+            owner=company_member,
+            company=None,
+            folder=None,
+        )
+        File.objects.create(
+            name='company-root.txt',
+            file=_upload('company-root.txt', size=10),
+            file_size=10,
+            content_type='text/plain',
+            owner=company_member,
+            company=company_member.company,
+            folder=None,
+        )
+        api_client.force_authenticate(user=company_member)
+
+        personal_response = api_client.get(_files_url(), {'folder_id': 'null', 'scope': 'personal'})
+        company_response = api_client.get(_files_url(), {'folder_id': 'null', 'scope': 'company'})
+
+        assert personal_response.status_code == status.HTTP_200_OK
+        assert company_response.status_code == status.HTTP_200_OK
+
+        personal_names = [item['name'] for item in personal_response.data['results']]
+        company_names = [item['name'] for item in company_response.data['results']]
+
+        assert personal_names == ['personal-root.txt']
+        assert company_names == ['company-root.txt']
+
     def test_post_upload_larger_than_100mb_returns_400(self, api_client, company_member):
         oversized = _upload(
             'oversized.bin',

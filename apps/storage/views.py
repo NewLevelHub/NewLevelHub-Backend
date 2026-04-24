@@ -175,6 +175,7 @@ class FileViewSet(viewsets.ModelViewSet):
         else:
             # Company scope is visible to all company members.
             company_files = File.objects.filter(company=user.company, folder__scope='company')
+            company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
             # Personal scope is visible only to the owner, plus explicitly shared files.
             personal_owned = File.objects.filter(owner=user, folder__scope='personal')
@@ -187,6 +188,7 @@ class FileViewSet(viewsets.ModelViewSet):
 
             queryset = (
                 company_files
+                | company_root_files
                 | personal_owned
                 | personal_shared
                 | legacy_owned

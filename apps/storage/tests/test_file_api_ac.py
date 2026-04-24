@@ -520,6 +520,29 @@ class TestFileApiAcceptanceCriteria:
         assert 'team-doc.txt' in names
         assert 'admin-private.txt' not in names
 
+    def test_company_member_sees_company_root_files_uploaded_by_another_user(
+        self,
+        api_client,
+        company_member,
+        company_admin,
+    ):
+        File.objects.create(
+            name='company-root-visible.txt',
+            file=_upload('company-root-visible.txt', size=12),
+            file_size=12,
+            content_type='text/plain',
+            owner=company_admin,
+            company=company_member.company,
+            folder=None,
+        )
+        api_client.force_authenticate(user=company_member)
+
+        response = api_client.get(_files_url(), {'folder_id': 'null', 'scope': 'company'})
+
+        assert response.status_code == status.HTTP_200_OK
+        names = {item['name'] for item in response.data['results']}
+        assert 'company-root-visible.txt' in names
+
     def test_shared_personal_file_is_visible_to_recipient_in_search(self, api_client, company_member, company_admin):
         personal_file = File.objects.create(
             name='payroll-private.txt',

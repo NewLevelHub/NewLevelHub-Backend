@@ -2,7 +2,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
@@ -12,6 +12,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 from apps.companies.models import CompanySettings
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.notifications.models import Notification
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
 from .serializers import (
@@ -111,14 +112,26 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
             404: OpenApiResponse(description='Not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='review', permission_classes=[IsCompanyAdmin])
+    @action(detail=True, methods=['post'], url_path='review', permission_classes=[IsAuthenticated])
     def review(self, request, pk=None):
+        if request.user.role != 'company_admin':
+            raise PermissionDenied('Only company_admin can review leave requests.')
+
         ser = LeaveRequestReviewSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         new_status = ser.validated_data['status']
 
         with transaction.atomic():
-            leave = LeaveRequest.objects.select_for_update().select_related('user').get(pk=pk)
+            leave = (
+                self.get_queryset()
+                .select_related(None)
+                .select_for_update()
+                .select_related('user')
+                .filter(pk=pk)
+                .first()
+            )
+            if leave is None:
+                raise NotFound('Not found.')
             old_status = leave.status
 
             if new_status == 'approved':
@@ -146,6 +159,21 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
             leave.reviewed_by = request.user
             leave.reviewed_at = timezone.now()
             leave.save()
+
+            if new_status == 'approved':
+                notif_type = 'leave_approved'
+                notif_status_text = 'одобрена'
+            else:
+                notif_type = 'leave_rejected'
+                notif_status_text = 'отклонена'
+
+            Notification.objects.create(
+                user=leave.user,
+                notification_type=notif_type,
+                title=f'Ваша заявка на отпуск {notif_status_text}',
+                body=leave.review_comment,
+                url='/leave',
+            )
 
             if leave.leave_type not in ('sick_leave', 'remote'):
                 balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)

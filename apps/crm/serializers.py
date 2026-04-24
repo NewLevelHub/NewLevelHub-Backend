@@ -135,6 +135,7 @@ class TaskSerializer(serializers.ModelSerializer):
         queryset=Column.objects.all(), source='column',
     )
     board_id = serializers.IntegerField(write_only=True)
+    board_title = serializers.SerializerMethodField(read_only=True)
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
@@ -142,13 +143,19 @@ class TaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
-            'id', 'column_id', 'board_id', 'title', 'description', 'priority', 'position',
+            'id', 'column_id', 'board_id', 'board_title', 'title', 'description', 'priority', 'position',
             'assignee_id', 'assignee', 'created_by', 'deadline',
             'label_ids', 'labels', 'is_archived',
             'checklists', 'comments_count', 'attachments_count',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_by', 'position', 'is_archived', 'created_at', 'updated_at']
+
+    def get_board_title(self, obj):
+        try:
+            return obj.column.board.name
+        except Exception:
+            return None
 
     def _get_company(self):
         request = self.context.get('request')

@@ -247,6 +247,36 @@ class TestCompanyCalendarAggregateAC:
         assert my_filtered.status_code == status.HTTP_200_OK
         assert {item['user']['id'] for item in _items(my_filtered)} == {employee.id}
 
+    def test_my_filter_excludes_tasks_created_by_user_after_reassign(
+        self, api_client, company, employee, colleague
+    ):
+        target_day = timezone.localdate() + timedelta(days=6)
+        board = Board.objects.create(company=company, name='Reassign', created_by=employee)
+        column = Column.objects.create(board=board, name='Todo', position=1)
+        Task.objects.create(
+            column=column,
+            title='Task reassigned away',
+            created_by=employee,
+            assignee=colleague,
+            deadline=_dt_for(target_day, 15),
+            priority='medium',
+            position=1,
+        )
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(
+            _calendar_url(company.id),
+            {
+                'date_from': _iso_date(target_day),
+                'date_to': _iso_date(target_day),
+                'event_type': 'task_deadline',
+                'my': 'true',
+            },
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert _items(response) == []
+
     def test_scopes_events_by_company_only(
         self, api_client, company, company_other, employee, outsider, desk
     ):

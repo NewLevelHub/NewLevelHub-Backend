@@ -1,4 +1,4 @@
-from django.db.models import F, Sum
+from django.db.models import F, Q, Sum
 from django.http import FileResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -171,27 +171,63 @@ class FileViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'superadmin':
-            return File.objects.all().annotate(size=F('file_size')).order_by('-created_at')
+            queryset = File.objects.all()
+        else:
+            # Company scope is visible to all company members.
+            company_files = File.objects.filter(company=user.company, folder__scope='company')
+            company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
-        # Company scope is visible to all company members.
-        company_files = File.objects.filter(company=user.company, folder__scope='company')
+            # Personal scope is visible only to the owner, plus explicitly shared files.
+            personal_owned = File.objects.filter(owner=user, folder__scope='personal')
+            personal_shared = File.objects.filter(shares__shared_with=user, folder__scope='personal')
 
-        # Personal scope is visible only to the owner, plus explicitly shared files.
-        personal_owned = File.objects.filter(owner=user, folder__scope='personal')
-        personal_shared = File.objects.filter(shares__shared_with=user, folder__scope='personal')
+            # Keep compatibility for legacy rows without folder:
+            # owner keeps access; non-owners must use explicit sharing.
+            legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
+            legacy_shared = File.objects.filter(shares__shared_with=user, folder__isnull=True)
 
-        # Keep compatibility for legacy rows without folder:
-        # owner keeps access; non-owners must use explicit sharing.
-        legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
-        legacy_shared = File.objects.filter(shares__shared_with=user, folder__isnull=True)
+            queryset = (
+                company_files
+                | company_root_files
+                | personal_owned
+                | personal_shared
+                | legacy_owned
+                | legacy_shared
+            ).distinct()
 
-        return (
-            company_files
-            | personal_owned
-            | personal_shared
-            | legacy_owned
-            | legacy_shared
-        ).distinct().annotate(size=F('file_size')).order_by('-created_at')
+        scope = self.request.query_params.get('scope')
+        if scope in ('personal', 'company'):
+            if scope == 'company':
+                queryset = queryset.filter(
+                    Q(folder__scope='company')
+                    | Q(folder__isnull=True, company_id=user.company_id)
+                )
+            else:
+                queryset = queryset.filter(
+                    Q(folder__scope='personal')
+                    | Q(folder__isnull=True, company__isnull=True)
+                )
+
+        folder_id = self.request.query_params.get('folder_id')
+        if folder_id is not None:
+            if folder_id == 'null':
+                queryset = queryset.filter(folder__isnull=True)
+            else:
+                try:
+                    queryset = queryset.filter(folder_id=int(folder_id))
+                except (TypeError, ValueError):
+                    raise ValidationError({'folder_id': 'Must be an integer or "null".'})
+
+        return queryset.annotate(size=F('file_size')).order_by('-created_at')
+
+    def _resolve_scope(self):
+        if 'is_company_shared' in self.request.data:
+            raw = self.request.data.get('is_company_shared')
+            return 'company' if str(raw).lower() in ('1', 'true', 'yes', 'on') else 'personal'
+        requested_scope = self.request.data.get('scope')
+        if requested_scope in ('personal', 'company'):
+            return requested_scope
+        return 'personal'
 
     def _resolve_folder(self, folder_id):
         if folder_id in (None, '', 'null'):
@@ -270,9 +306,11 @@ class FileViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         f = self.request.FILES.get('file')
         folder = self._resolve_folder(self.request.data.get('folder_id', self.request.data.get('folder')))
+        scope = folder.scope if folder is not None else self._resolve_scope()
+        company = self.request.user.company if scope == 'company' else None
         serializer.save(
             owner=self.request.user,
-            company=self.request.user.company,
+            company=company,
             file_size=f.size if f else 0,
             content_type=f.content_type if f else '',
             folder=folder,

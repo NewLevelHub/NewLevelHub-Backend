@@ -1239,6 +1239,30 @@ class ChecklistViewSet(viewsets.ViewSet):
 
     @extend_schema(
         tags=['CRM'],
+        summary='Обновить чеклист',
+        request=ChecklistSerializer,
+        responses={
+            200: ChecklistSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Company members only'),
+            404: OpenApiResponse(description='Checklist not found'),
+        },
+    )
+    def partial_update(self, request, pk=None):
+        user = request.user
+        try:
+            checklist = Checklist.objects.select_related('task__column__board').get(pk=pk)
+        except Checklist.DoesNotExist:
+            raise NotFound('Checklist not found.')
+        if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this checklist.')
+        serializer = ChecklistSerializer(checklist, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(ChecklistSerializer(checklist).data)
+
+    @extend_schema(
+        tags=['CRM'],
         summary='Delete checklist (cascades to items)',
         responses={
             204: OpenApiResponse(description='Deleted'),

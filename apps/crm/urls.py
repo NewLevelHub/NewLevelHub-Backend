@@ -42,7 +42,7 @@ urlpatterns = [
     ),
     path(
         'checklists/<int:pk>/',
-        views.ChecklistViewSet.as_view({'delete': 'destroy'}),
+        views.ChecklistViewSet.as_view({'delete': 'destroy', 'patch': 'partial_update'}),
         name='checklist-detail',
     ),
     path(

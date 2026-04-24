@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -196,8 +198,9 @@ class TestPatchHistoryLabels:
     def test_adding_label_creates_label_added_entry(self, api_client, admin_a, task_a, label_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'label_ids': [label_a.id]}, format='json')
+        expected = json.dumps({'name': label_a.name, 'color': label_a.color})
         assert TaskHistory.objects.filter(
-            task=task_a, action='label_added', new_value=label_a.name
+            task=task_a, action='label_added', new_value=expected
         ).exists()
 
     def test_removing_label_creates_label_removed_entry(self, api_client, admin_a, task_a, label_a):
@@ -205,8 +208,9 @@ class TestPatchHistoryLabels:
         api_client.force_authenticate(admin_a)
         # Remove label by sending empty list
         api_client.patch(task_url(task_a.id), {'label_ids': []}, format='json')
+        expected = json.dumps({'name': label_a.name, 'color': label_a.color})
         assert TaskHistory.objects.filter(
-            task=task_a, action='label_removed', old_value=label_a.name
+            task=task_a, action='label_removed', old_value=expected
         ).exists()
 
     def test_swapping_labels_creates_both_entries(self, api_client, admin_a, task_a, label_a, label_b):

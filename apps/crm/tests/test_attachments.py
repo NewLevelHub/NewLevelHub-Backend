@@ -4,7 +4,6 @@ Integration tests for TaskAttachment endpoints:
   POST   /api/v1/crm/tasks/<task_pk>/attachments/
   DELETE /api/v1/crm/tasks/<task_pk>/attachments/<pk>/
 """
-import io
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -268,7 +267,6 @@ class TestAttachmentDirectUpload:
         assert 'File type not allowed' in str(body)
 
     def test_oversized_file_returns_400(self, api_client, employee_a, task_a, monkeypatch):
-        from apps.crm.serializers import MAX_ATTACHMENT_SIZE
         api_client.force_authenticate(employee_a)
         # Temporarily lower the limit so we can trigger it with a small in-memory file
         monkeypatch.setattr('apps.crm.serializers.MAX_ATTACHMENT_SIZE', 5)

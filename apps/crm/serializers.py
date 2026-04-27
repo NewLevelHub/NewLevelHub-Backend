@@ -22,6 +22,15 @@ class LabelMinimalSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'color']
 
 
+class BoardMinimalSerializer(serializers.ModelSerializer):
+    """Lightweight read-only serializer used for the nested board object in task responses."""
+
+    class Meta:
+        model = Board
+        fields = ['id', 'name', 'description', 'is_archived', 'created_at']
+        read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at']
+
+
 class LabelSerializer(serializers.ModelSerializer):
     class Meta:
         model = Label
@@ -144,7 +153,7 @@ class TaskSerializer(serializers.ModelSerializer):
         queryset=Column.objects.all(), source='column',
     )
     board_id = serializers.IntegerField(write_only=True)
-    board_title = serializers.SerializerMethodField(read_only=True)
+    board = serializers.SerializerMethodField(read_only=True)
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
@@ -152,7 +161,7 @@ class TaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Task
         fields = [
-            'id', 'column_id', 'board_id', 'board_title', 'title', 'description', 'priority', 'position',
+            'id', 'column_id', 'board_id', 'board', 'title', 'description', 'priority', 'position',
             'assignee_id', 'assignee', 'created_by', 'deadline',
             'label_ids', 'labels', 'is_archived',
             'checklists', 'comments_count', 'attachments_count',
@@ -160,9 +169,9 @@ class TaskSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_by', 'position', 'is_archived', 'created_at', 'updated_at']
 
-    def get_board_title(self, obj):
+    def get_board(self, obj):
         try:
-            return obj.column.board.name
+            return BoardMinimalSerializer(obj.column.board).data
         except Exception:
             return None
 

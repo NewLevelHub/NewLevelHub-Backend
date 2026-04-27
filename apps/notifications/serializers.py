@@ -3,10 +3,22 @@ from .models import Notification, NotificationPreference
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    """
+    Serializes a Notification instance.
+
+    Field mapping (API name → model field):
+      type     → notification_type
+      message  → body
+      link     → url
+    """
+    type = serializers.CharField(source='notification_type', read_only=True)
+    message = serializers.CharField(source='body', read_only=True)
+    link = serializers.CharField(source='url', read_only=True, allow_null=True)
+
     class Meta:
         model = Notification
-        fields = ['id', 'notification_type', 'title', 'body', 'url', 'is_read', 'read_at', 'created_at']
-        read_only_fields = ['id', 'notification_type', 'title', 'body', 'url', 'created_at']
+        fields = ['id', 'type', 'title', 'message', 'link', 'is_read', 'created_at']
+        read_only_fields = ['id', 'type', 'title', 'message', 'link', 'created_at']
 
 
 class NotificationPreferenceSerializer(serializers.ModelSerializer):

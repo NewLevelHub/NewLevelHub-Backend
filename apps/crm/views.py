@@ -933,7 +933,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             'Supports all task filters: `board_id`, `column_id`, `priority`, `label_ids`, '
             '`deadline` (overdue/today/this_week), `deadline_from`, `deadline_to`, `search`. '
             'Ordering: `ordering=priority`, `ordering=deadline`, `ordering=-created_at`, etc. '
-            'Response is a flat paginated list; each task includes `board_id` and `board_title` fields.'
+            'Response is a flat paginated list; each task includes `board_id` and a nested `board` object.'
         ),
         parameters=[
             OpenApiParameter(name='board_id', type=int, location=OpenApiParameter.QUERY,

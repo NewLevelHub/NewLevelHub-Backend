@@ -5,26 +5,41 @@ from apps.core.models import TimeStampedModel
 
 class Notification(TimeStampedModel):
     TYPE_CHOICES = [
+        # Booking
         ('booking_confirmed', 'Booking Confirmed'),
         ('booking_reminder', 'Booking Reminder'),
         ('booking_cancelled', 'Booking Cancelled'),
         ('booking_completed', 'Booking Completed'),
+        # Task
         ('task_assigned', 'Task Assigned'),
         ('task_moved', 'Task Moved'),
         ('task_comment', 'Task Comment'),
+        ('task_deadline', 'Task Deadline'),
         ('task_deadline_soon', 'Task Deadline Soon'),
         ('task_deadline_overdue', 'Task Deadline Overdue'),
+        # Guest / Access
+        ('guest_validated', 'Guest Validated'),
         ('guest_arrived', 'Guest Arrived'),
+        ('guest_pass_expiring', 'Guest Pass Expiring'),
         ('pass_expiring', 'Pass Expiring'),
+        # Service
+        ('service_request_update', 'Service Request Update'),
         ('service_accepted', 'Service Request Accepted'),
         ('service_status', 'Service Request Status'),
         ('service_completed', 'Service Request Completed'),
+        # Announcement
+        ('announcement', 'Announcement'),
         ('announcement_building', 'Building Announcement'),
         ('announcement_company', 'Company Announcement'),
+        # Invitations / HR
+        ('invitation', 'Invitation'),
         ('invite_received', 'Invitation Received'),
+        ('leave_review', 'Leave Review'),
         ('leave_approved', 'Leave Approved'),
         ('leave_rejected', 'Leave Rejected'),
+        # Misc
         ('new_employee', 'New Employee Joined'),
+        ('system', 'System'),
     ]
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications')

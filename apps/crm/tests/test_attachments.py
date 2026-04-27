@@ -568,3 +568,49 @@ class TestAttachmentStorageQuota:
         after = get_company_storage_used_bytes(company_a)
         # Usage must stay the same; the storage file was already counted before.
         assert after == before
+
+    def test_storage_usage_endpoint_includes_crm_direct_upload(
+        self, api_client, company_a, admin_a, task_a,
+    ):
+        """GET /api/v1/storage/usage/ must reflect direct-upload CRM task attachments."""
+        api_client.force_authenticate(admin_a)
+        usage_url = '/api/v1/storage/usage/'
+
+        before = api_client.get(usage_url).json()['used_bytes']
+
+        file_content = b'crm attachment for usage endpoint test'
+        TaskAttachment.objects.create(
+            task=task_a,
+            file=SimpleUploadedFile('usage_test.pdf', file_content, content_type='application/pdf'),
+            filename='usage_test.pdf',
+            file_size=len(file_content),
+            mime_type='application/pdf',
+            uploaded_by=admin_a,
+            storage_file=None,
+        )
+
+        after = api_client.get(usage_url).json()['used_bytes']
+        assert after == before + len(file_content)
+
+    def test_storage_usage_endpoint_no_double_count_for_mode_b_attachment(
+        self, api_client, company_a, admin_a, task_a, storage_file_a,
+    ):
+        """GET /api/v1/storage/usage/ must NOT double-count Mode B (storage-linked) attachments."""
+        api_client.force_authenticate(admin_a)
+        usage_url = '/api/v1/storage/usage/'
+
+        before = api_client.get(usage_url).json()['used_bytes']
+
+        # Link an existing storage file as a task attachment (Mode B).
+        TaskAttachment.objects.create(
+            task=task_a,
+            storage_file=storage_file_a,
+            filename=storage_file_a.name,
+            file_size=storage_file_a.file_size,
+            mime_type=storage_file_a.content_type,
+            uploaded_by=admin_a,
+        )
+
+        after = api_client.get(usage_url).json()['used_bytes']
+        # usage must not change — the storage file was already counted.
+        assert after == before

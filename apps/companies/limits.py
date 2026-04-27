@@ -21,7 +21,30 @@ LIMIT_METRIC_META = {
 
 
 def get_company_storage_used_bytes(company):
-    return company.files.aggregate(total=Sum('file_size'))['total'] or 0
+    """Return total storage used by the company in bytes.
+
+    Includes both:
+    - Storage app files (apps.storage.File) linked to this company.
+    - Direct-upload CRM task attachments (apps.crm.TaskAttachment with no
+      storage_file link) for tasks belonging to this company's boards.
+    """
+    from apps.crm.models import TaskAttachment
+
+    storage_files_bytes = (
+        company.files.filter(is_deleted=False).aggregate(total=Sum('file_size'))['total'] or 0
+    )
+
+    # Only count direct-upload attachments (storage_file is None).
+    # Mode B attachments are already counted via the Storage file above.
+    crm_attachments_bytes = (
+        TaskAttachment.objects.filter(
+            task__column__board__company=company,
+            storage_file__isnull=True,
+            file__isnull=False,
+        ).aggregate(total=Sum('file_size'))['total'] or 0
+    )
+
+    return storage_files_bytes + crm_attachments_bytes
 
 
 def notify_company_admins_limit_thresholds(company, metric, current_value, limit_value):

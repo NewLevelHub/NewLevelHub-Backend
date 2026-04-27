@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
-from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import transaction
@@ -23,6 +22,7 @@ from drf_spectacular.utils import (
 
 from apps.bookings.models import Booking
 from apps.access.models import GuestPass
+from apps.companies.limits import get_company_storage_used_bytes
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
 from apps.hr.models import LeaveRequest
@@ -502,9 +502,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
             permission_classes=[IsCompanyMember])
     def limits(self, request, pk=None):
         company = self.get_object()
-        storage_used_bytes = company.files.aggregate(total=Sum('file_size'))['total'] or 0
+        storage_used_bytes = get_company_storage_used_bytes(company)
         used_gb = (Decimal(storage_used_bytes) / Decimal(1024 ** 3)).quantize(
-            Decimal('0.01'), rounding=ROUND_HALF_UP
+            Decimal('0.0001'), rounding=ROUND_HALF_UP
         )
 
         return Response({
@@ -518,6 +518,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             },
             'storage': {
                 'used_gb': float(used_gb),
+                'used_bytes': storage_used_bytes,
                 'limit_gb': company.storage_limit_gb,
             },
         })

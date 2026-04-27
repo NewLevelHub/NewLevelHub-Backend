@@ -585,8 +585,42 @@ class TestCompanyLimitsEndpoint:
         assert response.data['employees']['max'] == company_a.max_employees
         assert response.data['boards']['current'] == 1
         assert response.data['boards']['max'] == company_a.max_boards
-        assert response.data['storage']['used_gb'] == 0.0
+        # Two files of 1024 bytes each = 2048 bytes total.
+        # used_bytes carries the exact count; used_gb may round to 0.0 for tiny files.
+        assert response.data['storage']['used_bytes'] == 2048
+        assert isinstance(response.data['storage']['used_gb'], float)
         assert response.data['storage']['limit_gb'] == company_a.storage_limit_gb
+
+    def test_storage_used_bytes_includes_crm_direct_attachments(
+        self, api_client, superadmin, company_a
+    ):
+        """Direct-upload CRM attachments (no storage_file link) count toward used_bytes."""
+        from apps.crm.models import Board as CrmBoard, Column, Task, TaskAttachment
+        auth(api_client, superadmin)
+        owner = User.objects.create_user(
+            email='crm_owner@alpha.com',
+            password='pass',
+            first_name='CRM',
+            last_name='Owner',
+            role='employee',
+            company=company_a,
+        )
+        board = CrmBoard.objects.create(company=company_a, name='Test Board', created_by=owner)
+        column = Column.objects.create(board=board, name='To Do', position=0)
+        task = Task.objects.create(column=column, title='Task 1', created_by=owner)
+        TaskAttachment.objects.create(
+            task=task,
+            file='task_attachments/1/sample.txt',
+            filename='sample.txt',
+            file_size=512000,
+            mime_type='text/plain',
+            uploaded_by=owner,
+        )
+
+        response = api_client.get(f'/api/v1/companies/{company_a.id}/limits/')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['storage']['used_bytes'] == 512000
+        assert response.data['storage']['used_gb'] > 0.0
 
     def test_company_admin_can_view_own_company_limits(self, api_client, company_admin, company_a):
         auth(api_client, company_admin)

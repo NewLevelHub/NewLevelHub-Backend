@@ -19,12 +19,13 @@ from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.models import Notification
-from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem
+from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
     LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
     CommentSerializer, TaskHistorySerializer,
     ChecklistSerializer, ChecklistItemSerializer, ChecklistItemWriteSerializer,
+    TaskAttachmentSerializer,
 )
 
 
@@ -1400,4 +1401,153 @@ class ChecklistItemViewSet(viewsets.ViewSet):
                 remaining_item.position = idx
                 remaining_item.save(update_fields=['position'])
 
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['CRM'],
+        summary='List attachments for a task',
+        responses={
+            200: TaskAttachmentSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only or task not accessible.'),
+            404: OpenApiResponse(description='Task not found.'),
+        },
+    ),
+    create=extend_schema(
+        tags=['CRM'],
+        summary='Add attachment to a task',
+        description=(
+            'Two modes:\n'
+            '**Mode A — Direct upload**: multipart/form-data with `file` field. '
+            'Max 50 MB. Allowed: PDF, Word, Excel, PNG, JPEG, GIF.\n'
+            '**Mode B — Link from Storage**: JSON body with `storage_file_id` (must belong to same company).'
+        ),
+        request=TaskAttachmentSerializer,
+        responses={
+            201: TaskAttachmentSerializer,
+            400: OpenApiResponse(description='Validation error (size, type, or missing fields).'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only or task not accessible.'),
+            404: OpenApiResponse(description='Task or storage file not found.'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['CRM'],
+        summary='Delete a task attachment',
+        description=(
+            'If the attachment is a direct upload, the file is deleted from disk. '
+            'If it links to a Storage file, only the link record is removed. '
+            'Only the uploader or a company_admin may delete.'
+        ),
+        responses={
+            204: OpenApiResponse(description='Attachment deleted.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Only uploader or company admin can delete.'),
+            404: OpenApiResponse(description='Attachment not found.'),
+        },
+    ),
+)
+class TaskAttachmentViewSet(viewsets.GenericViewSet):
+    serializer_class = TaskAttachmentSerializer
+    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+
+    def _get_task_or_403(self):
+        task_pk = self.kwargs.get('task_pk')
+        try:
+            task = Task.objects.select_related('column__board').get(pk=task_pk)
+        except Task.DoesNotExist:
+            raise NotFound('Task not found.')
+        user = self.request.user
+        if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
+            raise PermissionDenied('You do not have access to this task.')
+        return task
+
+    def get_queryset(self):
+        if getattr(self, 'swagger_fake_view', False):
+            return TaskAttachment.objects.none()
+        task = self._get_task_or_403()
+        return TaskAttachment.objects.filter(task=task).select_related('uploaded_by', 'storage_file')
+
+    def list(self, request, task_pk=None):
+        qs = self.get_queryset()
+        serializer = self.get_serializer(qs, many=True)
+        return Response(serializer.data)
+
+    def create(self, request, task_pk=None):
+        from apps.companies.limits import get_company_storage_used_bytes
+        from apps.storage.models import File as StorageFile
+        task = self._get_task_or_403()
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        vd = serializer.validated_data
+        file_obj = vd.get('file')
+        storage_file_id = vd.get('storage_file_id')
+
+        if file_obj:
+            # Check storage quota before persisting the file.
+            company = request.user.company
+            if company is not None:
+                current_used = get_company_storage_used_bytes(company)
+                storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
+                if current_used + file_obj.size > storage_limit_bytes:
+                    raise ValidationError({'detail': 'Storage limit reached'})
+
+            attachment = TaskAttachment.objects.create(
+                task=task,
+                file=file_obj,
+                filename=file_obj.name,
+                file_size=file_obj.size,
+                mime_type=getattr(file_obj, 'content_type', ''),
+                uploaded_by=request.user,
+                storage_file=None,
+            )
+        else:
+            user = request.user
+            sf_qs = StorageFile.objects.filter(pk=storage_file_id)
+            if user.role != 'superadmin':
+                sf_qs = sf_qs.filter(company_id=user.company_id)
+            try:
+                storage_file = sf_qs.get()
+            except StorageFile.DoesNotExist:
+                raise NotFound('Storage file not found or does not belong to your company.')
+
+            attachment = TaskAttachment.objects.create(
+                task=task,
+                file=None,
+                storage_file=storage_file,
+                filename=storage_file.name,
+                file_size=storage_file.file_size,
+                mime_type=storage_file.content_type,
+                uploaded_by=request.user,
+            )
+
+        output = self.get_serializer(attachment)
+        return Response(output.data, status=status.HTTP_201_CREATED)
+
+    def destroy(self, request, task_pk=None, pk=None):
+        try:
+            attachment = TaskAttachment.objects.select_related(
+                'uploaded_by', 'storage_file', 'task__column__board',
+            ).get(pk=pk, task__id=task_pk)
+        except TaskAttachment.DoesNotExist:
+            raise NotFound('Attachment not found.')
+
+        # Object-level permission check: uploader, company_admin of same company, or superadmin
+        user = request.user
+        is_owner = attachment.uploaded_by == user
+        is_admin_same_company = (
+            user.role in ('superadmin', 'company_admin')
+            and (user.role == 'superadmin' or attachment.company_id == user.company_id)
+        )
+        if not (is_owner or is_admin_same_company):
+            raise PermissionDenied('Only the uploader or company admin can delete this attachment.')
+
+        # Delete file from disk only for direct uploads
+        if not attachment.storage_file_id and attachment.file:
+            attachment.file.delete(save=False)
+
+        attachment.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)

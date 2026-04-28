@@ -8,7 +8,13 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 from apps.core.permissions import IsOwnerOrAdmin
 
 from .models import Notification, NotificationPreference
-from .serializers import NotificationSerializer, NotificationPreferenceSerializer, UnreadCountSerializer
+from .serializers import (
+    NotificationSerializer,
+    NotificationPreferenceDictSerializer,
+    DNDSerializer,
+    DNDResponseSerializer,
+    UnreadCountSerializer,
+)
 
 
 @extend_schema_view(
@@ -106,9 +112,14 @@ class NotificationViewSet(
 @extend_schema(
     tags=['Notifications'],
     summary='Get or update notification preferences',
-    request=NotificationPreferenceSerializer,
+    description=(
+        'GET returns a dict keyed by each notification type with `in_app` and `email` booleans. '
+        'PATCH accepts a partial dict — only the keys sent are updated. '
+        'The preference record is created with all defaults=true on first access.'
+    ),
+    request=NotificationPreferenceDictSerializer,
     responses={
-        200: NotificationPreferenceSerializer,
+        200: OpenApiResponse(description='Notification preferences dict (keyed by notification type)'),
         400: OpenApiResponse(description='Validation error'),
         401: OpenApiResponse(description='Not authenticated'),
     },
@@ -118,7 +129,32 @@ class NotificationViewSet(
 def notification_preferences(request):
     prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
     if request.method == 'PATCH':
-        serializer = NotificationPreferenceSerializer(prefs, data=request.data, partial=True)
+        serializer = NotificationPreferenceDictSerializer(prefs, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-    return Response(NotificationPreferenceSerializer(prefs).data)
+        prefs = serializer.save()
+    return Response(NotificationPreferenceDictSerializer(prefs).data)
+
+
+@extend_schema(
+    tags=['Notifications'],
+    summary='Set Do-Not-Disturb',
+    description=(
+        'Enables or disables Do-Not-Disturb mode. '
+        'When DND is active, `create_notification` will skip creating in-app notifications. '
+        '`until` is optional — omit or pass null for indefinite DND.'
+    ),
+    request=DNDSerializer,
+    responses={
+        200: DNDResponseSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def do_not_disturb(request):
+    prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
+    serializer = DNDSerializer(prefs, data=request.data)
+    serializer.is_valid(raise_exception=True)
+    prefs = serializer.save()
+    return Response(DNDResponseSerializer({'dnd_enabled': prefs.dnd_enabled, 'dnd_until': prefs.dnd_until}).data)

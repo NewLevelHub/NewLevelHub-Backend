@@ -79,8 +79,12 @@ class NotificationPreference(TimeStampedModel):
     announcement_email = models.BooleanField(default=False)
     hr_in_app = models.BooleanField(default=True)
     hr_email = models.BooleanField(default=True)
+    system_in_app = models.BooleanField(default=True)
+    system_email = models.BooleanField(default=False)
 
     do_not_disturb = models.BooleanField(default=False)
+    dnd_enabled = models.BooleanField(default=False)
+    dnd_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'notification_preferences'

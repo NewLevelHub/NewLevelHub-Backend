@@ -14,7 +14,14 @@ Usage from anywhere in the codebase::
     )
 """
 
-from .models import Notification
+import logging
+
+from django.utils import timezone
+
+from .models import Notification, NotificationPreference
+from .serializers import NOTIFICATION_TYPE_FIELD_MAP
+
+logger = logging.getLogger(__name__)
 
 # All valid notification type keys (mirrors Notification.TYPE_CHOICES primary keys).
 NOTIFICATION_TYPES = {
@@ -49,9 +56,40 @@ NOTIFICATION_TYPES = {
 }
 
 
+def _is_dnd_active(pref):
+    """Return True if Do-Not-Disturb is currently active for a preference record."""
+    if not pref.dnd_enabled:
+        return False
+    # DND is active if dnd_until is None (indefinite) OR has not passed yet.
+    if pref.dnd_until is None:
+        return True
+    return pref.dnd_until > timezone.now()
+
+
+def _in_app_allowed(pref, notification_type):
+    """
+    Return True if the in_app channel is enabled for *notification_type*.
+
+    Types not present in NOTIFICATION_TYPE_FIELD_MAP (e.g. secondary types like
+    'booking_completed', 'task_deadline_soon') fall back to True so they are
+    never silently suppressed without an explicit user preference.
+    """
+    mapping = NOTIFICATION_TYPE_FIELD_MAP.get(notification_type)
+    if mapping is None:
+        return True
+    in_app_field, _ = mapping
+    return getattr(pref, in_app_field, True)
+
+
 def create_notification(user, notification_type, title, message, link=None):
     """
     Create and persist a new in-app notification for *user*.
+
+    Before creating the Notification record, this function checks:
+      1. Do-Not-Disturb: if DND is active, skip creation and return None.
+      2. Per-type in_app preference: if disabled for this type, skip and return None.
+      3. Email sending is a TODO stub — the email preference will be used when
+         email tasks are implemented.
 
     Parameters
     ----------
@@ -71,8 +109,9 @@ def create_notification(user, notification_type, title, message, link=None):
 
     Returns
     -------
-    Notification
-        The newly created (and saved) ``Notification`` instance.
+    Notification | None
+        The newly created (and saved) ``Notification`` instance, or None if
+        the notification was suppressed by DND or user preferences.
 
     Raises
     ------
@@ -85,10 +124,34 @@ def create_notification(user, notification_type, title, message, link=None):
             f"Valid values: {sorted(NOTIFICATION_TYPES)}"
         )
 
-    return Notification.objects.create(
+    # Fetch or create preference record (never 404 on first access).
+    pref, _ = NotificationPreference.objects.get_or_create(user=user)
+
+    # 1. DND check.
+    if _is_dnd_active(pref):
+        logger.debug(
+            'Notification suppressed by DND for user=%s type=%s',
+            user.pk, notification_type,
+        )
+        return None
+
+    # 2. Per-type in_app preference check.
+    if not _in_app_allowed(pref, notification_type):
+        logger.debug(
+            'Notification suppressed by in_app preference for user=%s type=%s',
+            user.pk, notification_type,
+        )
+        return None
+
+    # 3. Create in-app notification.
+    notification = Notification.objects.create(
         user=user,
         notification_type=notification_type,
         title=title,
         body=message,
         url=link or '',
     )
+
+    # TODO: Email sending — check pref email field and enqueue Celery task when implemented.
+
+    return notification

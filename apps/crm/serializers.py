@@ -1,3 +1,4 @@
+import os
 import re
 
 from rest_framework import serializers
@@ -101,14 +102,31 @@ class CommentSerializer(serializers.ModelSerializer):
 
 
 ALLOWED_MIME_TYPES = {
+    # PDF
     'application/pdf',
+    # Word
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    # Excel
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    # PowerPoint
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    # Images
     'image/png',
     'image/jpeg',
     'image/gif',
+    # Generic binary — some clients (e.g. browsers on Windows) send this for Office docs
+    'application/octet-stream',
+}
+
+ALLOWED_EXTENSIONS = {
+    '.pdf',
+    '.doc', '.docx',
+    '.xls', '.xlsx',
+    '.ppt', '.pptx',
+    '.png', '.jpg', '.jpeg', '.gif',
 }
 
 MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -174,7 +192,8 @@ class TaskAttachmentSerializer(serializers.ModelSerializer):
             if file.size > MAX_ATTACHMENT_SIZE:
                 raise serializers.ValidationError({'file': 'File size exceeds 50MB limit'})
             mime = getattr(file, 'content_type', '') or ''
-            if mime not in ALLOWED_MIME_TYPES:
+            ext = os.path.splitext(file.name or '')[1].lower()
+            if mime not in ALLOWED_MIME_TYPES and ext not in ALLOWED_EXTENSIONS:
                 raise serializers.ValidationError({'file': 'File type not allowed'})
 
         return attrs

@@ -464,14 +464,28 @@ class FileShareViewSet(viewsets.ModelViewSet):
 @permission_classes([IsCompanyMember])
 def storage_usage(request):
     user = request.user
+
+    personal_qs = File.objects.filter(owner=user, is_deleted=False)
+    personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+    personal_count = personal_qs.count()
+
     if user.company_id:
-        used = get_company_storage_used_bytes(user.company)
-        limit = user.company.storage_limit_gb * 1024 * 1024 * 1024
+        company = user.company
+        company_used = get_company_storage_used_bytes(company)
+        company_limit = company.storage_limit_gb * 1024 * 1024 * 1024
+        company_count = File.objects.filter(company=company, is_deleted=False).count()
+        company_data = {
+            'used_bytes': company_used,
+            'limit_bytes': company_limit,
+            'file_count': company_count,
+        }
     else:
-        used = File.objects.filter(owner=user).aggregate(total=Sum('file_size'))['total'] or 0
-        limit = 1 * 1024 * 1024 * 1024  # 1 GB default for guests
+        company_data = None
+
     return Response(StorageUsageSerializer({
-        'used_bytes': used,
-        'limit_bytes': limit,
-        'used_percent': round(used / limit * 100, 2) if limit else 0,
+        'personal': {
+            'used_bytes': personal_used,
+            'file_count': personal_count,
+        },
+        'company': company_data,
     }).data)

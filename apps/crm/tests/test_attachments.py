@@ -614,3 +614,63 @@ class TestAttachmentStorageQuota:
         after = api_client.get(usage_url).json()['used_bytes']
         # usage must not change — the storage file was already counted.
         assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Regression: application/octet-stream MIME type validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestAttachmentOctetStreamRegression:
+    """
+    application/octet-stream is a generic MIME type sent by some Windows clients
+    for Office documents.  The fix must:
+      - Allow files whose *extension* is in ALLOWED_EXTENSIONS (e.g. .docx)
+      - Block files whose extension is NOT in ALLOWED_EXTENSIONS (e.g. .zip, .exe, .mp4)
+    """
+
+    def test_docx_with_octet_stream_mime_is_allowed(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('report.docx', b'PK\x03\x04fake', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_pdf_with_octet_stream_mime_is_allowed(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('doc.pdf', b'%PDF-1.4 fake', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_xlsx_with_octet_stream_mime_is_allowed(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('data.xlsx', b'PK\x03\x04fake', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_zip_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('archive.zip', b'PK\x03\x04', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'File type not allowed' in str(resp.json())
+
+    def test_exe_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('malware.exe', b'MZ\x90\x00', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'File type not allowed' in str(resp.json())
+
+    def test_mp4_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('video.mp4', b'\x00\x00\x00\x18ftyp', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'File type not allowed' in str(resp.json())
+
+    def test_bin_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
+        api_client.force_authenticate(employee_a)
+        f = SimpleUploadedFile('data.bin', b'\xde\xad\xbe\xef', content_type='application/octet-stream')
+        resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'File type not allowed' in str(resp.json())

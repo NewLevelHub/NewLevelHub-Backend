@@ -117,8 +117,6 @@ ALLOWED_MIME_TYPES = {
     'image/png',
     'image/jpeg',
     'image/gif',
-    # Generic binary — some clients (e.g. browsers on Windows) send this for Office docs
-    'application/octet-stream',
 }
 
 ALLOWED_EXTENSIONS = {
@@ -193,8 +191,14 @@ class TaskAttachmentSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'file': 'File size exceeds 50MB limit'})
             mime = getattr(file, 'content_type', '') or ''
             ext = os.path.splitext(file.name or '')[1].lower()
-            if mime not in ALLOWED_MIME_TYPES and ext not in ALLOWED_EXTENSIONS:
-                raise serializers.ValidationError({'file': 'File type not allowed'})
+            if mime == 'application/octet-stream':
+                # Generic MIME type — some clients send this for Office docs on Windows.
+                # Fall back to extension check only to avoid accepting all binary files.
+                if ext not in ALLOWED_EXTENSIONS:
+                    raise serializers.ValidationError({'file': 'File type not allowed'})
+            else:
+                if mime not in ALLOWED_MIME_TYPES and ext not in ALLOWED_EXTENSIONS:
+                    raise serializers.ValidationError({'file': 'File type not allowed'})
 
         return attrs
 

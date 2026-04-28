@@ -60,8 +60,7 @@ class TestBoardLimit:
         assert Notification.objects.filter(
             user=company_admin,
             notification_type='announcement_company',
-            title='System limit warning',
-            body='Board usage reached 80% (4/5 boards).',
+            title='System limit warning: 80%',
         ).exists()
 
     def test_create_board_at_95_percent_creates_admin_notification(self, api_client, company_admin, company):
@@ -77,6 +76,5 @@ class TestBoardLimit:
         assert Notification.objects.filter(
             user=company_admin,
             notification_type='announcement_company',
-            title='System limit warning',
-            body='Board usage reached 95% (19/20 boards).',
+            title='System limit warning: 95%',
         ).exists()

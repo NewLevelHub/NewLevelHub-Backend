@@ -71,19 +71,21 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
     if not admins.exists():
         return
 
-    title = 'System limit warning'
     for threshold in thresholds:
+        title = f'System limit warning: {threshold}%'
         body = (
-            f"{meta['label']} usage reached {threshold}% "
-            f"({current_value}/{limit_value} {meta['unit']})."
+            f"Your {meta['label'].lower()} usage has reached {threshold}% "
+            f"({current_value}/{limit_value} {meta['unit']}). "
+            f"Please free up space or upgrade your plan."
         )
         for admin in admins:
             Notification.objects.get_or_create(
                 user=admin,
                 notification_type='announcement_company',
                 title=title,
-                body=body,
+                is_read=False,
                 defaults={
+                    'body': body,
                     'url': f'/companies/{company.id}/limits',
                 },
             )

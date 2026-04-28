@@ -1,16 +1,23 @@
+import logging
+
+from django.core.cache import cache
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
+from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from .filters import GuestPassFilter
 from .models import GuestPass, AccessLog
 from .serializers import (
     GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer, AccessLogSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @extend_schema_view(
@@ -40,10 +47,11 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     permission_classes = [IsCompanyAdmin]
     queryset = GuestPass.objects.select_related('created_by', 'company').order_by('-created_at')
     http_method_names = ['get', 'post']
-    filterset_fields = ['status']
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = GuestPassFilter
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'create'):
+        if self.action in ('list', 'retrieve', 'create', 'revoke', 'resend'):
             return [IsCompanyMember()]
         return [permission() for permission in self.permission_classes]
 
@@ -53,7 +61,15 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         return GuestPassSerializer
 
     def get_queryset(self):
-        return super().get_queryset().filter(created_by=self.request.user)
+        queryset = super().get_queryset()
+        user = self.request.user
+        if user.role == 'superadmin':
+            return queryset
+        if user.role == 'company_admin':
+            if not user.company_id:
+                return queryset.none()
+            return queryset.filter(company_id=user.company_id)
+        return queryset.filter(created_by=user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -76,6 +92,11 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     @action(detail=True, methods=['post'], url_path='revoke')
     def revoke(self, request, pk=None):
         guest_pass = self.get_object()
+        if guest_pass.status in ('used', 'expired'):
+            return Response(
+                {'detail': f'Cannot revoke pass with status "{guest_pass.status}"'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         guest_pass.status = 'revoked'
         guest_pass.save(update_fields=['status'])
         return Response({'detail': 'Pass revoked'})
@@ -92,7 +113,23 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
-        # TODO: отправить QR-код повторно на email гостя
+        guest_pass = self.get_object()
+        throttle_key = f'guest_pass_resend:{guest_pass.id}'
+        resend_count = cache.get(throttle_key, 0)
+        if resend_count >= 3:
+            return Response({'detail': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        if resend_count == 0:
+            cache.set(throttle_key, 1, timeout=3600)
+        else:
+            cache.incr(throttle_key)
+
+        try:
+            from .tasks import send_guest_pass_email
+
+            send_guest_pass_email.delay(guest_pass.id)
+        except Exception:
+            logger.exception('Failed to enqueue pass resend email for pass_id=%s', guest_pass.id)
         return Response({'detail': 'QR code resent'})
 
 

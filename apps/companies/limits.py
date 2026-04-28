@@ -54,7 +54,7 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
     if limit_value <= 0:
         return
 
-    usage_percent = (current_value / limit_value) * 100
+    usage_percent = (float(current_value) / float(limit_value)) * 100
     if usage_percent < 80:
         return
 

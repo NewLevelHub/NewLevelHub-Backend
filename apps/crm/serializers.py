@@ -1,3 +1,4 @@
+import os
 import re
 
 from rest_framework import serializers
@@ -100,11 +101,106 @@ class CommentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'author', 'created_at']
 
 
+ALLOWED_MIME_TYPES = {
+    # PDF
+    'application/pdf',
+    # Word
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    # Excel
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    # PowerPoint
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    # Images
+    'image/png',
+    'image/jpeg',
+    'image/gif',
+}
+
+ALLOWED_EXTENSIONS = {
+    '.pdf',
+    '.doc', '.docx',
+    '.xls', '.xlsx',
+    '.ppt', '.pptx',
+    '.png', '.jpg', '.jpeg', '.gif',
+}
+
+MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024  # 50 MB
+
+
+class TaskAttachmentUploadedBySerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name', 'avatar']
+
+    def get_full_name(self, obj):
+        return obj.full_name
+
+
 class TaskAttachmentSerializer(serializers.ModelSerializer):
+    uploaded_by = TaskAttachmentUploadedBySerializer(read_only=True)
+    url = serializers.SerializerMethodField()
+    size = serializers.SerializerMethodField()
+    storage_file_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    file = serializers.FileField(write_only=True, required=False, allow_null=True)
+
     class Meta:
         model = TaskAttachment
-        fields = ['id', 'file', 'filename', 'file_size', 'uploaded_by', 'created_at']
-        read_only_fields = ['id', 'uploaded_by', 'file_size', 'created_at']
+        fields = [
+            'id', 'filename', 'size', 'mime_type', 'url',
+            'uploaded_by', 'created_at',
+            # write-only inputs
+            'file', 'storage_file_id',
+        ]
+        read_only_fields = ['id', 'filename', 'mime_type', 'url', 'uploaded_by', 'created_at']
+
+    def get_size(self, obj):
+        return obj.file_size
+
+    def get_url(self, obj):
+        request = self.context.get('request')
+        if obj.storage_file_id:
+            file_field = obj.storage_file.file
+        else:
+            file_field = obj.file
+        if not file_field:
+            return None
+        if request:
+            return request.build_absolute_uri(file_field.url)
+        return file_field.url
+
+    def validate(self, attrs):
+        file = attrs.get('file')
+        storage_file_id = attrs.get('storage_file_id')
+
+        if not file and not storage_file_id:
+            raise serializers.ValidationError(
+                'Provide either a file upload (file) or a storage_file_id.'
+            )
+        if file and storage_file_id:
+            raise serializers.ValidationError(
+                'Provide either file or storage_file_id, not both.'
+            )
+
+        if file:
+            if file.size > MAX_ATTACHMENT_SIZE:
+                raise serializers.ValidationError({'file': 'File size exceeds 50MB limit'})
+            mime = getattr(file, 'content_type', '') or ''
+            ext = os.path.splitext(file.name or '')[1].lower()
+            if mime == 'application/octet-stream':
+                # Generic MIME type — some clients send this for Office docs on Windows.
+                # Fall back to extension check only to avoid accepting all binary files.
+                if ext not in ALLOWED_EXTENSIONS:
+                    raise serializers.ValidationError({'file': 'File type not allowed'})
+            else:
+                if mime not in ALLOWED_MIME_TYPES and ext not in ALLOWED_EXTENSIONS:
+                    raise serializers.ValidationError({'file': 'File type not allowed'})
+
+        return attrs
 
 
 class TaskHistoryUserSerializer(serializers.ModelSerializer):

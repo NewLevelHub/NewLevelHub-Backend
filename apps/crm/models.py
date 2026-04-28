@@ -122,15 +122,33 @@ class Comment(TimeStampedModel):
         return self.task.column.board.company_id
 
 
+def _task_attachment_upload_path(instance, filename):
+    return f'task_attachments/{instance.task_id}/{filename}'
+
+
 class TaskAttachment(TimeStampedModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='attachments')
-    file = models.FileField(upload_to='task_attachments/')
+    file = models.FileField(upload_to=_task_attachment_upload_path, null=True, blank=True)
+    storage_file = models.ForeignKey(
+        'storage.File', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='task_attachments',
+    )
     filename = models.CharField(max_length=255)
     file_size = models.PositiveIntegerField(default=0)
+    mime_type = models.CharField(max_length=100, blank=True, default='')
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
 
     class Meta:
         db_table = 'crm_task_attachments'
+
+    @property
+    def company(self):
+        """Proxy company from the parent task's board — used by IsOwnerOrAdmin."""
+        return self.task.column.board.company
+
+    @property
+    def company_id(self):
+        return self.task.column.board.company_id
 
 
 class TaskHistory(TimeStampedModel):

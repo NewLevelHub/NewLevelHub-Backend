@@ -55,4 +55,15 @@ urlpatterns = [
         views.ChecklistItemViewSet.as_view({'patch': 'partial_update', 'delete': 'destroy'}),
         name='checklist-item-detail',
     ),
+    # Attachment endpoints
+    path(
+        'tasks/<int:task_pk>/attachments/',
+        views.TaskAttachmentViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='task-attachments',
+    ),
+    path(
+        'tasks/<int:task_pk>/attachments/<int:pk>/',
+        views.TaskAttachmentViewSet.as_view({'delete': 'destroy'}),
+        name='task-attachment-detail',
+    ),
 ]

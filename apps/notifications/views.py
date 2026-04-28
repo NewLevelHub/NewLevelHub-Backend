@@ -1,4 +1,4 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, mixins
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -6,6 +6,7 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.core.permissions import IsOwnerOrAdmin
+
 from .models import Notification, NotificationPreference
 from .serializers import NotificationSerializer, NotificationPreferenceSerializer, UnreadCountSerializer
 
@@ -13,20 +14,42 @@ from .serializers import NotificationSerializer, NotificationPreferenceSerialize
 @extend_schema_view(
     list=extend_schema(
         tags=['Notifications'],
-        summary='List notifications',
+        summary='List my notifications',
+        description=(
+            'Returns a paginated list of notifications for the authenticated user. '
+            'Filter by `is_read` or `notification_type`. Ordered by `-created_at`.'
+        ),
         responses={200: NotificationSerializer(many=True)},
     ),
-    retrieve=extend_schema(
+    destroy=extend_schema(
         tags=['Notifications'],
-        summary='Get notification',
-        responses={200: NotificationSerializer, 404: OpenApiResponse(description='Not found')},
+        summary='Delete a notification',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            401: OpenApiResponse(description='Not authenticated'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
 )
-class NotificationViewSet(viewsets.ModelViewSet):
+class NotificationViewSet(
+    mixins.ListModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """
+    Notification endpoints for the authenticated user.
+
+    - GET  /notifications/            — list (paginated, filterable)
+    - GET  /notifications/unread-count/ — count of unread
+    - POST /notifications/{id}/read/  — mark single as read
+    - POST /notifications/read-all/   — mark all as read
+    - DELETE /notifications/{id}/     — delete single
+    """
+
     serializer_class = NotificationSerializer
     permission_classes = [IsOwnerOrAdmin]
-    http_method_names = ['get', 'patch', 'delete']
     filterset_fields = ['is_read', 'notification_type']
+    ordering = ['-created_at']
 
     def get_queryset(self):
         return Notification.objects.filter(user=self.request.user)
@@ -44,10 +67,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='read')
     def mark_read(self, request, pk=None):
         notif = self.get_object()
-        notif.is_read = True
-        notif.read_at = timezone.now()
-        notif.save(update_fields=['is_read', 'read_at'])
-        return Response(NotificationSerializer(notif).data)
+        if not notif.is_read:
+            notif.is_read = True
+            notif.read_at = timezone.now()
+            notif.save(update_fields=['is_read', 'read_at'])
+        return Response(NotificationSerializer(notif, context={'request': request}).data)
 
     @extend_schema(
         tags=['Notifications'],

@@ -406,7 +406,7 @@ class TestMyTasks:
         assert 'count' in res.data
         assert 'results' in res.data
 
-    def test_response_includes_board_title(self, api_client, employee_a, column_a, board_a):
+    def test_response_includes_board(self, api_client, employee_a, column_a, board_a):
         task = Task.objects.create(
             column=column_a, title='Board Title Task', priority='low', position=1, assignee=employee_a,
         )
@@ -414,7 +414,9 @@ class TestMyTasks:
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
         result = next(t for t in res.data['results'] if t['id'] == task.id)
-        assert result['board_title'] == board_a.name
+        assert 'board' in result
+        assert result['board']['id'] == board_a.id
+        assert result['board']['name'] == board_a.name
 
     def test_filter_by_priority_applied(self, api_client, employee_a, column_a):
         high_task = Task.objects.create(

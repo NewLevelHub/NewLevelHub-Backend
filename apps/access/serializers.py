@@ -1,11 +1,14 @@
 from rest_framework import serializers
 from datetime import timedelta
 from io import BytesIO
+import logging
 from django.core.files.base import ContentFile
 import qrcode
 
 from .models import GuestPass, AccessLog
 from . import tasks
+
+logger = logging.getLogger(__name__)
 
 
 class GuestPassCreateSerializer(serializers.ModelSerializer):
@@ -69,7 +72,11 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         self._generate_qr_image(guest_pass)
         guest_pass.save(update_fields=['qr_image'])
 
-        tasks.send_guest_pass_email.delay(guest_pass.id)
+        try:
+            tasks.send_guest_pass_email.delay(guest_pass.id)
+        except Exception:
+            # Do not fail pass creation when broker/result backend is unavailable.
+            logger.exception('Failed to enqueue guest pass email task for pass_id=%s', guest_pass.id)
         return guest_pass
 
 

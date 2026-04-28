@@ -113,6 +113,13 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, _payload(), format='json')
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_cannot_create_pass_for_self_email(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        payload = _payload()
+        payload['guest_email'] = company_admin.email
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     def test_employee_can_create_pass(self, api_client, employee):
         api_client.force_authenticate(user=employee)
         response = api_client.post(PASSES_URL, _payload(), format='json')

@@ -31,6 +31,9 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         if valid_until > valid_from + timedelta(days=30):
             raise serializers.ValidationError({'valid_until': 'Cannot be more than 30 days from valid_from.'})
 
+        if attrs['guest_email'].strip().lower() == user.email.strip().lower():
+            raise serializers.ValidationError({'guest_email': 'Cannot create a guest pass for yourself.'})
+
         active_count = GuestPass.objects.filter(
             company=user.company,
             guest_email=attrs['guest_email'],

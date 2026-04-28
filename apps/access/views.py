@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
+from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import GuestPass, AccessLog
 from .serializers import (
@@ -38,14 +38,30 @@ from .serializers import (
 class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = GuestPassSerializer
     permission_classes = [IsCompanyAdmin]
-    queryset = GuestPass.objects.all()
+    queryset = GuestPass.objects.select_related('created_by', 'company').order_by('-created_at')
     http_method_names = ['get', 'post']
     filterset_fields = ['status']
+
+    def get_permissions(self):
+        if self.action in ('list', 'retrieve', 'create'):
+            return [IsCompanyMember()]
+        return [permission() for permission in self.permission_classes]
 
     def get_serializer_class(self):
         if self.action == 'create':
             return GuestPassCreateSerializer
         return GuestPassSerializer
+
+    def get_queryset(self):
+        return super().get_queryset().filter(created_by=self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        guest_pass = serializer.save()
+        output_serializer = GuestPassSerializer(guest_pass, context=self.get_serializer_context())
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @extend_schema(
         tags=['Access'],

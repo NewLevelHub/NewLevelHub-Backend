@@ -114,6 +114,11 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
         guest_pass = self.get_object()
+        if guest_pass.status != 'active':
+            return Response(
+                {'detail': f'Cannot resend pass with status "{guest_pass.status}"'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         throttle_key = f'guest_pass_resend:{guest_pass.id}'
         resend_count = cache.get(throttle_key, 0)
         if resend_count >= 3:
@@ -124,12 +129,13 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         else:
             cache.incr(throttle_key)
 
-        try:
-            from .tasks import send_guest_pass_email
+        from .tasks import send_guest_pass_email_now
 
-            send_guest_pass_email.delay(guest_pass.id)
+        try:
+            send_guest_pass_email_now(guest_pass.id)
         except Exception:
-            logger.exception('Failed to enqueue pass resend email for pass_id=%s', guest_pass.id)
+            logger.exception('Failed to resend pass email for pass_id=%s', guest_pass.id)
+            return Response({'detail': 'Failed to send QR email'}, status=status.HTTP_502_BAD_GATEWAY)
         return Response({'detail': 'QR code resent'})
 
 

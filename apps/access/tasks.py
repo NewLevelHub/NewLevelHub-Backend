@@ -5,9 +5,8 @@ from django.utils import timezone
 from .models import GuestPass
 
 
-@shared_task
-def send_guest_pass_email(guest_pass_id):
-    """Send pass details and QR image to guest email."""
+def send_guest_pass_email_now(guest_pass_id):
+    """Send pass details and QR image to guest email immediately."""
     try:
         guest_pass = GuestPass.objects.select_related('created_by').get(id=guest_pass_id)
     except GuestPass.DoesNotExist:
@@ -30,7 +29,13 @@ def send_guest_pass_email(guest_pass_id):
             email.attach(guest_pass.qr_image.name.split('/')[-1], guest_pass.qr_image.read(), 'image/png')
         finally:
             guest_pass.qr_image.close()
-    email.send(fail_silently=True)
+    email.send(fail_silently=False)
+
+
+@shared_task
+def send_guest_pass_email(guest_pass_id):
+    """Celery wrapper around direct guest pass email sending."""
+    send_guest_pass_email_now(guest_pass_id)
 
 
 @shared_task

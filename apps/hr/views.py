@@ -12,7 +12,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 from apps.companies.models import CompanySettings
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
 from .serializers import (
@@ -167,12 +167,12 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
                 notif_type = 'leave_rejected'
                 notif_status_text = 'отклонена'
 
-            Notification.objects.create(
+            create_notification(
                 user=leave.user,
                 notification_type=notif_type,
                 title=f'Ваша заявка на отпуск {notif_status_text}',
-                body=leave.review_comment,
-                url='/leave',
+                message=leave.review_comment,
+                link='/leave',
             )
 
             if leave.leave_type not in ('sick_leave', 'remote'):

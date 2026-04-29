@@ -66,7 +66,7 @@ def guest_user(db):
 
 
 def _payload(valid_until_days=5):
-    now = timezone.now()
+    now = timezone.now() + timedelta(minutes=5)
     return {
         'guest_name': 'John Visitor',
         'guest_email': 'john.visitor@test.local',
@@ -124,6 +124,16 @@ class TestGuestPassesCreateAC:
         api_client.force_authenticate(user=employee)
         response = api_client.post(PASSES_URL, _payload(), format='json')
         assert response.status_code == status.HTTP_201_CREATED
+
+    @pytest.mark.parametrize('creator_fixture', ['company_admin', 'employee'])
+    def test_cannot_create_pass_with_valid_from_in_past(self, request, api_client, creator_fixture):
+        creator = request.getfixturevalue(creator_fixture)
+        api_client.force_authenticate(user=creator)
+        payload = _payload()
+        payload['valid_from'] = (timezone.now() - timedelta(hours=1)).isoformat()
+        payload['valid_until'] = (timezone.now() + timedelta(days=2)).isoformat()
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_guest_coworker_cannot_create_more_than_two_active(self, api_client, company_admin):
         payload = _payload()

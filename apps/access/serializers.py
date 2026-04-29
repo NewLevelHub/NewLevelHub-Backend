@@ -3,6 +3,7 @@ from datetime import timedelta
 from io import BytesIO
 import logging
 from django.core.files.base import ContentFile
+from django.utils import timezone
 import qrcode
 
 from .models import GuestPass, AccessLog
@@ -27,6 +28,10 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         user = request.user
         valid_from = attrs['valid_from']
         valid_until = attrs['valid_until']
+        now = timezone.now()
+
+        if valid_from < now:
+            raise serializers.ValidationError({'valid_from': 'Cannot be in the past.'})
 
         if valid_until <= valid_from:
             raise serializers.ValidationError({'valid_until': 'Must be later than valid_from.'})

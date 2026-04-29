@@ -12,6 +12,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 from apps.companies.models import CompanySettings
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.notifications.models import Notification
 from apps.notifications.utils import create_notification
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress

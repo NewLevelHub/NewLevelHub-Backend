@@ -1476,7 +1476,7 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
         return Response(serializer.data)
 
     def create(self, request, task_pk=None):
-        from apps.companies.limits import get_company_storage_used_bytes
+        from apps.companies.limits import get_company_storage_used_bytes, notify_company_admins_limit_thresholds
         from apps.storage.models import File as StorageFile
         task = self._get_task_or_403()
         serializer = self.get_serializer(data=request.data)
@@ -1504,6 +1504,15 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
                 uploaded_by=request.user,
                 storage_file=None,
             )
+
+            if company is not None:
+                projected_used_gb = (current_used + file_obj.size) / (1024 ** 3)
+                notify_company_admins_limit_thresholds(
+                    company=company,
+                    metric='storage',
+                    current_value=round(projected_used_gb, 2),
+                    limit_value=company.storage_limit_gb,
+                )
         else:
             user = request.user
             sf_qs = StorageFile.objects.filter(pk=storage_file_id)

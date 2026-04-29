@@ -102,7 +102,17 @@ class FileShareSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class StorageUsageSerializer(serializers.Serializer):
+class PersonalStorageSerializer(serializers.Serializer):
+    used_bytes = serializers.IntegerField()
+    file_count = serializers.IntegerField()
+
+
+class CompanyStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     limit_bytes = serializers.IntegerField()
-    used_percent = serializers.FloatField()
+    file_count = serializers.IntegerField()
+
+
+class StorageUsageSerializer(serializers.Serializer):
+    personal = PersonalStorageSerializer()
+    company = CompanyStorageSerializer(allow_null=True)

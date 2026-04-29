@@ -6,6 +6,10 @@ from django.utils import timezone
 from apps.core.models import TimeStampedModel
 
 
+def _guest_pass_qr_upload_path(instance, filename):
+    return f'guest-passes/qr/{instance.id}/{filename}'
+
+
 class GuestPass(TimeStampedModel):
     STATUS_CHOICES = [
         ('active', 'Active'),
@@ -30,6 +34,7 @@ class GuestPass(TimeStampedModel):
     visit_purpose = models.TextField(blank=True, default='')
 
     qr_code = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    qr_image = models.ImageField(upload_to=_guest_pass_qr_upload_path, blank=True, default='')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active', db_index=True)
     usage_type = models.CharField(max_length=10, choices=USAGE_CHOICES, default='single')
     times_used = models.PositiveIntegerField(default=0)

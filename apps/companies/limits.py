@@ -55,7 +55,7 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
     if limit_value <= 0:
         return
 
-    usage_percent = (current_value / limit_value) * 100
+    usage_percent = (float(current_value) / float(limit_value)) * 100
     if usage_percent < 80:
         return
 
@@ -72,11 +72,12 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
     if not admins.exists():
         return
 
-    title = 'System limit warning'
     for threshold in thresholds:
+        title = f'System limit warning: {threshold}%'
         body = (
-            f"{meta['label']} usage reached {threshold}% "
-            f"({current_value}/{limit_value} {meta['unit']})."
+            f"Your {meta['label'].lower()} usage has reached {threshold}% "
+            f"({current_value}/{limit_value} {meta['unit']}). "
+            f"Please free up space or upgrade your plan."
         )
         for admin in admins:
             if not should_notify(admin, 'announcement_company'):
@@ -85,8 +86,9 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
                 user=admin,
                 notification_type='announcement_company',
                 title=title,
-                body=body,
+                is_read=False,
                 defaults={
-                    'url': f'/companies/{company.id}/limits',
+                    'body': body,
+                    'url': f'/companies/{company.id}',
                 },
             )

@@ -302,6 +302,45 @@ class TestDoNotDisturb:
         assert 'dnd_enabled' in resp.data
         assert 'dnd_until' in resp.data
 
+    def test_past_dnd_until_returns_400(self, auth_client):
+        past = (timezone.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        resp = auth_client.post(DND_URL, {'enabled': True, 'until': past}, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_past_dnd_until_error_field_name(self, auth_client):
+        past = (timezone.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        resp = auth_client.post(DND_URL, {'enabled': True, 'until': past}, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        # Error must be under 'dnd_until' key as specified.
+        assert 'dnd_until' in str(resp.data)
+
+    def test_future_dnd_until_is_accepted(self, auth_client):
+        future = (timezone.now() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        resp = auth_client.post(DND_URL, {'enabled': True, 'until': future}, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['dnd_enabled'] is True
+        assert resp.data['dnd_until'] is not None
+
+    def test_disable_dnd_with_past_until_is_accepted(self, auth_client, employee):
+        # When enabled=False, until is cleared regardless — no 400 for past dates.
+        past = (timezone.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        resp = auth_client.post(DND_URL, {'enabled': False, 'until': past}, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['dnd_enabled'] is False
+        pref = NotificationPreference.objects.get(user=employee)
+        assert pref.dnd_until is None
+
+    def test_disable_dnd_with_future_until_clears_until(self, auth_client, employee):
+        # First enable with a future until.
+        future = (timezone.now() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        auth_client.post(DND_URL, {'enabled': True, 'until': future}, format='json')
+        # Now disable — dnd_until should be cleared even if we pass a future time.
+        resp = auth_client.post(DND_URL, {'enabled': False, 'until': future}, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['dnd_enabled'] is False
+        pref = NotificationPreference.objects.get(user=employee)
+        assert pref.dnd_until is None
+
 
 # ---------------------------------------------------------------------------
 # AC4: create_notification suppression

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from .models import Notification, NotificationPreference
 
 
@@ -152,6 +153,21 @@ class DNDSerializer(serializers.Serializer):
     """Serializer for Do-Not-Disturb settings."""
     enabled = serializers.BooleanField()
     until = serializers.DateTimeField(allow_null=True, required=False, default=None)
+
+    def validate(self, attrs):
+        enabled = attrs.get('enabled')
+        until = attrs.get('until')
+
+        if until is not None:
+            if not enabled:
+                # When disabling DND, ignore/clear any provided until value.
+                attrs['until'] = None
+            elif until <= timezone.now():
+                raise serializers.ValidationError(
+                    {'dnd_until': 'Must be a future datetime.'}
+                )
+
+        return attrs
 
     def update(self, instance, validated_data):
         instance.dnd_enabled = validated_data['enabled']

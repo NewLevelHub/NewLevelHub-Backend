@@ -729,6 +729,18 @@ class TaskViewSet(viewsets.ModelViewSet):
                 message=task.title,
                 link=f'/crm/tasks/{task.pk}/',
             )
+            from apps.notifications.tasks import send_notification_email
+            send_notification_email.delay(
+                task.assignee.id,
+                'task_assigned',
+                {
+                    'subject': 'Вам назначена задача',
+                    'task_title': task.title,
+                    'board_name': task.column.board.name if task.column else '',
+                    'assigned_by': self.request.user.full_name,
+                    'action_url': f'/crm/tasks/{task.pk}/',
+                },
+            )
 
     def perform_update(self, serializer):
         task = serializer.instance
@@ -795,6 +807,18 @@ class TaskViewSet(viewsets.ModelViewSet):
                 title='Вам назначена задача',
                 message=new_instance.title,
                 link=f'/crm/tasks/{new_instance.pk}/',
+            )
+            from apps.notifications.tasks import send_notification_email
+            send_notification_email.delay(
+                new_assignee.id,
+                'task_assigned',
+                {
+                    'subject': 'Вам назначена задача',
+                    'task_title': new_instance.title,
+                    'board_name': new_instance.column.board.name if new_instance.column else '',
+                    'assigned_by': self.request.user.full_name,
+                    'action_url': f'/crm/tasks/{new_instance.pk}/',
+                },
             )
 
         # Log changes to scalar fields that were explicitly sent and actually changed.

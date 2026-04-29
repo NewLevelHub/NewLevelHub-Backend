@@ -70,7 +70,38 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user, company=self.request.user.company)
+        leave_request = serializer.save(user=self.request.user, company=self.request.user.company)
+
+        # Notify company admins that a leave request needs review
+        from apps.notifications.tasks import send_notification_email
+        employee = self.request.user
+        company = employee.company
+        if company:
+            admins = User.objects.filter(
+                company=company,
+                role='company_admin',
+                is_active=True,
+            )
+            for admin in admins:
+                Notification.objects.create(
+                    user=admin,
+                    notification_type='leave_review',
+                    title=f'Заявка на отпуск от {employee.full_name}',
+                    body=f'{employee.full_name} подал(а) заявку на отпуск.',
+                    url='/hr/leave-requests/',
+                )
+                send_notification_email.delay(
+                    admin.id,
+                    'leave_review',
+                    {
+                        'subject': 'Заявка на отпуск требует рассмотрения',
+                        'employee_name': employee.full_name,
+                        'leave_type': leave_request.leave_type,
+                        'start_date': str(leave_request.start_date),
+                        'end_date': str(leave_request.end_date),
+                        'action_url': '/hr/leave-requests/',
+                    },
+                )
 
     def _resolve_year(self, request):
         year = request.query_params.get('year') or request.data.get('year')

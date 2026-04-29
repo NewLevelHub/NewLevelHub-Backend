@@ -123,7 +123,22 @@ def validate_qr(request):
         checked_by=request.user,
         method='qr',
     )
-    # TODO: уведомить создателя пропуска
+
+    # Notify the pass creator via email
+    from apps.notifications.tasks import send_notification_email
+    from django.utils import timezone as tz
+    send_notification_email.delay(
+        guest_pass.created_by.id,
+        'guest_validated',
+        {
+            'subject': 'Гостевой пропуск подтверждён',
+            'guest_name': guest_pass.guest_name,
+            'visit_purpose': guest_pass.visit_purpose,
+            'validated_at': tz.now().strftime('%Y-%m-%d %H:%M'),
+            'action_url': '/access/',
+        },
+    )
+
     return Response({
         'valid': True,
         'guest_name': guest_pass.guest_name,

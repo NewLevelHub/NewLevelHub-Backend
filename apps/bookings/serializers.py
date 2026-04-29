@@ -649,6 +649,20 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                             link=f'/bookings/{booking.id}',
                         )
 
+        # Send booking confirmation email to the booking owner
+        from apps.notifications.tasks import send_notification_email
+        send_notification_email.delay(
+            user.id,
+            'booking_confirmed',
+            {
+                'subject': 'Ваше бронирование подтверждено',
+                'resource_name': resource.name,
+                'start_time': start_time.strftime('%Y-%m-%d %H:%M'),
+                'end_time': end_time.strftime('%Y-%m-%d %H:%M'),
+                'action_url': f'/bookings/{booking.id}',
+            },
+        )
+
         return booking
 
 

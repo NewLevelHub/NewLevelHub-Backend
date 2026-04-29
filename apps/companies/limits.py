@@ -86,6 +86,6 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
                 is_read=False,
                 defaults={
                     'body': body,
-                    'url': f'/companies/{company.id}/limits',
+                    'url': f'/companies/{company.id}',
                 },
             )

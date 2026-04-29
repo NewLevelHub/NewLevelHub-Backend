@@ -53,7 +53,13 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         return GuestPassSerializer
 
     def get_queryset(self):
-        return super().get_queryset().filter(created_by=self.request.user)
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.role == 'superadmin':
+            return qs
+        if user.role == 'company_admin':
+            return qs.filter(company=user.company)
+        return qs.filter(created_by=user)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

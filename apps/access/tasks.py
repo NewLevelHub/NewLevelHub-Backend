@@ -1,6 +1,8 @@
 from celery import shared_task
+from io import BytesIO
 from django.core.mail import EmailMessage
 from django.utils import timezone
+import qrcode
 
 from .models import GuestPass
 
@@ -24,12 +26,17 @@ def send_guest_pass_email(guest_pass_id):
         f'Please present the attached QR code at reception.'
     )
     email = EmailMessage(subject=subject, body=body, to=[guest_pass.guest_email])
-    if guest_pass.qr_image:
-        guest_pass.qr_image.open('rb')
-        try:
-            email.attach(guest_pass.qr_image.name.split('/')[-1], guest_pass.qr_image.read(), 'image/png')
-        finally:
-            guest_pass.qr_image.close()
+
+    # Build QR PNG in-memory to avoid worker dependency on shared media volume.
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(str(guest_pass.qr_code))
+    qr.make(fit=True)
+    qr_image = qr.make_image(fill_color='black', back_color='white')
+    buffer = BytesIO()
+    qr_image.save(buffer, format='PNG')
+    buffer.seek(0)
+    email.attach(f'guest-pass-{guest_pass.qr_code}.png', buffer.read(), 'image/png')
+
     email.send(fail_silently=True)
 
 

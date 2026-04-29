@@ -120,6 +120,13 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_cannot_create_pass_for_existing_employee_email(self, api_client, company_admin, employee):
+        api_client.force_authenticate(user=company_admin)
+        payload = _payload()
+        payload['guest_email'] = employee.email
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     def test_employee_can_create_pass(self, api_client, employee):
         api_client.force_authenticate(user=employee)
         response = api_client.post(PASSES_URL, _payload(), format='json')
@@ -172,8 +179,8 @@ class TestGuestPassesCreateAC:
 
 @pytest.mark.django_db
 class TestGuestPassesListAndFiltersAC:
-    def test_get_returns_only_my_passes(self, api_client, company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
+    def test_employee_get_returns_only_own_passes(self, api_client, company_admin, employee):
+        mine = _create_pass(creator=employee, status_code='active')
         other_admin = User.objects.create_user(
             email='other-admin@test.local',
             password='pass',
@@ -184,11 +191,49 @@ class TestGuestPassesListAndFiltersAC:
             is_email_verified=True,
         )
         _create_pass(creator=other_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
+        api_client.force_authenticate(user=employee)
         response = api_client.get(PASSES_URL)
         assert response.status_code == status.HTTP_200_OK
         ids = [row['id'] for row in response.data.get('results', response.data)]
         assert ids == [mine.id]
+
+    def test_company_admin_sees_company_employees_passes(self, api_client, company_admin, employee):
+        own = _create_pass(creator=company_admin, status_code='active')
+        employee_pass = _create_pass(creator=employee, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(PASSES_URL)
+        assert response.status_code == status.HTTP_200_OK
+        ids = {row['id'] for row in response.data.get('results', response.data)}
+        assert own.id in ids
+        assert employee_pass.id in ids
+
+    def test_superadmin_sees_all_companies_passes(self, api_client, company_admin):
+        company_b = Company.objects.create(name='Access Co B', plan='basic')
+        admin_b = User.objects.create_user(
+            email='access-admin-b@test.local',
+            password='pass',
+            first_name='Access',
+            last_name='AdminB',
+            role='company_admin',
+            company=company_b,
+            is_email_verified=True,
+        )
+        superadmin = User.objects.create_user(
+            email='superadmin-access@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='Admin',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        pass_a = _create_pass(creator=company_admin, status_code='active')
+        pass_b = _create_pass(creator=admin_b, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL)
+        assert response.status_code == status.HTTP_200_OK
+        ids = {row['id'] for row in response.data.get('results', response.data)}
+        assert pass_a.id in ids
+        assert pass_b.id in ids
 
     @pytest.mark.parametrize('filter_status', ['active', 'used', 'expired', 'revoked'])
     def test_status_filter_supported(self, api_client, company_admin, filter_status):

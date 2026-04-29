@@ -8,6 +8,7 @@ import qrcode
 
 from .models import GuestPass, AccessLog
 from . import tasks
+from apps.users.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,12 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
         if attrs['guest_email'].strip().lower() == user.email.strip().lower():
             raise serializers.ValidationError({'guest_email': 'Cannot create a guest pass for yourself.'})
+
+        existing_user = User.objects.filter(email__iexact=attrs['guest_email'].strip()).first()
+        if existing_user and existing_user.role != 'guest':
+            raise serializers.ValidationError(
+                {'guest_email': 'Cannot create a guest pass for company member accounts.'}
+            )
 
         active_count = GuestPass.objects.filter(
             company=user.company,

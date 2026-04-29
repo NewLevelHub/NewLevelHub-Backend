@@ -5,17 +5,38 @@ from .models import Floor, MapPoint, ServiceRequest, Announcement
 class MapPointSerializer(serializers.ModelSerializer):
     class Meta:
         model = MapPoint
-        fields = ['id', 'point_type', 'label', 'x', 'y', 'resource', 'company']
+        fields = ['id', 'floor', 'point_type', 'label', 'x', 'y', 'resource', 'company']
         read_only_fields = ['id']
 
 
-class FloorSerializer(serializers.ModelSerializer):
-    points = MapPointSerializer(many=True, read_only=True)
+class FloorListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for list views — omits map_points."""
+    plan_image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Floor
-        fields = ['id', 'number', 'name', 'plan_image', 'points']
-        read_only_fields = ['id']
+        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'company', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_plan_image_url(self, obj):
+        if not obj.plan_image:
+            return None
+        request = self.context.get('request')
+        if request is not None:
+            return request.build_absolute_uri(obj.plan_image.url)
+        return obj.plan_image.url
+
+
+class FloorDetailSerializer(FloorListSerializer):
+    """Detail serializer — includes nested map_points."""
+    map_points = MapPointSerializer(source='points', many=True, read_only=True)
+
+    class Meta(FloorListSerializer.Meta):
+        fields = FloorListSerializer.Meta.fields + ['map_points']
+
+
+# Keep FloorSerializer as an alias so existing view imports don't break
+FloorSerializer = FloorListSerializer
 
 
 class ServiceRequestSerializer(serializers.ModelSerializer):

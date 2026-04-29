@@ -1,5 +1,8 @@
+import os
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
@@ -7,10 +10,10 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdminOrReadOnly
-from apps.core.mixins import SetCompanyOnCreateMixin
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
-    FloorSerializer, MapPointSerializer,
+    FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     ServiceRequestSerializer, ServiceRequestUpdateSerializer,
     AnnouncementSerializer,
 )
@@ -51,14 +54,30 @@ from .serializers import (
         responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
     ),
 )
-class FloorViewSet(viewsets.ModelViewSet):
-    queryset = Floor.objects.prefetch_related('points')
+class FloorViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+    queryset = Floor.objects.prefetch_related('points').select_related('company')
     serializer_class = FloorSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyMember()]
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return FloorDetailSerializer
+        return FloorSerializer
+
+    def perform_destroy(self, instance):
+        # Delete the plan image file from disk before removing the DB row.
+        if instance.plan_image:
+            image_path = instance.plan_image.path
+            instance.delete()
+            if os.path.isfile(image_path):
+                os.remove(image_path)
+        else:
+            instance.delete()
 
 
 @extend_schema_view(

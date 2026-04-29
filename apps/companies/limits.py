@@ -1,6 +1,7 @@
 from django.db.models import Sum
 
 from apps.notifications.models import Notification
+from apps.notifications.utils import should_notify
 from apps.users.models import User
 
 
@@ -78,6 +79,8 @@ def notify_company_admins_limit_thresholds(company, metric, current_value, limit
             f"({current_value}/{limit_value} {meta['unit']})."
         )
         for admin in admins:
+            if not should_notify(admin, 'announcement_company'):
+                continue
             Notification.objects.get_or_create(
                 user=admin,
                 notification_type='announcement_company',

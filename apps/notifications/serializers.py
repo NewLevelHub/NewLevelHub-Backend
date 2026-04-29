@@ -24,19 +24,19 @@ class NotificationSerializer(serializers.ModelSerializer):
 # Maps each per-type API key → (in_app model field, email model field)
 # Types that share a group use the same underlying boolean fields.
 NOTIFICATION_TYPE_FIELD_MAP = {
-    'booking_confirmed': ('booking_in_app', 'booking_email'),
-    'booking_reminder': ('booking_in_app', 'booking_email'),
-    'booking_cancelled': ('booking_in_app', 'booking_email'),
-    'task_assigned': ('task_in_app', 'task_email'),
-    'task_moved': ('task_in_app', 'task_email'),
-    'task_comment': ('task_in_app', 'task_email'),
-    'task_deadline': ('task_in_app', 'task_email'),
-    'guest_validated': ('access_in_app', 'access_email'),
-    'guest_pass_expiring': ('access_in_app', 'access_email'),
-    'service_request_update': ('service_in_app', 'service_email'),
+    'booking_confirmed': ('booking_confirmed_in_app', 'booking_confirmed_email'),
+    'booking_reminder': ('booking_reminder_in_app', 'booking_reminder_email'),
+    'booking_cancelled': ('booking_cancelled_in_app', 'booking_cancelled_email'),
+    'task_assigned': ('task_assigned_in_app', 'task_assigned_email'),
+    'task_moved': ('task_moved_in_app', 'task_moved_email'),
+    'task_comment': ('task_comment_in_app', 'task_comment_email'),
+    'task_deadline': ('task_deadline_in_app', 'task_deadline_email'),
+    'guest_validated': ('guest_validated_in_app', 'guest_validated_email'),
+    'guest_pass_expiring': ('guest_pass_expiring_in_app', 'guest_pass_expiring_email'),
+    'service_request_update': ('service_request_update_in_app', 'service_request_update_email'),
     'announcement': ('announcement_in_app', 'announcement_email'),
-    'invitation': ('hr_in_app', 'hr_email'),
-    'leave_review': ('hr_in_app', 'hr_email'),
+    'invitation': ('invitation_in_app', 'invitation_email'),
+    'leave_review': ('leave_review_in_app', 'leave_review_email'),
     'system': ('system_in_app', 'system_email'),
 }
 
@@ -59,7 +59,10 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
     """
 
     def to_representation(self, instance):
-        result = {}
+        result = {
+            'dnd_enabled': instance.dnd_enabled,
+            'dnd_until': instance.dnd_until,
+        }
         for ntype, (in_app_field, email_field) in NOTIFICATION_TYPE_FIELD_MAP.items():
             result[ntype] = {
                 'in_app': getattr(instance, in_app_field),
@@ -71,6 +74,17 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
         if not isinstance(data, dict):
             raise serializers.ValidationError(
                 {'non_field_errors': ['Expected a dict keyed by notification type.']}
+            )
+
+        # dnd_enabled / dnd_until are read-only here; use /do-not-disturb/ to change them.
+        read_only_keys = {'dnd_enabled', 'dnd_until'}
+        submitted_read_only = read_only_keys & set(data.keys())
+        if submitted_read_only:
+            raise serializers.ValidationError(
+                {'non_field_errors': [
+                    f"Fields {sorted(submitted_read_only)} are read-only here. "
+                    "Use POST /api/v1/notifications/do-not-disturb/ to change DND settings."
+                ]}
             )
 
         unknown_keys = set(data.keys()) - set(NOTIFICATION_TYPE_FIELD_MAP.keys())
@@ -162,12 +176,19 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotificationPreference
         fields = [
-            'booking_in_app', 'booking_email',
-            'task_in_app', 'task_email',
-            'access_in_app', 'access_email',
-            'service_in_app', 'service_email',
+            'booking_confirmed_in_app', 'booking_confirmed_email',
+            'booking_reminder_in_app', 'booking_reminder_email',
+            'booking_cancelled_in_app', 'booking_cancelled_email',
+            'task_assigned_in_app', 'task_assigned_email',
+            'task_moved_in_app', 'task_moved_email',
+            'task_comment_in_app', 'task_comment_email',
+            'task_deadline_in_app', 'task_deadline_email',
+            'guest_validated_in_app', 'guest_validated_email',
+            'guest_pass_expiring_in_app', 'guest_pass_expiring_email',
+            'service_request_update_in_app', 'service_request_update_email',
             'announcement_in_app', 'announcement_email',
-            'hr_in_app', 'hr_email',
+            'invitation_in_app', 'invitation_email',
+            'leave_review_in_app', 'leave_review_email',
             'system_in_app', 'system_email',
             'do_not_disturb',
             'dnd_enabled', 'dnd_until',

@@ -113,13 +113,22 @@ class NotificationViewSet(
     tags=['Notifications'],
     summary='Get or update notification preferences',
     description=(
-        'GET returns a dict keyed by each notification type with `in_app` and `email` booleans. '
-        'PATCH accepts a partial dict — only the keys sent are updated. '
+        'GET returns the current DND status (`dnd_enabled`, `dnd_until`) plus a dict keyed by each '
+        'notification type with `in_app` and `email` booleans. '
+        'PATCH accepts a partial dict of notification-type keys — only the keys sent are updated. '
+        'The `dnd_enabled` and `dnd_until` fields are read-only here; use '
+        'POST /api/v1/notifications/do-not-disturb/ to change DND settings. '
         'The preference record is created with all defaults=true on first access.'
     ),
     request=NotificationPreferenceDictSerializer,
     responses={
-        200: OpenApiResponse(description='Notification preferences dict (keyed by notification type)'),
+        200: OpenApiResponse(
+            description=(
+                'Notification preferences. Top-level `dnd_enabled` (bool) and `dnd_until` '
+                '(datetime|null) show current DND status. Remaining keys are notification types, '
+                'each with `in_app` and `email` booleans.'
+            )
+        ),
         400: OpenApiResponse(description='Validation error'),
         401: OpenApiResponse(description='Not authenticated'),
     },

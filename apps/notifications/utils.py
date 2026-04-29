@@ -81,6 +81,34 @@ def _in_app_allowed(pref, notification_type):
     return getattr(pref, in_app_field, True)
 
 
+def should_notify(user, notification_type):
+    """
+    Return True if a notification of *notification_type* should be created for *user*.
+
+    Checks:
+      1. Do-Not-Disturb: if DND is currently active, return False.
+      2. Per-type in_app preference: if disabled for this type, return False.
+
+    This is a convenience predicate for call sites that cannot use
+    ``create_notification`` directly (e.g. because they need ``get_or_create``
+    semantics or already handle the ``Notification`` creation themselves).
+    """
+    pref, _ = NotificationPreference.objects.get_or_create(user=user)
+    if _is_dnd_active(pref):
+        logger.debug(
+            'Notification suppressed by DND for user=%s type=%s',
+            user.pk, notification_type,
+        )
+        return False
+    if not _in_app_allowed(pref, notification_type):
+        logger.debug(
+            'Notification suppressed by in_app preference for user=%s type=%s',
+            user.pk, notification_type,
+        )
+        return False
+    return True
+
+
 def create_notification(user, notification_type, title, message, link=None):
     """
     Create and persist a new in-app notification for *user*.

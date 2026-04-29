@@ -91,11 +91,32 @@ class TestGetPreferences:
 
     def test_each_type_has_in_app_and_email(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
+        skip_keys = {'dnd_enabled', 'dnd_until'}
         for ntype, prefs in resp.data.items():
+            if ntype in skip_keys:
+                continue
             assert 'in_app' in prefs, f"'{ntype}' missing 'in_app'"
             assert 'email' in prefs, f"'{ntype}' missing 'email'"
             assert isinstance(prefs['in_app'], bool), f"'{ntype}.in_app' must be bool"
             assert isinstance(prefs['email'], bool), f"'{ntype}.email' must be bool"
+
+    def test_dnd_fields_present_in_response(self, auth_client):
+        resp = auth_client.get(PREFERENCES_URL)
+        assert 'dnd_enabled' in resp.data
+        assert 'dnd_until' in resp.data
+        assert isinstance(resp.data['dnd_enabled'], bool)
+
+    def test_dnd_enabled_defaults_to_false(self, auth_client):
+        resp = auth_client.get(PREFERENCES_URL)
+        assert resp.data['dnd_enabled'] is False
+        assert resp.data['dnd_until'] is None
+
+    def test_dnd_fields_reflect_active_dnd(self, auth_client, employee):
+        until = '2099-06-01T12:00:00Z'
+        auth_client.post(DND_URL, {'enabled': True, 'until': until}, format='json')
+        resp = auth_client.get(PREFERENCES_URL)
+        assert resp.data['dnd_enabled'] is True
+        assert resp.data['dnd_until'] is not None
 
     def test_auto_creates_preferences_on_first_access(self, auth_client, employee):
         assert not NotificationPreference.objects.filter(user=employee).exists()
@@ -105,8 +126,11 @@ class TestGetPreferences:
 
     def test_defaults_are_true_for_in_app(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
+        skip_keys = {'dnd_enabled', 'dnd_until'}
         # By default, all in_app values should be True.
         for ntype, prefs in resp.data.items():
+            if ntype in skip_keys:
+                continue
             assert prefs['in_app'] is True, f"'{ntype}.in_app' should default to True"
 
     def test_unauthenticated_returns_401(self, api_client):
@@ -176,16 +200,42 @@ class TestPatchPreferences:
         resp = api_client.patch(PREFERENCES_URL, {}, format='json')
         assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
+    def test_patch_with_dnd_enabled_returns_400(self, auth_client):
+        resp = auth_client.patch(PREFERENCES_URL, {'dnd_enabled': True}, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_patch_with_dnd_until_returns_400(self, auth_client):
+        resp = auth_client.patch(PREFERENCES_URL, {'dnd_until': '2099-01-01T00:00:00Z'}, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_patch_does_not_change_dnd_fields(self, auth_client, employee):
+        # Enable DND via DND endpoint.
+        auth_client.post(DND_URL, {'enabled': True}, format='json')
+        # Now PATCH preferences — DND should be unchanged.
+        auth_client.patch(PREFERENCES_URL, {'system': {'email': False}}, format='json')
+        resp = auth_client.get(PREFERENCES_URL)
+        assert resp.data['dnd_enabled'] is True
+
+    def test_patch_response_includes_dnd_fields(self, auth_client):
+        resp = auth_client.patch(PREFERENCES_URL, {'system': {'email': False}}, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+        assert 'dnd_enabled' in resp.data
+        assert 'dnd_until' in resp.data
+
     def test_only_changed_type_is_affected(self, auth_client):
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+
         # First, get defaults.
         resp = auth_client.get(PREFERENCES_URL)
-        original = {k: dict(v) for k, v in resp.data.items()}
+        original = {k: dict(v) for k, v in resp.data.items() if k not in skip_keys}
 
         # Patch only system.
         auth_client.patch(PREFERENCES_URL, {'system': {'in_app': False}}, format='json')
 
         resp2 = auth_client.get(PREFERENCES_URL)
         for ntype, prefs in resp2.data.items():
+            if ntype in skip_keys:
+                continue
             if ntype == 'system':
                 assert prefs['in_app'] is False
             else:
@@ -339,10 +389,36 @@ class TestCreateNotificationSuppression:
         # Pref record should have been created.
         assert NotificationPreference.objects.filter(user=employee).exists()
 
-    def test_booking_in_app_disabled_suppresses_all_booking_types(self, employee):
-        """booking_* types share the booking_in_app field."""
-        NotificationPreference.objects.create(user=employee, booking_in_app=False)
+    def test_per_type_in_app_disabled_suppresses_only_that_type(self, employee):
+        """Each booking type now has its own independent toggle."""
+        NotificationPreference.objects.create(
+            user=employee,
+            booking_confirmed_in_app=False,
+            booking_reminder_in_app=False,
+            booking_cancelled_in_app=False,
+        )
         for ntype in ('booking_confirmed', 'booking_reminder', 'booking_cancelled'):
             Notification.objects.filter(user=employee).delete()
             result = create_notification(user=employee, notification_type=ntype, title='T', message='M')
-            assert result is None, f"'{ntype}' should be suppressed when booking_in_app=False"
+            assert result is None, f"'{ntype}' should be suppressed when its own in_app field is False"
+
+    def test_disabling_one_booking_type_does_not_affect_others(self, employee):
+        """Toggling booking_reminder does not affect booking_confirmed or booking_cancelled."""
+        NotificationPreference.objects.create(
+            user=employee,
+            booking_reminder_in_app=False,
+            booking_confirmed_in_app=True,
+            booking_cancelled_in_app=True,
+        )
+        # booking_reminder should be suppressed
+        result_reminder = create_notification(
+            user=employee, notification_type='booking_reminder', title='T', message='M',
+        )
+        assert result_reminder is None, 'booking_reminder should be suppressed'
+
+        # booking_confirmed should still be delivered
+        Notification.objects.filter(user=employee).delete()
+        result_confirmed = create_notification(
+            user=employee, notification_type='booking_confirmed', title='T', message='M',
+        )
+        assert result_confirmed is not None, 'booking_confirmed should not be affected by booking_reminder toggle'

@@ -30,7 +30,12 @@ class Company(TimeStampedModel, SoftDeleteModel):
 
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='basic', db_index=True)
     max_employees = models.PositiveIntegerField(default=10)
-    storage_limit_gb = models.PositiveIntegerField(default=5)
+    storage_limit_gb = models.DecimalField(
+        max_digits=8,
+        decimal_places=3,
+        default=5,
+        verbose_name='Storage limit (GB, e.g. 0.1 = 100 MB)',
+    )
     max_boards = models.PositiveIntegerField(default=1)
 
     is_active = models.BooleanField(default=True, db_index=True)

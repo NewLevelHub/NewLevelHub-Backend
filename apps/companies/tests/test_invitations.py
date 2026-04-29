@@ -195,8 +195,8 @@ class TestInvitationCreate:
         assert Notification.objects.filter(
             user=company_admin,
             notification_type='announcement_company',
-            title='System limit warning',
-            body='Employee usage reached 80% (4/5 employees).',
+            title='System limit warning: 80%',
+            body='Your employee usage has reached 80% (4/5 employees). Please free up space or upgrade your plan.',
         ).exists()
 
     @patch('apps.companies.views.send_invitation_email.delay')
@@ -225,8 +225,8 @@ class TestInvitationCreate:
         assert Notification.objects.filter(
             user=company_admin,
             notification_type='announcement_company',
-            title='System limit warning',
-            body='Employee usage reached 95% (19/20 employees).',
+            title='System limit warning: 95%',
+            body='Your employee usage has reached 95% (19/20 employees). Please free up space or upgrade your plan.',
         ).exists()
 
 

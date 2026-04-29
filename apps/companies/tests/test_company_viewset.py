@@ -11,6 +11,7 @@ Acceptance criteria covered:
 """
 
 import pytest
+from decimal import Decimal
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -159,7 +160,7 @@ class TestCompanyCreate:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data['max_employees'] == 10
         assert response.data['max_boards'] == 1
-        assert response.data['storage_limit_gb'] == 5
+        assert Decimal(str(response.data['storage_limit_gb'])) == Decimal('5')
 
     def test_create_uses_standard_defaults_when_limits_not_provided(self, api_client, superadmin):
         auth(api_client, superadmin)
@@ -171,7 +172,7 @@ class TestCompanyCreate:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data['max_employees'] == 30
         assert response.data['max_boards'] == 5
-        assert response.data['storage_limit_gb'] == 20
+        assert Decimal(str(response.data['storage_limit_gb'])) == Decimal('20')
 
     def test_create_uses_premium_defaults_when_limits_not_provided(self, api_client, superadmin):
         auth(api_client, superadmin)
@@ -183,7 +184,7 @@ class TestCompanyCreate:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data['max_employees'] == 9999
         assert response.data['max_boards'] == 9999
-        assert response.data['storage_limit_gb'] == 100
+        assert Decimal(str(response.data['storage_limit_gb'])) == Decimal('100')
 
     def test_create_keeps_explicit_limits(self, api_client, superadmin):
         auth(api_client, superadmin)
@@ -201,7 +202,7 @@ class TestCompanyCreate:
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data['max_employees'] == 77
         assert response.data['max_boards'] == 9
-        assert response.data['storage_limit_gb'] == 44
+        assert Decimal(str(response.data['storage_limit_gb'])) == Decimal('44')
 
 
 # ---------------------------------------------------------------------------

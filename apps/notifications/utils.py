@@ -57,7 +57,18 @@ NOTIFICATION_TYPES = {
 
 
 def _is_dnd_active(pref):
-    """Return True if Do-Not-Disturb is currently active for a preference record."""
+    """Return True if Do-Not-Disturb is currently active for a preference record.
+
+    Two DND mechanisms are supported:
+      - ``do_not_disturb`` (simple boolean toggle): DND is on whenever True.
+      - ``dnd_enabled`` / ``dnd_until`` (time-based): DND is on while
+        ``dnd_enabled`` is True and ``dnd_until`` is either None (indefinite)
+        or a future datetime.
+
+    Either mechanism being active suppresses notifications.
+    """
+    if pref.do_not_disturb:
+        return True
     if not pref.dnd_enabled:
         return False
     # DND is active if dnd_until is None (indefinite) OR has not passed yet.

@@ -58,7 +58,8 @@ def send_booking_reminders():
         # Send email if user has preferences with booking_reminder_email=True (or no preferences yet)
         try:
             prefs = user.notification_preferences
-            email_enabled = prefs.booking_reminder_email and not prefs.do_not_disturb
+            from apps.notifications.utils import _is_dnd_active
+            email_enabled = prefs.booking_reminder_email and not _is_dnd_active(prefs)
         except NotificationPreference.DoesNotExist:
             email_enabled = True  # default: send email when no prefs row exists
 

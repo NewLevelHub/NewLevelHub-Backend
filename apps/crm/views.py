@@ -678,7 +678,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title']
     ordering_fields = ['priority', 'deadline', 'created_at']
-    ordering = ['created_at']
+    ordering = ['-created_at']
     filterset_class = None  # TaskFilter applied manually in filter_queryset
 
     def get_queryset(self):

@@ -1,3 +1,5 @@
+import re
+
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
@@ -78,6 +80,13 @@ _DEFAULT_SUBJECTS = {
 }
 
 
+def _html_to_plain(html):
+    """Minimal HTML → plain text for email fallback."""
+    text = re.sub(r'<[^>]+>', ' ', html)
+    text = re.sub(r'[ \t]+', ' ', text)
+    return '\n'.join(line.strip() for line in text.splitlines() if line.strip())
+
+
 def _check_preference(user, notification_type):
     """
     Return True if the user has email enabled for this notification type.
@@ -142,6 +151,8 @@ def send_notification_email(user_id, notification_type, context):
         'action_url': '',
     }
     ctx.update(context)
+    ctx['user_id'] = user.pk
+    ctx['user_email'] = user.email
 
     subject = ctx.get('subject') or _DEFAULT_SUBJECTS.get(notification_type, 'Уведомление NewLevelHub')
 
@@ -153,9 +164,10 @@ def send_notification_email(user_id, notification_type, context):
     except TemplateDoesNotExist:
         html_message = render_to_string(fallback_template, ctx)
 
+    plain_message = _html_to_plain(html_message)
     send_mail(
         subject=subject,
-        message='',
+        message=plain_message,
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email],
         html_message=html_message,
@@ -185,27 +197,22 @@ def send_bulk_email(announcement_id):
     if announcement.company_id is None:
         return
 
+    platform_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+
     recipients = User.objects.filter(
         company=announcement.company,
         is_active=True,
-    )
+    ).values_list('id', flat=True).iterator(chunk_size=50)
 
-    platform_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
-
-    for user in recipients:
+    for user_id in recipients:
         context = {
             'subject': announcement.title,
-            'user_first_name': user.first_name,
             'action_url': '/announcements/',
             'platform_url': platform_url,
             'announcement_title': announcement.title,
             'announcement_body': announcement.body,
         }
-        send_notification_email.delay(
-            user.id,
-            'announcement_company',
-            context,
-        )
+        send_notification_email.delay(user_id, 'announcement_company', context)
 
 
 @shared_task

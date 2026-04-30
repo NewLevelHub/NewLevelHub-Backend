@@ -30,6 +30,7 @@ class GuestPass(TimeStampedModel):
     visit_purpose = models.TextField(blank=True, default='')
 
     qr_code = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    qr_image = models.ImageField(upload_to='guest_passes/qr/', null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active', db_index=True)
     usage_type = models.CharField(max_length=10, choices=USAGE_CHOICES, default='single')
     times_used = models.PositiveIntegerField(default=0)

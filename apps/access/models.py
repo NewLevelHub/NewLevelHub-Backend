@@ -38,6 +38,8 @@ class GuestPass(TimeStampedModel):
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active', db_index=True)
     usage_type = models.CharField(max_length=10, choices=USAGE_CHOICES, default='single')
     times_used = models.PositiveIntegerField(default=0)
+    resend_attempts_in_window = models.PositiveSmallIntegerField(default=0)
+    resend_window_started_at = models.DateTimeField(null=True, blank=True)
 
     valid_from = models.DateTimeField()
     valid_until = models.DateTimeField()

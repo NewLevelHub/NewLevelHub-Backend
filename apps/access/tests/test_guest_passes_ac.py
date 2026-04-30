@@ -7,10 +7,12 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.access.models import GuestPass
+from apps.access.models import AccessLog
 from apps.companies.models import Company
 from apps.users.models import User
 
 PASSES_URL = '/api/v1/access/passes/'
+VALIDATE_URL = '/api/v1/access/validate/'
 
 
 def pass_detail_url(pass_id):
@@ -257,3 +259,150 @@ class TestGuestPassesDetailAC:
         assert response.status_code == status.HTTP_200_OK
         assert response.data['id'] == create_response.data['id']
         assert response.data.get('qr_image')
+
+
+@pytest.mark.django_db
+class TestGuestPassesValidateQrAC:
+    def test_superadmin_can_validate_qr(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-superadmin@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='SuperAdmin',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['valid'] is True
+
+    def test_reception_can_validate_qr(self, api_client, company_admin):
+        reception = User.objects.create_user(
+            email='validate-reception@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Reception',
+            role='reception',
+            company=company_admin.company,
+            is_email_verified=True,
+        )
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=reception)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['valid'] is True
+
+    @pytest.mark.parametrize('role', ['company_admin', 'employee', 'guest'])
+    def test_other_roles_get_403(self, api_client, company_admin, employee, guest_user, role):
+        role_to_user = {
+            'company_admin': company_admin,
+            'employee': employee,
+            'guest': guest_user,
+        }
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=role_to_user[role])
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_validate_valid_pass_returns_ac_payload(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-payload-superadmin@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Payload',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['valid'] is True
+        assert response.data['guest_name'] == guest_pass.guest_name
+        assert response.data['purpose'] == guest_pass.visit_purpose
+        assert response.data['invited_by'] == guest_pass.created_by.full_name
+        assert response.data['valid_from'].isoformat() == guest_pass.valid_from.isoformat()
+        assert response.data['valid_until'].isoformat() == guest_pass.valid_until.isoformat()
+
+    @pytest.mark.parametrize(
+        ('status_code', 'valid_until_delta', 'times_used', 'expected_reason'),
+        [
+            ('active', timedelta(days=-1), 0, 'expired'),
+            ('revoked', timedelta(days=1), 0, 'revoked'),
+            ('used', timedelta(days=1), 1, 'already_used'),
+        ],
+    )
+    def test_validate_invalid_pass_returns_expected_reason(
+        self,
+        api_client,
+        company_admin,
+        status_code,
+        valid_until_delta,
+        times_used,
+        expected_reason,
+    ):
+        superadmin = User.objects.create_user(
+            email=f'validate-invalid-{expected_reason}@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Invalid',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company_admin.company,
+            guest_name='Invalid Guest',
+            guest_email=f'invalid-{expected_reason}@test.local',
+            visit_purpose='Invalid check',
+            status=status_code,
+            usage_type='single',
+            times_used=times_used,
+            valid_from=now - timedelta(hours=1),
+            valid_until=now + valid_until_delta,
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'valid': False, 'reason': expected_reason}
+
+    def test_validate_not_found_returns_reason_not_found(self, api_client):
+        superadmin = User.objects.create_user(
+            email='validate-not-found@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='NotFound',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': '64fdbf4f-465e-40e6-8ef4-3f3c96d34ac6'}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'valid': False, 'reason': 'not_found'}
+
+    @patch('apps.access.views.notify_pass_creator_on_entry.delay')
+    def test_single_use_marks_used_creates_log_and_notifies(self, mocked_notify_delay, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-sideeffects@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Effects',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        guest_pass = _create_pass(creator=company_admin, status_code='active', usage_type='single')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+        guest_pass.refresh_from_db()
+        assert guest_pass.status == 'used'
+        assert guest_pass.times_used == 1
+
+        access_log = AccessLog.objects.get(guest_pass=guest_pass)
+        assert access_log.checked_by == superadmin
+        assert access_log.method == 'qr'
+        mocked_notify_delay.assert_called_once_with(guest_pass.id)

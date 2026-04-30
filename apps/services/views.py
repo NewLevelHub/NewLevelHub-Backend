@@ -334,6 +334,14 @@ class FloorViewSet(viewsets.ModelViewSet):
             context['now'] = timezone.now()
         return context
 
+    def perform_update(self, serializer):
+        old_image = self.get_object().plan_image
+        instance = serializer.save()
+        # Если файл заменили — удалить старый с диска
+        if old_image and old_image != instance.plan_image:
+            if os.path.isfile(old_image.path):
+                os.remove(old_image.path)
+
     def perform_destroy(self, instance):
         # Delete the plan image file from disk before removing the DB row.
         if instance.plan_image:

@@ -17,6 +17,14 @@ def pass_detail_url(pass_id):
     return f'/api/v1/access/passes/{pass_id}/'
 
 
+def pass_revoke_url(pass_id):
+    return f'/api/v1/access/passes/{pass_id}/revoke/'
+
+
+def pass_resend_url(pass_id):
+    return f'/api/v1/access/passes/{pass_id}/resend/'
+
+
 @pytest.fixture
 def api_client():
     return APIClient()
@@ -257,3 +265,209 @@ class TestGuestPassesDetailAC:
         assert response.status_code == status.HTTP_200_OK
         assert response.data['id'] == create_response.data['id']
         assert response.data.get('qr_image')
+
+
+@pytest.mark.django_db
+class TestGuestPassesRevokeAC:
+    def test_revoke_sets_status_revoked_for_active_pass(self, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(pass_revoke_url(guest_pass.id), format='json')
+        assert response.status_code == status.HTTP_200_OK
+        guest_pass.refresh_from_db()
+        assert guest_pass.status == 'revoked'
+
+    @pytest.mark.parametrize('blocked_status', ['used', 'expired'])
+    def test_revoke_denies_used_or_expired(self, api_client, company_admin, blocked_status):
+        guest_pass = _create_pass(creator=company_admin, status_code=blocked_status)
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(pass_revoke_url(guest_pass.id), format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        guest_pass.refresh_from_db()
+        assert guest_pass.status == blocked_status
+
+    def test_company_admin_cannot_revoke_pass_from_other_company(self, api_client, company_admin):
+        company_b = Company.objects.create(name='Access Co Revoke B', plan='basic')
+        admin_b = User.objects.create_user(
+            email='revoke-admin-b@test.local',
+            password='pass',
+            first_name='Revoke',
+            last_name='AdminB',
+            role='company_admin',
+            company=company_b,
+            is_email_verified=True,
+        )
+        foreign_pass = _create_pass(creator=admin_b, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(pass_revoke_url(foreign_pass.id), format='json')
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_superadmin_can_revoke_any_company_pass(self, api_client, company_admin):
+        company_b = Company.objects.create(name='Access Co Revoke C', plan='basic')
+        admin_b = User.objects.create_user(
+            email='revoke-super-target@test.local',
+            password='pass',
+            first_name='Revoke',
+            last_name='Target',
+            role='company_admin',
+            company=company_b,
+            is_email_verified=True,
+        )
+        superadmin = User.objects.create_user(
+            email='revoke-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='Admin',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        target_pass = _create_pass(creator=admin_b, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(pass_revoke_url(target_pass.id), format='json')
+        assert response.status_code == status.HTTP_200_OK
+        target_pass.refresh_from_db()
+        assert target_pass.status == 'revoked'
+
+
+@pytest.mark.django_db
+class TestGuestPassesResendAC:
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_enqueues_qr_email(self, mocked_delay, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(pass_resend_url(guest_pass.id), format='json')
+        assert response.status_code == status.HTTP_200_OK
+        mocked_delay.assert_called_once_with(guest_pass.id)
+
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_rate_limit_max_three_per_hour(self, mocked_delay, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        for _ in range(3):
+            response = api_client.post(pass_resend_url(guest_pass.id), format='json')
+            assert response.status_code == status.HTTP_200_OK
+        response = api_client.post(pass_resend_url(guest_pass.id), format='json')
+        assert response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert mocked_delay.call_count == 3
+
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_denied_for_revoked_pass(self, mocked_delay, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, status_code='revoked')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.post(pass_resend_url(guest_pass.id), format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        mocked_delay.assert_not_called()
+
+
+@pytest.mark.django_db
+class TestGuestPassesAdminFiltersAC:
+    def test_superadmin_filter_by_company_id(self, api_client, company_admin):
+        company_b = Company.objects.create(name='Access Co Filter B', plan='basic')
+        admin_b = User.objects.create_user(
+            email='filter-admin-b@test.local',
+            password='pass',
+            first_name='Filter',
+            last_name='AdminB',
+            role='company_admin',
+            company=company_b,
+            is_email_verified=True,
+        )
+        superadmin = User.objects.create_user(
+            email='filter-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='Filter',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        mine = _create_pass(creator=company_admin, status_code='active')
+        _create_pass(creator=admin_b, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'company_id': company_admin.company_id})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
+    def test_superadmin_filter_by_company_name(self, api_client, company_admin):
+        company_b = Company.objects.create(name='Access Co Filter Name B', plan='basic')
+        admin_b = User.objects.create_user(
+            email='filter-company-name-admin-b@test.local',
+            password='pass',
+            first_name='Filter',
+            last_name='CompanyNameB',
+            role='company_admin',
+            company=company_b,
+            is_email_verified=True,
+        )
+        superadmin = User.objects.create_user(
+            email='filter-company-name-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='CompanyName',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        mine = _create_pass(creator=company_admin, status_code='active')
+        _create_pass(creator=admin_b, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'company_name': 'Access AC Co'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
+    def test_superadmin_filter_by_created_by(self, api_client, company_admin, employee):
+        superadmin = User.objects.create_user(
+            email='filter-created-by-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='CreatedBy',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        mine = _create_pass(creator=employee, status_code='active')
+        _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'created_by': employee.id})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
+    def test_superadmin_filter_by_created_by_email(self, api_client, company_admin, employee):
+        superadmin = User.objects.create_user(
+            email='filter-created-by-email-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='CreatedByEmail',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        mine = _create_pass(creator=employee, status_code='active')
+        _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'created_by_email': employee.email})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
+    def test_superadmin_filter_by_created_at_dates(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='filter-date-super@test.local',
+            password='pass',
+            first_name='Super',
+            last_name='Dates',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        older = _create_pass(creator=company_admin, status_code='active')
+        fresh = _create_pass(creator=company_admin, status_code='active')
+        GuestPass.objects.filter(id=older.id).update(created_at=timezone.now() - timedelta(days=10))
+        GuestPass.objects.filter(id=fresh.id).update(created_at=timezone.now() - timedelta(days=1))
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(
+            PASSES_URL,
+            {'created_at_after': (timezone.now() - timedelta(days=2)).strftime('%Y-%m-%dT%H:%M:%SZ')},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert fresh.id in ids
+        assert older.id not in ids

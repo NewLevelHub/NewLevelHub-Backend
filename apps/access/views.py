@@ -4,10 +4,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
+from django.core.cache import cache
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import GuestPass, AccessLog
+from .filters import GuestPassFilter
+from . import tasks
 from .serializers import (
     GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer, AccessLogSerializer,
 )
@@ -40,7 +43,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     permission_classes = [IsCompanyAdmin]
     queryset = GuestPass.objects.select_related('created_by', 'company').order_by('-created_at')
     http_method_names = ['get', 'post']
-    filterset_fields = ['status']
+    filterset_class = GuestPassFilter
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve', 'create'):
@@ -75,6 +78,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         request=None,
         responses={
             200: OpenApiResponse(description='Pass revoked'),
+            400: OpenApiResponse(description='Cannot revoke used or expired pass'),
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
@@ -82,6 +86,11 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     @action(detail=True, methods=['post'], url_path='revoke')
     def revoke(self, request, pk=None):
         guest_pass = self.get_object()
+        if guest_pass.status in ('used', 'expired'):
+            return Response(
+                {'detail': 'Used or expired passes cannot be revoked.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         guest_pass.status = 'revoked'
         guest_pass.save(update_fields=['status'])
         return Response({'detail': 'Pass revoked'})
@@ -92,13 +101,34 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         request=None,
         responses={
             200: OpenApiResponse(description='QR code resent'),
+            400: OpenApiResponse(description='Cannot resend for revoked pass'),
+            429: OpenApiResponse(description='Rate limit exceeded (3 per hour)'),
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
-        # TODO: отправить QR-код повторно на email гостя
+        guest_pass = self.get_object()
+        if guest_pass.status == 'revoked':
+            return Response(
+                {'detail': 'Cannot resend QR for revoked pass.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        cache_key = f'guest-pass-resend:{guest_pass.id}'
+
+        if cache.add(cache_key, 1, timeout=3600):
+            attempts = 1
+        else:
+            attempts = cache.incr(cache_key)
+
+        if attempts > 3:
+            return Response(
+                {'detail': 'Rate limit exceeded. Max 3 resends per hour.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        tasks.send_guest_pass_email.delay(guest_pass.id)
         return Response({'detail': 'QR code resent'})
 
 

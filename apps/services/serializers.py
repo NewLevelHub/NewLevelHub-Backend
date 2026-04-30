@@ -1,12 +1,57 @@
+from datetime import timedelta
+
+from django.utils import timezone
 from rest_framework import serializers
+
+from apps.bookings.models import Booking
 from .models import Floor, MapPoint, ServiceRequest, Announcement
+
+SOON_AVAILABLE_MINUTES = 30
+
+# Types that can be linked to a bookable resource
+_RESOURCE_POINT_TYPES = {'desk', 'meeting_room', 'parking', 'capsule'}
 
 
 class MapPointSerializer(serializers.ModelSerializer):
+    resource_status = serializers.SerializerMethodField()
+    resource_name = serializers.CharField(source='resource.name', read_only=True, allow_null=True)
+    company_name = serializers.CharField(source='company.name', read_only=True, allow_null=True)
+
     class Meta:
         model = MapPoint
-        fields = ['id', 'floor', 'point_type', 'label', 'x', 'y', 'resource', 'company']
-        read_only_fields = ['id']
+        fields = [
+            'id', 'floor', 'point_type', 'label', 'x', 'y',
+            'resource', 'resource_name', 'resource_status',
+            'company', 'company_name',
+        ]
+        read_only_fields = ['id', 'resource_name', 'resource_status', 'company_name']
+
+    def get_resource_status(self, obj):
+        if obj.resource_id is None or obj.point_type not in _RESOURCE_POINT_TYPES:
+            return None
+
+        now = self.context.get('now') or timezone.now()
+
+        active_booking = (
+            Booking.objects
+            .filter(
+                resource_id=obj.resource_id,
+                status='confirmed',
+                start_time__lte=now,
+                end_time__gt=now,
+            )
+            .order_by('end_time')
+            .first()
+        )
+
+        if active_booking is None:
+            return 'free'
+
+        soon_threshold = now + timedelta(minutes=SOON_AVAILABLE_MINUTES)
+        if active_booking.end_time <= soon_threshold:
+            return 'soon_available'
+
+        return 'occupied'
 
 
 class FloorListSerializer(serializers.ModelSerializer):
@@ -15,7 +60,7 @@ class FloorListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Floor
-        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'company', 'created_at', 'updated_at']
+        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_plan_image_url(self, obj):

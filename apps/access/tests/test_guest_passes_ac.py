@@ -323,6 +323,29 @@ class TestGuestPassActionsAC:
         response = api_client.post(pass_revoke_url(target_pass.id))
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_revoke_rejects_used_pass_after_qr_validation(self, api_client, company_admin):
+        receiver = User.objects.create_user(
+            email='reception@test.local',
+            password='pass',
+            first_name='Reception',
+            last_name='Desk',
+            role='employee',
+            company=company_admin.company,
+            is_email_verified=True,
+        )
+        target_pass = _create_pass(creator=company_admin, status_code='active', usage_type='single')
+        api_client.force_authenticate(user=receiver)
+        validate_response = api_client.post('/api/v1/access/validate/', {'qr_code': str(target_pass.qr_code)}, format='json')
+        assert validate_response.status_code == status.HTTP_200_OK
+        target_pass.refresh_from_db()
+        assert target_pass.status == 'used'
+
+        api_client.force_authenticate(user=company_admin)
+        revoke_response = api_client.post(pass_revoke_url(target_pass.id))
+        assert revoke_response.status_code == status.HTTP_400_BAD_REQUEST
+        target_pass.refresh_from_db()
+        assert target_pass.status == 'used'
+
     def test_superadmin_can_revoke_any_company_pass(self, api_client, superadmin, second_company_admin):
         target_pass = _create_pass(creator=second_company_admin, status_code='active')
         api_client.force_authenticate(user=superadmin)
@@ -396,6 +419,15 @@ class TestGuestPassesAdminViewAC:
         ids = [row['id'] for row in response.data.get('results', response.data)]
         assert ids == [mine.id]
 
+    def test_superadmin_filters_by_company_name(self, api_client, superadmin, company_admin, second_company_admin):
+        mine = _create_pass(creator=company_admin, status_code='active')
+        _create_pass(creator=second_company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'company_name': company_admin.company.name})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
     def test_superadmin_filters_by_created_by(self, api_client, superadmin, company_admin):
         mine = _create_pass(creator=company_admin, status_code='active')
         another = User.objects.create_user(
@@ -410,6 +442,24 @@ class TestGuestPassesAdminViewAC:
         _create_pass(creator=another, status_code='active')
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(PASSES_URL, {'created_by': company_admin.id})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert ids == [mine.id]
+
+    def test_superadmin_filters_by_created_by_email(self, api_client, superadmin, company_admin):
+        mine = _create_pass(creator=company_admin, status_code='active')
+        another = User.objects.create_user(
+            email='creator-email-filter@test.local',
+            password='pass',
+            first_name='Creator',
+            last_name='EmailFilter',
+            role='employee',
+            company=company_admin.company,
+            is_email_verified=True,
+        )
+        _create_pass(creator=another, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(PASSES_URL, {'created_by_email': company_admin.email})
         assert response.status_code == status.HTTP_200_OK
         ids = [row['id'] for row in response.data.get('results', response.data)]
         assert ids == [mine.id]

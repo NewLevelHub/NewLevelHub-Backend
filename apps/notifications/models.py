@@ -67,6 +67,45 @@ class NotificationPreference(TimeStampedModel):
         related_name='notification_preferences',
     )
 
+    # Per-type fields — each notification type has its own independent toggle.
+    # Booking
+    booking_confirmed_in_app = models.BooleanField(default=True)
+    booking_confirmed_email = models.BooleanField(default=True)
+    booking_reminder_in_app = models.BooleanField(default=True)
+    booking_reminder_email = models.BooleanField(default=True)
+    booking_cancelled_in_app = models.BooleanField(default=True)
+    booking_cancelled_email = models.BooleanField(default=True)
+    # Task
+    task_assigned_in_app = models.BooleanField(default=True)
+    task_assigned_email = models.BooleanField(default=False)
+    task_moved_in_app = models.BooleanField(default=True)
+    task_moved_email = models.BooleanField(default=False)
+    task_comment_in_app = models.BooleanField(default=True)
+    task_comment_email = models.BooleanField(default=False)
+    task_deadline_in_app = models.BooleanField(default=True)
+    task_deadline_email = models.BooleanField(default=False)
+    # Guest / Access
+    guest_validated_in_app = models.BooleanField(default=True)
+    guest_validated_email = models.BooleanField(default=True)
+    guest_pass_expiring_in_app = models.BooleanField(default=True)
+    guest_pass_expiring_email = models.BooleanField(default=True)
+    # Service
+    service_request_update_in_app = models.BooleanField(default=True)
+    service_request_update_email = models.BooleanField(default=False)
+    # Announcement
+    announcement_in_app = models.BooleanField(default=True)
+    announcement_email = models.BooleanField(default=False)
+    # HR
+    invitation_in_app = models.BooleanField(default=True)
+    invitation_email = models.BooleanField(default=True)
+    leave_review_in_app = models.BooleanField(default=True)
+    leave_review_email = models.BooleanField(default=True)
+    # System
+    system_in_app = models.BooleanField(default=True)
+    system_email = models.BooleanField(default=False)
+
+    # Legacy group fields — kept for backward compatibility but no longer used
+    # by the preferences API. Will be removed in a future migration.
     booking_in_app = models.BooleanField(default=True)
     booking_email = models.BooleanField(default=True)
     task_in_app = models.BooleanField(default=True)
@@ -75,12 +114,12 @@ class NotificationPreference(TimeStampedModel):
     access_email = models.BooleanField(default=True)
     service_in_app = models.BooleanField(default=True)
     service_email = models.BooleanField(default=False)
-    announcement_in_app = models.BooleanField(default=True)
-    announcement_email = models.BooleanField(default=False)
     hr_in_app = models.BooleanField(default=True)
     hr_email = models.BooleanField(default=True)
 
     do_not_disturb = models.BooleanField(default=False)
+    dnd_enabled = models.BooleanField(default=False)
+    dnd_until = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = 'notification_preferences'

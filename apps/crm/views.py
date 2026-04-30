@@ -18,7 +18,7 @@ from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
@@ -168,7 +168,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if not include_archived:
             qs = qs.filter(is_archived=False)
 
-        return qs.prefetch_related('columns__tasks')
+        return qs.order_by('-created_at', '-id').prefetch_related('columns__tasks')
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -678,7 +678,7 @@ class TaskViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['title']
     ordering_fields = ['priority', 'deadline', 'created_at']
-    ordering = ['created_at']
+    ordering = ['-created_at']
     filterset_class = None  # TaskFilter applied manually in filter_queryset
 
     def get_queryset(self):
@@ -722,12 +722,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         # at the end of the column rather than inheriting any gaps.
         _normalize_positions(task.column)
         if task.assignee and task.assignee != self.request.user:
-            Notification.objects.create(
+            create_notification(
                 user=task.assignee,
                 notification_type='task_assigned',
                 title='Вам назначена задача',
-                body=task.title,
-                url=f'/crm/tasks/{task.pk}/',
+                message=task.title,
+                link=f'/crm/tasks/{task.pk}/',
             )
 
     def perform_update(self, serializer):
@@ -789,12 +789,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         new_assignee = new_instance.assignee
 
         if new_assignee and new_assignee_id != old_assignee_id and new_assignee != self.request.user:
-            Notification.objects.create(
+            create_notification(
                 user=new_assignee,
                 notification_type='task_assigned',
                 title='Вам назначена задача',
-                body=new_instance.title,
-                url=f'/crm/tasks/{new_instance.pk}/',
+                message=new_instance.title,
+                link=f'/crm/tasks/{new_instance.pk}/',
             )
 
         # Log changes to scalar fields that were explicitly sent and actually changed.
@@ -1126,12 +1126,12 @@ class CommentViewSet(viewsets.ModelViewSet):
             recipients.add(task.created_by)
 
         for recipient in recipients:
-            Notification.objects.create(
+            create_notification(
                 user=recipient,
                 notification_type='task_comment',
                 title='Новый комментарий к задаче',
-                body=task.title,
-                url=f'/crm/tasks/{task.pk}/',
+                message=task.title,
+                link=f'/crm/tasks/{task.pk}/',
             )
 
 

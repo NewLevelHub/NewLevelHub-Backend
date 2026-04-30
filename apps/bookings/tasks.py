@@ -21,7 +21,8 @@ def send_booking_reminders():
     cover bookings created within the same beat cycle as the reminder window.
     """
     from apps.bookings.models import Booking
-    from apps.notifications.models import Notification, NotificationPreference
+    from apps.notifications.models import NotificationPreference
+    from apps.notifications.utils import create_notification
 
     now = timezone.now()
     reminder_minutes = settings.REMINDER_MINUTES_BEFORE
@@ -43,22 +44,22 @@ def send_booking_reminders():
         resource_name = booking.resource.name
         start_local = timezone.localtime(booking.start_time)
 
-        # Create in-app notification
-        Notification.objects.create(
+        # Create in-app notification (respects DND and per-type preferences)
+        create_notification(
             user=user,
             notification_type='booking_reminder',
             title=f'Напоминание: {resource_name}',
-            body=(
+            message=(
                 f'Ваше бронирование начинается через {reminder_minutes} минут '
                 f'({start_local:%H:%M}).'
             ),
-            url='',
         )
 
-        # Send email if user has preferences with booking_email=True (or no preferences yet)
+        # Send email if user has preferences with booking_reminder_email=True (or no preferences yet)
         try:
             prefs = user.notification_preferences
-            email_enabled = prefs.booking_email and not prefs.do_not_disturb
+            from apps.notifications.utils import _is_dnd_active
+            email_enabled = prefs.booking_reminder_email and not _is_dnd_active(prefs)
         except NotificationPreference.DoesNotExist:
             email_enabled = True  # default: send email when no prefs row exists
 

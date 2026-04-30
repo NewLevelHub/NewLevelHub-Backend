@@ -9,7 +9,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import APIException
 
 from apps.companies.models import Company
-from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, seven_day_range_from_today
 
@@ -630,20 +630,24 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             # Only create participants for meeting rooms
             if resource.resource_type == 'meeting_room' and participant_ids:
+                participant_users = list(User.objects.filter(id__in=participant_ids))
+                participant_by_id = {u.id: u for u in participant_users}
                 for uid in participant_ids:
                     BookingParticipant.objects.create(booking=booking, user_id=uid)
-                # Send notifications to participants
+                # Send notifications to participants (respects DND and per-type preferences)
                 for uid in participant_ids:
-                    Notification.objects.create(
-                        user_id=uid,
-                        notification_type='booking_confirmed',
-                        title=f'You have been added to a meeting: {resource.name}',
-                        body=(
-                            f'{user.full_name} invited you to '
-                            f'{resource.name} on {start_time:%Y-%m-%d %H:%M}.'
-                        ),
-                        url=f'/bookings/{booking.id}',
-                    )
+                    participant_user = participant_by_id.get(uid)
+                    if participant_user:
+                        create_notification(
+                            user=participant_user,
+                            notification_type='booking_confirmed',
+                            title=f'You have been added to a meeting: {resource.name}',
+                            message=(
+                                f'{user.full_name} invited you to '
+                                f'{resource.name} on {start_time:%Y-%m-%d %H:%M}.'
+                            ),
+                            link=f'/bookings/{booking.id}',
+                        )
 
         return booking
 

@@ -10,7 +10,7 @@ from apps.companies.limits import (
     notify_company_admins_limit_thresholds,
 )
 from apps.core.permissions import IsCompanyMember
-from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
 
@@ -443,12 +443,12 @@ class FileShareViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         share = serializer.save(shared_by=self.request.user)
-        Notification.objects.create(
+        create_notification(
             user=share.shared_with,
             notification_type='announcement_company',
             title='File shared with you',
-            body=f'{share.shared_by.full_name} shared "{share.file.name}" with you.',
-            url=f'/files?shared_file_id={share.file_id}',
+            message=f'{share.shared_by.full_name} shared "{share.file.name}" with you.',
+            link=f'/files?shared_file_id={share.file_id}',
         )
 
 

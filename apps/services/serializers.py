@@ -1,4 +1,7 @@
 from rest_framework import serializers
+
+from apps.companies.models import Company
+
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 
@@ -40,18 +43,34 @@ class ServiceRequestUpdateSerializer(serializers.ModelSerializer):
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
+    """
+    AC-aligned serializer (DEV-100):
+
+      - body is exposed as ``text`` (per AC vocabulary)
+      - ``company_id`` (null = building-wide / БЦ) is the only company input;
+        the backend forces this for company_admin in ``perform_create``
+      - ``scope`` is read-only — it's auto-derived from company on save
+    """
+
+    text = serializers.CharField(source='body')
+    company_id = serializers.PrimaryKeyRelatedField(
+        source='company',
+        queryset=Company.objects.all(),
+        allow_null=True,
+        required=False,
+    )
     author_name = serializers.CharField(source='author.full_name', read_only=True)
     is_read = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
         fields = [
-            'id', 'scope', 'company', 'author', 'author_name',
-            'title', 'body', 'category', 'image',
+            'id', 'scope', 'company_id', 'author', 'author_name',
+            'title', 'text', 'category', 'image',
             'is_pinned', 'notify_email', 'is_read',
             'created_at',
         ]
-        read_only_fields = ['id', 'author', 'created_at']
+        read_only_fields = ['id', 'scope', 'author', 'created_at']
 
     def get_is_read(self, obj):
         request = self.context.get('request')

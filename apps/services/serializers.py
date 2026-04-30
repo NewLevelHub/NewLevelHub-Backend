@@ -20,13 +20,14 @@ class FloorSerializer(serializers.ModelSerializer):
 
 class ServiceRequestSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.full_name', read_only=True)
+    assigned_to_name = serializers.CharField(source='assigned_to.full_name', allow_null=True, read_only=True)
 
     class Meta:
         model = ServiceRequest
         fields = [
             'id', 'user', 'user_name', 'request_type', 'status', 'urgency',
             'floor', 'location', 'description', 'photo',
-            'assigned_to', 'rating', 'completed_at',
+            'assigned_to', 'assigned_to_name', 'rating', 'completed_at',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'status', 'assigned_to', 'completed_at', 'created_at', 'updated_at']

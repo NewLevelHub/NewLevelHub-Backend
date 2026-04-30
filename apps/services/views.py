@@ -3,11 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import (
+    extend_schema, extend_schema_view, OpenApiResponse, OpenApiParameter, inline_serializer,
+)
 import rest_framework.fields as fields
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdminOrReadOnly
 from apps.core.mixins import SetCompanyOnCreateMixin
+from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
     FloorSerializer, MapPointSerializer,
@@ -101,38 +104,76 @@ class MapPointViewSet(viewsets.ModelViewSet):
 
 # ── Сервисные заявки ──────────────────────────────────────────────────
 
+# Valid status transitions: new → accepted → in_progress → completed
+_STATUS_TRANSITIONS = {
+    'new': 'accepted',
+    'accepted': 'in_progress',
+    'in_progress': 'completed',
+}
+
+
 @extend_schema_view(
     list=extend_schema(
         tags=['Services'],
         summary='List service requests',
+        parameters=[
+            OpenApiParameter(name='request_type', description='Filter by type', required=False, type=str,
+                             enum=['cleaning', 'repair', 'supplies', 'general']),
+            OpenApiParameter(name='status', description='Filter by status', required=False, type=str,
+                             enum=['new', 'accepted', 'in_progress', 'completed']),
+            OpenApiParameter(name='urgency', description='Filter by urgency', required=False, type=str,
+                             enum=['normal', 'urgent']),
+            OpenApiParameter(name='floor', description='Filter by floor number', required=False, type=int),
+        ],
         responses={200: ServiceRequestSerializer(many=True)},
     ),
     create=extend_schema(
         tags=['Services'],
         summary='Create service request',
-        request=ServiceRequestSerializer,
+        request=inline_serializer(
+            name='ServiceRequestCreate',
+            fields={
+                'request_type': fields.ChoiceField(choices=['cleaning', 'repair', 'supplies', 'general']),
+                'urgency': fields.ChoiceField(choices=['normal', 'urgent'], required=False),
+                'floor': fields.IntegerField(required=False, allow_null=True),
+                'location': fields.CharField(required=False),
+                'description': fields.CharField(required=False),
+                'photo': fields.ImageField(required=False, allow_null=True),
+            },
+        ),
         responses={
             201: ServiceRequestSerializer,
             400: OpenApiResponse(description='Validation error'),
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
         },
     ),
     retrieve=extend_schema(
         tags=['Services'],
         summary='Get service request details',
-        responses={200: ServiceRequestSerializer, 404: OpenApiResponse(description='Not found')},
+        responses={
+            200: ServiceRequestSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
 )
 class ServiceRequestViewSet(viewsets.ModelViewSet):
     serializer_class = ServiceRequestSerializer
     permission_classes = [IsCompanyMember]
-    filterset_fields = ['request_type', 'status', 'urgency']
+    filterset_fields = ['request_type', 'status', 'urgency', 'floor']
+    ordering = ['-created_at']
 
     def get_queryset(self):
         user = self.request.user
         if user.role == 'superadmin':
-            return ServiceRequest.objects.all()
-        return ServiceRequest.objects.filter(user=user)
+            return ServiceRequest.objects.all().order_by('-created_at')
+        if user.role == 'company_admin':
+            return ServiceRequest.objects.filter(
+                user__company=user.company,
+            ).order_by('-created_at')
+        return ServiceRequest.objects.filter(user=user).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -142,20 +183,34 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         summary='Quick cleaning request',
         request=inline_serializer(
             name='QuickCleaningRequest',
-            fields={'floor': fields.IntegerField(required=False)},
+            fields={'floor': fields.IntegerField(required=False, allow_null=True)},
         ),
         responses={
             201: ServiceRequestSerializer,
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
         },
     )
     @action(detail=False, methods=['post'], url_path='cleaning')
     def quick_cleaning(self, request):
+        from apps.bookings.models import Booking
+
+        floor = request.data.get('floor')
+        if floor is None:
+            last_booking = (
+                Booking.objects.filter(user=request.user, status='confirmed')
+                .select_related('resource')
+                .order_by('-created_at')
+                .first()
+            )
+            if last_booking and last_booking.resource:
+                floor = last_booking.resource.floor
+
         sr = ServiceRequest.objects.create(
             user=request.user,
             request_type='cleaning',
             urgency='normal',
-            floor=request.data.get('floor'),
+            floor=floor,
             description='Quick cleaning request',
         )
         return Response(ServiceRequestSerializer(sr).data, status=status.HTTP_201_CREATED)
@@ -163,10 +218,17 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=['Services'],
         summary='Update request status (superadmin)',
-        request=ServiceRequestUpdateSerializer,
+        request=inline_serializer(
+            name='ServiceRequestStatusUpdate',
+            fields={
+                'status': fields.ChoiceField(choices=['new', 'accepted', 'in_progress', 'completed']),
+                'assigned_to': fields.IntegerField(required=False, allow_null=True),
+            },
+        ),
         responses={
             200: ServiceRequestSerializer,
-            400: OpenApiResponse(description='Validation error'),
+            400: OpenApiResponse(description='Invalid status transition'),
+            401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Superadmin only'),
             404: OpenApiResponse(description='Not found'),
         },
@@ -174,13 +236,32 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], url_path='update-status', permission_classes=[IsSuperAdmin])
     def update_status(self, request, pk=None):
         sr = self.get_object()
+        new_status = request.data.get('status')
+
+        if new_status and new_status != sr.status:
+            allowed_next = _STATUS_TRANSITIONS.get(sr.status)
+            if new_status != allowed_next:
+                return Response(
+                    {'detail': f'Invalid status transition: {sr.status} → {new_status}. '
+                               f'Expected next status: {allowed_next}.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         serializer = ServiceRequestUpdateSerializer(sr, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        if sr.status == 'completed':
+
+        sr.refresh_from_db()
+        if sr.status == 'completed' and sr.completed_at is None:
             sr.completed_at = timezone.now()
             sr.save(update_fields=['completed_at'])
-        # TODO: уведомить пользователя о смене статуса
+
+        create_notification(
+            user=sr.user,
+            notification_type='service_request_update',
+            title='Статус заявки изменён',
+            message=f'Статус вашей заявки изменён на: {sr.get_status_display()}',
+        )
         return Response(ServiceRequestSerializer(sr).data)
 
     @extend_schema(
@@ -192,18 +273,47 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         ),
         responses={
             200: OpenApiResponse(description='Rating saved'),
-            400: OpenApiResponse(description='Rating must be 1-5'),
+            400: OpenApiResponse(description='Request not completed or already rated'),
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Not the request owner'),
             404: OpenApiResponse(description='Not found'),
         },
     )
     @action(detail=True, methods=['post'], url_path='rate')
     def rate(self, request, pk=None):
         sr = self.get_object()
+
+        if sr.user != request.user:
+            return Response(
+                {'detail': 'You can only rate your own requests.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if sr.status != 'completed':
+            return Response(
+                {'detail': 'Request must be completed before rating.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sr.rating is not None:
+            return Response(
+                {'detail': 'This request has already been rated.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         rating = request.data.get('rating')
-        if not rating or int(rating) not in range(1, 6):
-            return Response({'detail': 'Rating must be 1-5'}, status=status.HTTP_400_BAD_REQUEST)
-        sr.rating = int(rating)
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'Rating must be an integer between 1 and 5.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if rating not in range(1, 6):
+            return Response({'detail': 'Rating must be between 1 and 5.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        sr.rating = rating
         sr.save(update_fields=['rating'])
         return Response({'detail': 'Rated'})
 

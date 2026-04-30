@@ -168,7 +168,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if not include_archived:
             qs = qs.filter(is_archived=False)
 
-        return qs.prefetch_related('columns__tasks')
+        return qs.order_by('-created_at', '-id').prefetch_related('columns__tasks')
 
     def get_serializer_class(self):
         if self.action == 'list':

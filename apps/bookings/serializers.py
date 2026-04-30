@@ -601,6 +601,11 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         with transaction.atomic():
             resource = Resource.objects.select_for_update().get(pk=resource_id)
             self._validate_access(resource=resource, user=user)
+            self._ensure_no_conflicts(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+            )
             self._validate_availability_window(
                 resource=resource,
                 start_time=start_time,
@@ -617,11 +622,6 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 end_time=end_time,
             )
             self._validate_user_active_limit(user=user)
-            self._ensure_no_conflicts(
-                resource=resource,
-                start_time=start_time,
-                end_time=end_time,
-            )
 
             validated_data['resource'] = resource
             validated_data['user'] = user

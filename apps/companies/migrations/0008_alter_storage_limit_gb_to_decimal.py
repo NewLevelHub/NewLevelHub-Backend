@@ -10,6 +10,14 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        migrations.RunSQL(
+            sql=(
+                "UPDATE companies "
+                "SET storage_limit_gb = 99999 "
+                "WHERE storage_limit_gb > 99999;"
+            ),
+            reverse_sql=migrations.RunSQL.noop,
+        ),
         migrations.AlterField(
             model_name='company',
             name='storage_limit_gb',

@@ -364,16 +364,16 @@ class TestGuestPassActionsAC:
         response = api_client.post(pass_revoke_url(target_pass.id))
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
-    @patch('apps.access.tasks.send_guest_pass_email_now')
-    def test_resend_requeues_qr_email(self, mocked_send_now, api_client, company_admin):
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_requeues_qr_email(self, mocked_delay, api_client, company_admin):
         target_pass = _create_pass(creator=company_admin, status_code='active')
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(pass_resend_url(target_pass.id))
         assert response.status_code == status.HTTP_200_OK
-        mocked_send_now.assert_called_once_with(target_pass.id)
+        mocked_delay.assert_called_once_with(target_pass.id)
 
-    @patch('apps.access.tasks.send_guest_pass_email_now')
-    def test_resend_rate_limited_to_three_per_hour(self, mocked_send_now, api_client, company_admin):
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_rate_limited_to_three_per_hour(self, mocked_delay, api_client, company_admin):
         target_pass = _create_pass(creator=company_admin, status_code='active')
         api_client.force_authenticate(user=company_admin)
         for _ in range(3):
@@ -381,16 +381,16 @@ class TestGuestPassActionsAC:
             assert ok_response.status_code == status.HTTP_200_OK
         limited_response = api_client.post(pass_resend_url(target_pass.id))
         assert limited_response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-        assert mocked_send_now.call_count == 3
+        assert mocked_delay.call_count == 3
 
     @pytest.mark.parametrize('blocked_status', ['revoked', 'used', 'expired'])
-    @patch('apps.access.tasks.send_guest_pass_email_now')
-    def test_resend_rejects_non_active_statuses(self, mocked_send_now, api_client, company_admin, blocked_status):
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_resend_rejects_non_active_statuses(self, mocked_delay, api_client, company_admin, blocked_status):
         target_pass = _create_pass(creator=company_admin, status_code=blocked_status)
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(pass_resend_url(target_pass.id))
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        mocked_send_now.assert_not_called()
+        mocked_delay.assert_not_called()
 
 
 @pytest.mark.django_db

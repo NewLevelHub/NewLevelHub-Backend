@@ -110,9 +110,9 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
         guest_pass = self.get_object()
-        if guest_pass.status == 'revoked':
+        if guest_pass.status != 'active':
             return Response(
-                {'detail': 'Cannot resend QR for revoked pass.'},
+                {'detail': f'Cannot resend pass with status "{guest_pass.status}"'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         cache_key = f'guest-pass-resend:{guest_pass.id}'

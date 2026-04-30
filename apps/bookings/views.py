@@ -25,7 +25,7 @@ from apps.core.permissions import (
     IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
     IsEmailVerifiedOrSuperAdmin,
 )
-from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.users.models import User
 from .models import (
@@ -793,12 +793,11 @@ class ResourceViewSet(viewsets.ModelViewSet):
             booking.cancelled_by = admin
             booking.cancel_reason = 'Resource deactivated'
             booking.save()
-            Notification.objects.create(
+            create_notification(
                 user=booking.user,
                 notification_type='booking_cancelled',
                 title=f'Бронирование отменено: {resource.name}',
-                body='Ресурс деактивирован администратором.',
-                url='',
+                message='Ресурс деактивирован администратором.',
             )
 
     def _cancel_overlapping_bookings_for_block(self, *, resource, block, admin):
@@ -820,12 +819,11 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 cancel_reason=cancellation_reason,
                 cancelled_at=now,
             )
-            Notification.objects.create(
+            create_notification(
                 user=booking.user,
                 notification_type='booking_cancelled',
                 title=f'Бронирование отменено: {resource.name}',
-                body=cancellation_reason,
-                url='',
+                message=cancellation_reason,
             )
 
     @extend_schema(
@@ -1522,12 +1520,11 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         booking.cancel_reason = reason
         booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason'])
 
-        Notification.objects.create(
+        create_notification(
             user=booking.user,
             notification_type='booking_cancelled',
             title=f'Бронирование отменено администратором: {booking.resource.name}',
-            body=reason,
-            url='',
+            message=reason,
         )
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
@@ -1580,12 +1577,11 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 if not created:
                     continue
                 added_ids.append(user.id)
-                Notification.objects.create(
+                create_notification(
                     user=user,
                     notification_type='booking_confirmed',
                     title=f'You were added to meeting: {booking.resource.name}',
-                    body='Check your bookings for updated participants.',
-                    url='',
+                    message='Check your bookings for updated participants.',
                 )
             self._create_change_audit(
                 booking=booking,

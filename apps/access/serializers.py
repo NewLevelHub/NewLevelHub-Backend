@@ -94,6 +94,8 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
 class GuestPassSerializer(serializers.ModelSerializer):
     created_by_name = serializers.CharField(source='created_by.full_name', read_only=True)
+    created_by_email = serializers.CharField(source='created_by.email', read_only=True)
+    created_by_company_name = serializers.CharField(source='created_by.company.name', read_only=True, allow_null=True)
     is_valid = serializers.BooleanField(read_only=True)
     purpose = serializers.CharField(source='visit_purpose', read_only=True)
     is_single_use = serializers.SerializerMethodField()
@@ -102,7 +104,7 @@ class GuestPassSerializer(serializers.ModelSerializer):
     class Meta:
         model = GuestPass
         fields = [
-            'id', 'created_by', 'created_by_name', 'company',
+            'id', 'created_by', 'created_by_name', 'created_by_email', 'created_by_company_name', 'company',
             'guest_name', 'guest_email', 'guest_phone', 'purpose',
             'qr_code', 'qr_image', 'status', 'usage_type', 'is_single_use', 'times_used',
             'valid_from', 'valid_until', 'is_valid',

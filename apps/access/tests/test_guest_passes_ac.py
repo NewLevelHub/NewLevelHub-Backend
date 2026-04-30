@@ -19,6 +19,14 @@ def pass_detail_url(pass_id):
     return f'/api/v1/access/passes/{pass_id}/'
 
 
+def pass_revoke_url(pass_id):
+    return f'/api/v1/access/passes/{pass_id}/revoke/'
+
+
+def pass_resend_url(pass_id):
+    return f'/api/v1/access/passes/{pass_id}/resend/'
+
+
 @pytest.fixture
 def api_client():
     return APIClient()
@@ -51,6 +59,36 @@ def employee(db, company):
         last_name='Employee',
         role='employee',
         company=company,
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
+def superadmin(db):
+    return User.objects.create_user(
+        email='access-superadmin@test.local',
+        password='pass',
+        first_name='Access',
+        last_name='Superadmin',
+        role='superadmin',
+        is_email_verified=True,
+    )
+
+
+@pytest.fixture
+def second_company(db):
+    return Company.objects.create(name='Another Access Co', plan='basic')
+
+
+@pytest.fixture
+def second_company_admin(db, second_company):
+    return User.objects.create_user(
+        email='access-admin-2@test.local',
+        password='pass',
+        first_name='Access',
+        last_name='Admin2',
+        role='company_admin',
+        company=second_company,
         is_email_verified=True,
     )
 
@@ -181,8 +219,8 @@ class TestGuestPassesCreateAC:
 
 @pytest.mark.django_db
 class TestGuestPassesListAndFiltersAC:
-    def test_employee_get_returns_only_own_passes(self, api_client, company_admin, employee):
-        mine = _create_pass(creator=employee, status_code='active')
+    def test_company_admin_get_returns_company_passes(self, api_client, company_admin):
+        mine = _create_pass(creator=company_admin, status_code='active')
         other_admin = User.objects.create_user(
             email='other-admin@test.local',
             password='pass',
@@ -193,6 +231,15 @@ class TestGuestPassesListAndFiltersAC:
             is_email_verified=True,
         )
         _create_pass(creator=other_admin, status_code='active')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(PASSES_URL)
+        assert response.status_code == status.HTTP_200_OK
+        ids = [row['id'] for row in response.data.get('results', response.data)]
+        assert mine.id in ids
+
+    def test_employee_get_returns_only_own_passes(self, api_client, company_admin, employee):
+        mine = _create_pass(creator=employee, status_code='active')
+        _create_pass(creator=company_admin, status_code='active')
         api_client.force_authenticate(user=employee)
         response = api_client.get(PASSES_URL)
         assert response.status_code == status.HTTP_200_OK

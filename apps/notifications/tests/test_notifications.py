@@ -15,7 +15,7 @@ import pytest
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.notifications.models import Notification
+from apps.notifications.models import Notification, NotificationPreference
 from apps.notifications.utils import create_notification, NOTIFICATION_TYPES
 
 
@@ -359,3 +359,99 @@ class TestDeleteNotification:
         )
         resp = auth_client.delete(f'/api/v1/notifications/{other_notif.pk}/')
         assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# Regression: create_notification delivery and suppression (TC-1 through TC-4)
+# Covers the staging bug where notifications were not created even when
+# in_app=True and DND was disabled.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCreateNotificationDeliveryRegression:
+    """
+    Focused regression tests for create_notification core delivery logic.
+
+    TC-1: in_app=True, dnd_enabled=False  → notification record IS created in DB
+    TC-2: in_app=False, dnd_enabled=False → notification record is NOT created
+    TC-3: in_app=True, dnd_enabled=True   → notification record is NOT created (DND blocks)
+    TC-4: no preference row exists        → notification IS created (safe default, row auto-created)
+    """
+
+    def test_tc1_in_app_enabled_dnd_off_creates_notification(self, employee):
+        """TC-1: in_app=True, DND off — notification must be persisted to DB."""
+        NotificationPreference.objects.create(
+            user=employee,
+            booking_confirmed_in_app=True,
+            dnd_enabled=False,
+        )
+        result = create_notification(
+            user=employee,
+            notification_type='booking_confirmed',
+            title='Booking confirmed',
+            message='Your room is booked.',
+        )
+        assert result is not None, 'create_notification should return a Notification instance'
+        assert result.pk is not None, 'Notification must be saved to DB'
+        assert Notification.objects.filter(
+            user=employee, notification_type='booking_confirmed'
+        ).count() == 1, 'Exactly one Notification record must exist in the DB'
+
+    def test_tc2_in_app_disabled_dnd_off_suppresses_notification(self, employee):
+        """TC-2: in_app=False, DND off — notification must NOT be created."""
+        NotificationPreference.objects.create(
+            user=employee,
+            booking_confirmed_in_app=False,
+            dnd_enabled=False,
+        )
+        result = create_notification(
+            user=employee,
+            notification_type='booking_confirmed',
+            title='Booking confirmed',
+            message='Your room is booked.',
+        )
+        assert result is None, 'create_notification should return None when in_app is disabled'
+        assert Notification.objects.filter(
+            user=employee, notification_type='booking_confirmed'
+        ).count() == 0, 'No Notification record must exist in the DB'
+
+    def test_tc3_in_app_enabled_dnd_on_suppresses_notification(self, employee):
+        """TC-3: in_app=True, DND on (indefinite) — notification must NOT be created."""
+        NotificationPreference.objects.create(
+            user=employee,
+            booking_confirmed_in_app=True,
+            dnd_enabled=True,
+            dnd_until=None,  # indefinite DND
+        )
+        result = create_notification(
+            user=employee,
+            notification_type='booking_confirmed',
+            title='Booking confirmed',
+            message='Your room is booked.',
+        )
+        assert result is None, 'create_notification should return None when DND is active'
+        assert Notification.objects.filter(
+            user=employee, notification_type='booking_confirmed'
+        ).count() == 0, 'No Notification record must exist in the DB when DND is active'
+
+    def test_tc4_no_preference_row_creates_notification(self, employee):
+        """TC-4: no preference row — safe default is to allow; row is auto-created."""
+        assert not NotificationPreference.objects.filter(user=employee).exists(), \
+            'Precondition: no preference row must exist'
+        result = create_notification(
+            user=employee,
+            notification_type='booking_confirmed',
+            title='Booking confirmed',
+            message='Your room is booked.',
+        )
+        assert result is not None, (
+            'create_notification must create the notification when no preference row exists '
+            '(safe default: allow delivery)'
+        )
+        assert result.pk is not None, 'Notification must be saved to DB'
+        assert Notification.objects.filter(
+            user=employee, notification_type='booking_confirmed'
+        ).count() == 1, 'Exactly one Notification record must exist in the DB'
+        # Preference row should have been auto-created by get_or_create.
+        assert NotificationPreference.objects.filter(user=employee).exists(), \
+            'NotificationPreference row must be auto-created on first create_notification call'

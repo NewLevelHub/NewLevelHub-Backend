@@ -211,7 +211,7 @@ def test_ac1_email_sent_when_booking_email_true():
 @pytest.mark.django_db
 def test_ac1_email_not_sent_when_booking_email_false():
     """
-    AC-1 Test 6: NotificationPreference(booking_email=False)
+    AC-1 Test 6: NotificationPreference(booking_reminder_email=False)
     → email NOT sent.
     """
     from apps.bookings.tasks import send_booking_reminders
@@ -221,7 +221,7 @@ def test_ac1_email_not_sent_when_booking_email_false():
     resource = _make_resource('t6')
     NotificationPreference.objects.create(
         user=user,
-        booking_email=False,
+        booking_reminder_email=False,
         do_not_disturb=False,
     )
     _make_booking(user, resource, start_offset_minutes=15, fixed_now=_FIXED_NOW)

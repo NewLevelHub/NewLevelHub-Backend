@@ -1,15 +1,20 @@
+from datetime import timedelta
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
+from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import GuestPass, AccessLog
 from .tasks import notify_pass_creator_on_entry
+from .filters import GuestPassFilter
+from . import tasks
 from .serializers import (
     GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer, AccessLogSerializer,
 )
@@ -42,7 +47,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     permission_classes = [IsCompanyAdmin]
     queryset = GuestPass.objects.select_related('created_by', 'company').order_by('-created_at')
     http_method_names = ['get', 'post']
-    filterset_fields = ['status']
+    filterset_class = GuestPassFilter
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve', 'create'):
@@ -77,6 +82,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         request=None,
         responses={
             200: OpenApiResponse(description='Pass revoked'),
+            400: OpenApiResponse(description='Cannot revoke used or expired pass'),
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
@@ -84,6 +90,11 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     @action(detail=True, methods=['post'], url_path='revoke')
     def revoke(self, request, pk=None):
         guest_pass = self.get_object()
+        if guest_pass.status in ('used', 'expired'):
+            return Response(
+                {'detail': 'Used or expired passes cannot be revoked.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         guest_pass.status = 'revoked'
         guest_pass.save(update_fields=['status'])
         return Response({'detail': 'Pass revoked'})
@@ -94,13 +105,53 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         request=None,
         responses={
             200: OpenApiResponse(description='QR code resent'),
+            400: OpenApiResponse(description='Cannot resend for revoked pass'),
+            429: OpenApiResponse(description='Rate limit exceeded (3 per hour)'),
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
     )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, pk=None):
-        # TODO: отправить QR-код повторно на email гостя
+        guest_pass = self.get_object()
+        if guest_pass.status != 'active':
+            return Response(
+                {'detail': f'Cannot resend pass with status "{guest_pass.status}"'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        now = timezone.now()
+        window_start = now - timedelta(hours=1)
+        # Keep cache fast-path for shared cache deployments, but enforce the hard limit via DB
+        # so behavior is stable even with process-local caches.
+        cache_key = f'guest-pass-resend:{guest_pass.id}'
+        cache_attempts = None
+        try:
+            if cache.add(cache_key, 1, timeout=3600):
+                cache_attempts = 1
+            else:
+                cache_attempts = cache.incr(cache_key)
+        except Exception:
+            cache_attempts = None
+
+        with transaction.atomic():
+            locked_pass = GuestPass.objects.select_for_update().get(pk=guest_pass.pk)
+            if (
+                locked_pass.resend_window_started_at is None
+                or locked_pass.resend_window_started_at < window_start
+            ):
+                locked_pass.resend_window_started_at = now
+                locked_pass.resend_attempts_in_window = 0
+
+            if locked_pass.resend_attempts_in_window >= 3 or (cache_attempts is not None and cache_attempts > 3):
+                return Response(
+                    {'detail': 'Rate limit exceeded. Max 3 resends per hour.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
+            locked_pass.resend_attempts_in_window += 1
+            locked_pass.save(update_fields=['resend_window_started_at', 'resend_attempts_in_window'])
+
+        tasks.send_guest_pass_email.delay(guest_pass.id)
         return Response({'detail': 'QR code resent'})
 
 

@@ -1,6 +1,16 @@
 import django_filters
 
-from .models import GuestPass
+from .models import AccessLog, GuestPass
+
+
+class AccessLogFilter(django_filters.FilterSet):
+    company_id = django_filters.NumberFilter(field_name='guest_pass__company_id')
+    date_from = django_filters.DateFilter(field_name='created_at', lookup_expr='date__gte')
+    date_to = django_filters.DateFilter(field_name='created_at', lookup_expr='date__lte')
+
+    class Meta:
+        model = AccessLog
+        fields = ['company_id', 'date_from', 'date_to', 'method', 'is_entry']
 
 
 class GuestPassFilter(django_filters.FilterSet):

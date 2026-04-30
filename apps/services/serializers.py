@@ -53,6 +53,42 @@ class MapPointSerializer(serializers.ModelSerializer):
 
         return 'occupied'
 
+    def validate(self, attrs):
+        # On partial updates some fields may be absent — fall back to instance values.
+        instance = self.instance
+        point_type = attrs.get('point_type', getattr(instance, 'point_type', None))
+        resource = attrs.get('resource', getattr(instance, 'resource', None))
+        company = attrs.get('company', getattr(instance, 'company', None))
+        x = attrs.get('x', getattr(instance, 'x', None))
+        y = attrs.get('y', getattr(instance, 'y', None))
+
+        if x is not None and not (0.0 <= x <= 100.0):
+            raise serializers.ValidationError({'x': 'Must be between 0.0 and 100.0.'})
+        if y is not None and not (0.0 <= y <= 100.0):
+            raise serializers.ValidationError({'y': 'Must be between 0.0 and 100.0.'})
+
+        if point_type in _RESOURCE_POINT_TYPES and resource is None:
+            raise serializers.ValidationError(
+                {'resource': f'resource is required for point_type "{point_type}".'}
+            )
+        if point_type == 'office' and company is None:
+            raise serializers.ValidationError(
+                {'company': 'company is required for point_type "office".'}
+            )
+
+        return attrs
+
+
+class MapPointSearchSerializer(serializers.ModelSerializer):
+    floor_id = serializers.IntegerField(source='floor.id', read_only=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True)
+    resource_id = serializers.IntegerField(source='resource.id', read_only=True, allow_null=True)
+    resource_name = serializers.CharField(source='resource.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = MapPoint
+        fields = ['id', 'floor_id', 'floor_name', 'point_type', 'label', 'x', 'y', 'resource_id', 'resource_name']
+
 
 class FloorListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views — omits map_points."""

@@ -1,14 +1,18 @@
 import os
 
+from django.db.models import Q
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.utils import timezone
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
-    extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, inline_serializer,
+    extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse,
+    OpenApiExample, inline_serializer,
 )
 import rest_framework.fields as fields
 
@@ -16,7 +20,7 @@ from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdminO
 from apps.core.mixins import SetCompanyOnCreateMixin
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
-    FloorSerializer, FloorDetailSerializer, MapPointSerializer,
+    FloorSerializer, FloorDetailSerializer, MapPointSerializer, MapPointSearchSerializer,
     ServiceRequestSerializer, ServiceRequestUpdateSerializer,
     AnnouncementSerializer,
 )
@@ -334,6 +338,59 @@ class FloorViewSet(viewsets.ModelViewSet):
             context['now'] = timezone.now()
         return context
 
+    @extend_schema(
+        tags=['Services'],
+        summary='Floor map with resource statuses',
+        parameters=[
+            OpenApiParameter(
+                'datetime',
+                OpenApiTypes.DATETIME,
+                OpenApiParameter.QUERY,
+                required=False,
+                description='Point in time for status calculation (ISO 8601). Defaults to now.',
+            ),
+        ],
+        responses={
+            200: inline_serializer(
+                name='FloorMapResponse',
+                fields={
+                    'floor_id': fields.IntegerField(),
+                    'floor_name': fields.CharField(),
+                    'at_time': fields.DateTimeField(),
+                    'points': MapPointSerializer(many=True),
+                },
+            ),
+            400: OpenApiResponse(description='Invalid datetime parameter'),
+            404: OpenApiResponse(description='Floor not found'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='map')
+    def map(self, request, pk=None):
+        floor = self.get_object()
+        datetime_param = request.query_params.get('datetime')
+        if datetime_param:
+            at_time = parse_datetime(datetime_param)
+            if at_time is None:
+                return Response(
+                    {'detail': 'Invalid datetime format. Use ISO 8601.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            at_time = timezone.now()
+
+        points = MapPoint.objects.select_related('resource', 'company').filter(floor=floor)
+        serializer = MapPointSerializer(
+            points,
+            many=True,
+            context={'now': at_time, 'request': request},
+        )
+        return Response({
+            'floor_id': floor.id,
+            'floor_name': floor.name,
+            'at_time': at_time,
+            'points': serializer.data,
+        })
+
     def perform_update(self, serializer):
         old_image = self.get_object().plan_image
         instance = serializer.save()
@@ -358,28 +415,65 @@ class FloorViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Services'],
         summary='List map points',
+        parameters=[OpenApiParameter(
+            'search', OpenApiTypes.STR, OpenApiParameter.QUERY,
+            required=False, description='Filter by label (partial match).',
+        )],
         responses={200: MapPointSerializer(many=True)},
     ),
     create=extend_schema(
         tags=['Services'],
         summary='Create map point (superadmin)',
-        request=MapPointSerializer,
+        request=inline_serializer(
+            name='MapPointCreateRequest',
+            fields={
+                'floor': fields.IntegerField(help_text='Floor ID.'),
+                'point_type': fields.CharField(help_text='One of: desk, meeting_room, parking, capsule, toilet, '
+                                               'kitchen, elevator, exit, office, other.'),
+                'x': fields.FloatField(help_text='Horizontal position 0–100 (%).'),
+                'y': fields.FloatField(help_text='Vertical position 0–100 (%).'),
+                'label': fields.CharField(required=False, help_text='Optional human-readable label.'),
+                'resource': fields.IntegerField(
+                    required=False,
+                    help_text='Resource ID (required for desk/meeting_room/parking/capsule).',
+                ),
+                'company': fields.IntegerField(required=False, help_text='Company ID (required for office).'),
+            },
+        ),
         responses={
             201: MapPointSerializer,
-            400: OpenApiResponse(description='Validation error'),
+            400: OpenApiResponse(description='Validation error (missing resource/company, x/y out of range, etc.)'),
             403: OpenApiResponse(description='Superadmin only'),
         },
     ),
     partial_update=extend_schema(
         tags=['Services'],
-        summary='Update map point',
-        request=MapPointSerializer,
-        responses={200: MapPointSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        summary='Update map point (superadmin)',
+        request=inline_serializer(
+            name='MapPointUpdateRequest',
+            fields={
+                'x': fields.FloatField(required=False, help_text='Horizontal position 0–100 (%).'),
+                'y': fields.FloatField(required=False, help_text='Vertical position 0–100 (%).'),
+                'label': fields.CharField(required=False),
+                'resource': fields.IntegerField(required=False),
+                'company': fields.IntegerField(required=False),
+            },
+        ),
+        responses={
+            200: MapPointSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
     destroy=extend_schema(
         tags=['Services'],
-        summary='Delete map point',
-        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+        summary='Delete map point (superadmin)',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
 )
 class MapPointViewSet(viewsets.ModelViewSet):
@@ -392,6 +486,39 @@ class MapPointViewSet(viewsets.ModelViewSet):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Search map points by label or resource name',
+        parameters=[
+            OpenApiParameter(
+                'q',
+                OpenApiTypes.STR,
+                OpenApiParameter.QUERY,
+                required=True,
+                description='Search query matched against label and linked resource name.',
+            ),
+        ],
+        responses={
+            200: MapPointSearchSerializer(many=True),
+            400: OpenApiResponse(description='Missing or empty q parameter'),
+        },
+    )
+    @action(detail=False, methods=['get'], url_path='search')
+    def search(self, request):
+        q = request.query_params.get('q', '').strip()
+        if not q:
+            return Response(
+                {'detail': 'Query parameter "q" is required and must not be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        points = (
+            MapPoint.objects
+            .select_related('resource', 'floor')
+            .filter(Q(label__icontains=q) | Q(resource__name__icontains=q))
+        )
+        serializer = MapPointSearchSerializer(points, many=True)
+        return Response(serializer.data)
 
 
 # ── Сервисные заявки ──────────────────────────────────────────────────

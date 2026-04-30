@@ -335,7 +335,11 @@ class TestGuestPassActionsAC:
         )
         target_pass = _create_pass(creator=company_admin, status_code='active', usage_type='single')
         api_client.force_authenticate(user=receiver)
-        validate_response = api_client.post('/api/v1/access/validate/', {'qr_code': str(target_pass.qr_code)}, format='json')
+        validate_response = api_client.post(
+            '/api/v1/access/validate/',
+            {'qr_code': str(target_pass.qr_code)},
+            format='json',
+        )
         assert validate_response.status_code == status.HTTP_200_OK
         target_pass.refresh_from_db()
         assert target_pass.status == 'used'

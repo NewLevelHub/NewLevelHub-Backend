@@ -226,7 +226,7 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):
-    role = serializers.ChoiceField(choices=['employee', 'company_admin'])
+    role = serializers.ChoiceField(choices=['employee', 'company_admin', 'reception'])
 
     class Meta:
         model = Invitation
@@ -252,8 +252,8 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
     def validate_role(self, value):
         request = self.context['request']
-        if value == 'company_admin' and request.user.role != 'superadmin':
-            raise serializers.ValidationError('Only superadmin can invite company_admin.')
+        if value in ('company_admin', 'reception') and request.user.role != 'superadmin':
+            raise serializers.ValidationError(f'Only superadmin can invite {value}.')
         return value
 
     def validate(self, attrs):
@@ -281,9 +281,9 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             )
 
         role = attrs.get('role', 'employee')
-        if request.user.role == 'company_admin' and role == 'company_admin':
+        if request.user.role == 'company_admin' and role in ('company_admin', 'reception'):
             raise serializers.ValidationError(
-                {'role': 'Company admins cannot invite other company admins.'},
+                {'role': f'Company admins cannot invite {role}.'},
             )
 
         return attrs

@@ -343,14 +343,15 @@ class FloorViewSet(viewsets.ModelViewSet):
                 os.remove(old_image.path)
 
     def perform_destroy(self, instance):
-        # Delete the plan image file from disk before removing the DB row.
-        if instance.plan_image:
-            image_path = instance.plan_image.path
-            instance.delete()
+        from django.conf import settings
+        # Save the file name BEFORE deleting the DB row.
+        image_name = instance.plan_image.name if instance.plan_image else None
+        instance.delete()
+        # Physically remove the file only after the DB row is gone.
+        if image_name:
+            image_path = os.path.join(settings.MEDIA_ROOT, image_name)
             if os.path.isfile(image_path):
                 os.remove(image_path)
-        else:
-            instance.delete()
 
 
 @extend_schema_view(

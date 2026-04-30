@@ -432,7 +432,7 @@ class TestGuestPassesAdminViewAC:
         ids = [row['id'] for row in response.data.get('results', response.data)]
         assert ids == [mine.id]
 
-    def test_superadmin_company_name_filter_does_not_match_partial(self, api_client, superadmin, company_admin):
+    def test_superadmin_company_name_filter_matches_partial(self, api_client, superadmin, company_admin):
         _create_pass(creator=company_admin, status_code='active')
         similar_company = Company.objects.create(name=f'{company_admin.company.name} Annex', plan='basic')
         similar_admin = User.objects.create_user(
@@ -449,7 +449,7 @@ class TestGuestPassesAdminViewAC:
         response = api_client.get(PASSES_URL, {'company_name': company_admin.company.name})
         assert response.status_code == status.HTTP_200_OK
         ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert similar_pass.id not in ids
+        assert similar_pass.id in ids
 
     def test_superadmin_filters_by_created_by(self, api_client, superadmin, company_admin):
         mine = _create_pass(creator=company_admin, status_code='active')
@@ -487,7 +487,7 @@ class TestGuestPassesAdminViewAC:
         ids = [row['id'] for row in response.data.get('results', response.data)]
         assert ids == [mine.id]
 
-    def test_superadmin_created_by_email_filter_does_not_match_partial(self, api_client, superadmin, company_admin):
+    def test_superadmin_created_by_email_filter_matches_partial(self, api_client, superadmin, company_admin):
         _create_pass(creator=company_admin, status_code='active')
         similar_creator = User.objects.create_user(
             email=f'prefix+{company_admin.email}',
@@ -503,7 +503,7 @@ class TestGuestPassesAdminViewAC:
         response = api_client.get(PASSES_URL, {'created_by_email': company_admin.email})
         assert response.status_code == status.HTTP_200_OK
         ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert similar_pass.id not in ids
+        assert similar_pass.id in ids
 
     def test_superadmin_filters_by_status(self, api_client, superadmin, company_admin):
         active_pass = _create_pass(creator=company_admin, status_code='active')

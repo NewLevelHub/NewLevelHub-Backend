@@ -576,7 +576,7 @@ class TestAttachmentStorageQuota:
         api_client.force_authenticate(admin_a)
         usage_url = '/api/v1/storage/usage/'
 
-        before = api_client.get(usage_url).json()['used_bytes']
+        before = api_client.get(usage_url).json()['company']['used_bytes']
 
         file_content = b'crm attachment for usage endpoint test'
         TaskAttachment.objects.create(
@@ -589,7 +589,7 @@ class TestAttachmentStorageQuota:
             storage_file=None,
         )
 
-        after = api_client.get(usage_url).json()['used_bytes']
+        after = api_client.get(usage_url).json()['company']['used_bytes']
         assert after == before + len(file_content)
 
     def test_storage_usage_endpoint_no_double_count_for_mode_b_attachment(
@@ -599,7 +599,7 @@ class TestAttachmentStorageQuota:
         api_client.force_authenticate(admin_a)
         usage_url = '/api/v1/storage/usage/'
 
-        before = api_client.get(usage_url).json()['used_bytes']
+        before = api_client.get(usage_url).json()['company']['used_bytes']
 
         # Link an existing storage file as a task attachment (Mode B).
         TaskAttachment.objects.create(
@@ -611,7 +611,7 @@ class TestAttachmentStorageQuota:
             uploaded_by=admin_a,
         )
 
-        after = api_client.get(usage_url).json()['used_bytes']
+        after = api_client.get(usage_url).json()['company']['used_bytes']
         # usage must not change — the storage file was already counted.
         assert after == before
 

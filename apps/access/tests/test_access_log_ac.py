@@ -362,6 +362,12 @@ class TestAccessLogExportAC:
         assert response.status_code == status.HTTP_200_OK
         assert 'text/csv' in response['Content-Type']
 
+    def test_export_with_format_csv_query_param_returns_200(self, api_client, superadmin, log_a):
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(LOGS_EXPORT_URL, {'format': 'csv'})
+        assert response.status_code == status.HTTP_200_OK
+        assert 'text/csv' in response['Content-Type']
+
     def test_export_has_content_disposition_attachment(self, api_client, superadmin, log_a):
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(LOGS_EXPORT_URL)

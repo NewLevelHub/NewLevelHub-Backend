@@ -13,7 +13,7 @@ from drf_spectacular.utils import (
     inline_serializer,
 )
 import rest_framework.fields as fields
-from rest_framework import viewsets, status
+from rest_framework import renderers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
@@ -27,6 +27,21 @@ from .tasks import notify_pass_creator_on_entry
 from .serializers import (
     AccessLogSerializer, GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer,
 )
+
+
+class CSVPassthroughRenderer(renderers.BaseRenderer):
+    media_type = 'text/csv'
+    format = 'csv'
+    charset = 'utf-8'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b''
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, str):
+            return data.encode(self.charset)
+        return str(data).encode(self.charset)
 
 
 @extend_schema_view(
@@ -266,6 +281,7 @@ def validate_qr(request):
 class AccessLogViewSet(viewsets.ModelViewSet):
     serializer_class = AccessLogSerializer
     permission_classes = [IsCompanyAdmin]
+    renderer_classes = [renderers.JSONRenderer, CSVPassthroughRenderer]
     http_method_names = ['get', 'post']
     queryset = AccessLog.objects.select_related(
         'guest_pass__created_by', 'guest_pass__company', 'checked_by', 'user',

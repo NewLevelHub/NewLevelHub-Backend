@@ -15,7 +15,7 @@ class MapPointAdmin(admin.ModelAdmin):
 
 @admin.register(ServiceRequest)
 class ServiceRequestAdmin(admin.ModelAdmin):
-    list_display = ['request_type', 'status', 'urgency', 'user', 'floor', 'created_at']
+    list_display = ['request_type', 'status', 'urgency', 'created_by', 'floor', 'created_at']
     list_filter = ['request_type', 'status', 'urgency']
     date_hierarchy = 'created_at'
 

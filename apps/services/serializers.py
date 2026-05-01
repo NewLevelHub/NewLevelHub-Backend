@@ -7,13 +7,33 @@ from apps.bookings.models import Booking, ResourceBlock
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 SOON_AVAILABLE_MINUTES = 30
+RESOURCE_STATUS_FREE = 'free'
+RESOURCE_STATUS_SOON_AVAILABLE = 'soon_available'
+RESOURCE_STATUS_OCCUPIED = 'occupied'
+RESOURCE_STATUS_BLOCKED = 'blocked'
 
 # Types that can be linked to a bookable resource
 _RESOURCE_POINT_TYPES = {'desk', 'meeting_room', 'parking', 'capsule'}
 
 
 class MapPointSerializer(serializers.ModelSerializer):
-    resource_status = serializers.SerializerMethodField()
+    resource_status = serializers.SerializerMethodField(
+        help_text=(
+            'Current resource status at requested datetime. '
+            'Possible values: free, soon_available, occupied, blocked, null. '
+            'Precedence: blocked > occupied/soon_available > free; null for non-bookable points.'
+        )
+    )
+    resource_status_reason = serializers.SerializerMethodField(
+        help_text=(
+            'Machine-readable reason for `resource_status`: '
+            'active_block, active_booking, active_booking_ends_within_threshold, '
+            'no_active_booking_or_block, not_a_bookable_resource.'
+        )
+    )
+    next_free_at = serializers.SerializerMethodField(
+        help_text='Datetime when point is expected to become free, or null if currently free/non-applicable.'
+    )
     resource_name = serializers.CharField(source='resource.name', read_only=True, allow_null=True)
     company_name = serializers.CharField(source='company.name', read_only=True, allow_null=True)
 
@@ -21,14 +41,26 @@ class MapPointSerializer(serializers.ModelSerializer):
         model = MapPoint
         fields = [
             'id', 'floor', 'point_type', 'label', 'x', 'y',
-            'resource', 'resource_name', 'resource_status',
+            'resource', 'resource_name', 'resource_status', 'resource_status_reason', 'next_free_at',
             'company', 'company_name',
         ]
-        read_only_fields = ['id', 'resource_name', 'resource_status', 'company_name']
+        read_only_fields = ['id', 'resource_name', 'resource_status', 'resource_status_reason', 'next_free_at',
+                            'company_name']
 
-    def get_resource_status(self, obj):
+    def _get_status_payload(self, obj):
+        status_cache = self.context.setdefault('_resource_status_payload_cache', {})
+        cached_payload = status_cache.get(obj.id)
+        if cached_payload is not None:
+            return cached_payload
+
         if obj.resource_id is None or obj.point_type not in _RESOURCE_POINT_TYPES:
-            return None
+            payload = {
+                'status': None,
+                'reason': 'not_a_bookable_resource',
+                'next_free_at': None,
+            }
+            status_cache[obj.id] = payload
+            return payload
 
         now = self.context.get('now') or timezone.now()
         active_block = (
@@ -41,8 +73,15 @@ class MapPointSerializer(serializers.ModelSerializer):
             .order_by('end_time')
             .first()
         )
+        # Blocks always win over booking-derived states.
         if active_block is not None:
-            return 'blocked'
+            payload = {
+                'status': RESOURCE_STATUS_BLOCKED,
+                'reason': 'active_block',
+                'next_free_at': active_block.end_time,
+            }
+            status_cache[obj.id] = payload
+            return payload
 
         active_booking = (
             Booking.objects
@@ -57,13 +96,40 @@ class MapPointSerializer(serializers.ModelSerializer):
         )
 
         if active_booking is None:
-            return 'free'
+            payload = {
+                'status': RESOURCE_STATUS_FREE,
+                'reason': 'no_active_booking_or_block',
+                'next_free_at': None,
+            }
+            status_cache[obj.id] = payload
+            return payload
 
         soon_threshold = now + timedelta(minutes=SOON_AVAILABLE_MINUTES)
         if active_booking.end_time <= soon_threshold:
-            return 'soon_available'
+            payload = {
+                'status': RESOURCE_STATUS_SOON_AVAILABLE,
+                'reason': 'active_booking_ends_within_threshold',
+                'next_free_at': active_booking.end_time,
+            }
+            status_cache[obj.id] = payload
+            return payload
 
-        return 'occupied'
+        payload = {
+            'status': RESOURCE_STATUS_OCCUPIED,
+            'reason': 'active_booking',
+            'next_free_at': active_booking.end_time,
+        }
+        status_cache[obj.id] = payload
+        return payload
+
+    def get_resource_status(self, obj):
+        return self._get_status_payload(obj)['status']
+
+    def get_resource_status_reason(self, obj):
+        return self._get_status_payload(obj)['reason']
+
+    def get_next_free_at(self, obj):
+        return self._get_status_payload(obj)['next_free_at']
 
     def validate(self, attrs):
         # On partial updates some fields may be absent — fall back to instance values.

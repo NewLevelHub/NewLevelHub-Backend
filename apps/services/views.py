@@ -20,7 +20,7 @@ from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementR
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer, MapPointSearchSerializer,
     ServiceRequestSerializer, ServiceRequestUpdateSerializer,
-    AnnouncementSerializer,
+    AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 
 
@@ -339,6 +339,12 @@ class FloorViewSet(viewsets.ModelViewSet):
     @extend_schema(
         tags=['Services'],
         summary='Floor map with resource statuses',
+        description=(
+            'Returns map points with booking-derived `resource_status` for the requested time. '
+            'Status precedence is deterministic: `blocked` > booking-derived states (`occupied`/`soon_available`) > '
+            '`free`. For non-bookable points or points without a linked resource, `resource_status` is null. '
+            f'`soon_available` means the active confirmed booking ends in <= {SOON_AVAILABLE_MINUTES} minutes.'
+        ),
         parameters=[
             OpenApiParameter(
                 'datetime',
@@ -361,6 +367,50 @@ class FloorViewSet(viewsets.ModelViewSet):
             400: OpenApiResponse(description='Invalid datetime parameter'),
             404: OpenApiResponse(description='Floor not found'),
         },
+        examples=[
+            OpenApiExample(
+                'Map status example',
+                value={
+                    'floor_id': 2,
+                    'floor_name': 'Second Floor',
+                    'at_time': '2026-05-01T11:00:00+06:00',
+                    'points': [
+                        {
+                            'id': 100,
+                            'floor': 2,
+                            'point_type': 'desk',
+                            'label': 'Desk A-01',
+                            'x': 15.0,
+                            'y': 20.0,
+                            'resource': 50,
+                            'resource_name': 'Desk A-01',
+                            'resource_status': 'soon_available',
+                            'resource_status_reason': 'active_booking_ends_within_threshold',
+                            'next_free_at': '2026-05-01T11:25:00+06:00',
+                            'company': 7,
+                            'company_name': 'ACME',
+                        },
+                        {
+                            'id': 101,
+                            'floor': 2,
+                            'point_type': 'kitchen',
+                            'label': 'Kitchen',
+                            'x': 70.0,
+                            'y': 40.0,
+                            'resource': None,
+                            'resource_name': None,
+                            'resource_status': None,
+                            'resource_status_reason': 'not_a_bookable_resource',
+                            'next_free_at': None,
+                            'company': 7,
+                            'company_name': 'ACME',
+                        },
+                    ],
+                },
+                response_only=True,
+                status_codes=['200'],
+            ),
+        ],
     )
     @action(detail=True, methods=['get'], url_path='map')
     def map(self, request, pk=None):

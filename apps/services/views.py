@@ -12,8 +12,14 @@ from drf_spectacular.utils import (
 import rest_framework.fields as fields
 
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdmin, IsCompanyAdminOrReadOnly, IsOwnerOrSuperAdmin
-from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.core.permissions import (
+    IsSuperAdmin,
+    IsCompanyMember,
+    IsCompanyAdmin,
+    IsCompanyAdminOrReadOnly,
+    IsOwnerOrSuperAdmin,
+)
+from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead

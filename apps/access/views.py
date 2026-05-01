@@ -1,22 +1,47 @@
+import csv
 from datetime import timedelta
-from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
-import rest_framework.fields as fields
+
 from django.core.cache import cache
 from django.db import transaction
+from django.http import HttpResponse
 from django.utils import timezone
-
-from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
-from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from .models import GuestPass, AccessLog
-from .filters import GuestPassFilter
-from . import tasks
-from .serializers import (
-    GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer, AccessLogSerializer,
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+    inline_serializer,
 )
+import rest_framework.fields as fields
+from rest_framework import renderers, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import BasePermission
+from rest_framework.response import Response
+
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from .filters import AccessLogFilter, GuestPassFilter
+from .models import AccessLog, GuestPass
+from . import tasks
+from .tasks import notify_pass_creator_on_entry
+from .serializers import (
+    AccessLogSerializer, GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer,
+)
+
+
+class CSVPassthroughRenderer(renderers.BaseRenderer):
+    media_type = 'text/csv'
+    format = 'csv'
+    charset = 'utf-8'
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b''
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, str):
+            return data.encode(self.charset)
+        return str(data).encode(self.charset)
 
 
 @extend_schema_view(
@@ -154,6 +179,14 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         return Response({'detail': 'QR code resent'})
 
 
+class IsSuperAdminOrReception(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user and user.is_authenticated and user.role in ('superadmin', 'reception')
+        )
+
+
 @extend_schema(
     tags=['Access'],
     summary='Validate QR code (reception desk)',
@@ -164,27 +197,35 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
             fields={
                 'valid': fields.BooleanField(),
                 'guest_name': fields.CharField(),
-                'visit_purpose': fields.CharField(),
-                'created_by': fields.CharField(),
+                'purpose': fields.CharField(),
+                'invited_by': fields.CharField(),
+                'valid_from': fields.DateTimeField(),
+                'valid_until': fields.DateTimeField(),
             },
         ),
-        400: OpenApiResponse(description='Invalid or missing QR code'),
+        400: OpenApiResponse(description='Invalid or missing QR code in payload'),
         401: OpenApiResponse(description='Not authenticated'),
-        404: OpenApiResponse(description='Pass not found'),
+        403: OpenApiResponse(description='Only superadmin and reception can validate'),
     },
 )
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsSuperAdminOrReception])
 def validate_qr(request):
     serializer = GuestPassValidateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     try:
         guest_pass = GuestPass.objects.get(qr_code=serializer.validated_data['qr_code'])
     except GuestPass.DoesNotExist:
-        return Response({'valid': False, 'reason': 'Pass not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'valid': False, 'reason': 'not_found'})
 
-    if not guest_pass.is_valid:
-        return Response({'valid': False, 'reason': f'Pass status: {guest_pass.status}'})
+    if guest_pass.valid_until < timezone.now():
+        return Response({'valid': False, 'reason': 'expired'})
+    if guest_pass.status == 'revoked':
+        return Response({'valid': False, 'reason': 'revoked'})
+    if guest_pass.status == 'used' or (guest_pass.usage_type == 'single' and guest_pass.times_used > 0):
+        return Response({'valid': False, 'reason': 'already_used'})
+    if guest_pass.status != 'active':
+        return Response({'valid': False, 'reason': 'not_found'})
 
     # Зафиксировать использование
     guest_pass.times_used += 1
@@ -197,12 +238,17 @@ def validate_qr(request):
         checked_by=request.user,
         method='qr',
     )
-    # TODO: уведомить создателя пропуска
+    try:
+        notify_pass_creator_on_entry.delay(guest_pass.id)
+    except Exception:
+        pass
     return Response({
         'valid': True,
         'guest_name': guest_pass.guest_name,
-        'visit_purpose': guest_pass.visit_purpose,
-        'created_by': guest_pass.created_by.full_name,
+        'purpose': guest_pass.visit_purpose,
+        'invited_by': guest_pass.created_by.full_name,
+        'valid_from': guest_pass.valid_from,
+        'valid_until': guest_pass.valid_until,
     })
 
 
@@ -210,7 +256,16 @@ def validate_qr(request):
     list=extend_schema(
         tags=['Access'],
         summary='List access logs',
-        responses={200: AccessLogSerializer(many=True), 403: OpenApiResponse(description='Superadmin only')},
+        parameters=[
+            OpenApiParameter('company_id', int, description='Filter by company'),
+            OpenApiParameter('date_from', str, description='Filter from date (YYYY-MM-DD)'),
+            OpenApiParameter('date_to', str, description='Filter to date (YYYY-MM-DD)'),
+            OpenApiParameter('search', str, description='Search by guest name or email'),
+        ],
+        responses={
+            200: AccessLogSerializer(many=True),
+            403: OpenApiResponse(description='Company admin or superadmin required'),
+        },
     ),
     create=extend_schema(
         tags=['Access'],
@@ -219,13 +274,65 @@ def validate_qr(request):
         responses={
             201: AccessLogSerializer,
             400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            403: OpenApiResponse(description='Company admin or superadmin required'),
         },
     ),
 )
 class AccessLogViewSet(viewsets.ModelViewSet):
     serializer_class = AccessLogSerializer
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [IsCompanyAdmin]
+    renderer_classes = [renderers.JSONRenderer, CSVPassthroughRenderer]
     http_method_names = ['get', 'post']
-    queryset = AccessLog.objects.all()
-    filterset_fields = ['method', 'is_entry']
+    queryset = AccessLog.objects.select_related(
+        'guest_pass__created_by', 'guest_pass__company', 'checked_by', 'user',
+    ).order_by('-created_at')
+    filterset_class = AccessLogFilter
+    search_fields = ['guest_pass__guest_name', 'guest_pass__guest_email']
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = super().get_queryset()
+        if user.role == 'superadmin':
+            return qs
+        return qs.filter(guest_pass__company=user.company)
+
+    @extend_schema(
+        tags=['Access'],
+        summary='Export access logs as CSV',
+        parameters=[
+            OpenApiParameter('date_from', str, description='From date (YYYY-MM-DD)'),
+            OpenApiParameter('date_to', str, description='To date (YYYY-MM-DD)'),
+            OpenApiParameter('company_id', int, description='Filter by company (superadmin only)'),
+        ],
+        responses={200: OpenApiResponse(description='CSV file download')},
+    )
+    @action(detail=False, methods=['get'], url_path='export')
+    def export(self, request):
+        qs = self.filter_queryset(self.get_queryset())
+
+        response = HttpResponse(content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = 'attachment; filename="access_logs.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow(['id', 'guest_pass', 'invited_by', 'validated_at', 'validated_by',
+                         'entry_point', 'method', 'is_entry'])
+
+        for log in qs:
+            invited_by = ''
+            if log.guest_pass and log.guest_pass.created_by:
+                invited_by = log.guest_pass.created_by.full_name
+            validated_by = log.checked_by.full_name if log.checked_by else ''
+            guest_pass_id = log.guest_pass_id or ''
+
+            writer.writerow([
+                log.id,
+                guest_pass_id,
+                invited_by,
+                log.created_at.isoformat() if log.created_at else '',
+                validated_by,
+                log.entry_point,
+                log.method,
+                log.is_entry,
+            ])
+
+        return response

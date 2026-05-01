@@ -1,10 +1,14 @@
 from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.filters import SearchFilter
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import (
+    extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, inline_serializer,
+)
 import rest_framework.fields as fields
 
 from apps.core.pagination import FeedCursorPagination
@@ -13,7 +17,7 @@ from apps.core.permissions import (
 )
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
-    FloorSerializer, MapPointSerializer,
+    FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     ServiceRequestSerializer, ServiceRequestUpdateSerializer,
     AnnouncementSerializer,
 )
@@ -21,47 +25,332 @@ from .serializers import (
 
 # ── Карта здания ──────────────────────────────────────────────────────
 
+_FLOOR_EXAMPLE = {
+    'id': 1,
+    'number': 3,
+    'name': 'Third Floor',
+    'plan_image': 'floors/plan_3.png',
+    'plan_image_url': 'https://api.example.com/media/floors/plan_3.png',
+    'company': 7,
+    'created_at': '2024-01-15T09:00:00+06:00',
+    'updated_at': '2024-03-20T14:30:00+06:00',
+}
+
+_FLOOR_WITH_POINTS_EXAMPLE = {
+    **_FLOOR_EXAMPLE,
+    'map_points': [
+        {
+            'id': 12,
+            'floor': 1,
+            'point_type': 'desk',
+            'label': 'Desk A1',
+            'x': 120.5,
+            'y': 87.3,
+            'resource': 5,
+            'company': 7,
+        },
+        {
+            'id': 13,
+            'floor': 1,
+            'point_type': 'meeting_room',
+            'label': 'Conf Room B',
+            'x': 340.0,
+            'y': 200.0,
+            'resource': None,
+            'company': 7,
+        },
+    ],
+}
+
+_ERROR_400 = {'error': True, 'status_code': 400, 'detail': {'number': ['This field is required.']}}
+_ERROR_401 = {'error': True, 'status_code': 401, 'detail': 'Authentication credentials were not provided.'}
+_ERROR_403 = {'error': True, 'status_code': 403, 'detail': 'You do not have permission to perform this action.'}
+_ERROR_404 = {'error': True, 'status_code': 404, 'detail': 'Not found.'}
+
+
 @extend_schema_view(
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create floor (superadmin only)',
+        description=(
+            'Creates a new floor for the company. '
+            'Accepts multipart/form-data to allow uploading an optional floor plan image. '
+            'Restricted to superadmin.'
+        ),
+        request=inline_serializer(
+            name='FloorCreateRequest',
+            fields={
+                'number': fields.IntegerField(help_text='Floor number (e.g. 1, 2, 3).'),
+                'name': fields.CharField(help_text='Human-readable floor name.'),
+                'plan_image': fields.ImageField(required=False, help_text='Optional floor plan image file.'),
+            },
+        ),
+        responses={
+            201: OpenApiResponse(
+                response=FloorSerializer,
+                description='Floor created successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Created floor',
+                        value=_FLOOR_EXAMPLE,
+                        response_only=True,
+                        status_codes=['201'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Validation error.',
+                examples=[
+                    OpenApiExample(
+                        'Validation error',
+                        value=_ERROR_400,
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(
+                description='Not authenticated.',
+                examples=[
+                    OpenApiExample(
+                        'Unauthenticated',
+                        value=_ERROR_401,
+                        response_only=True,
+                        status_codes=['401'],
+                    ),
+                ],
+            ),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+        },
+    ),
     list=extend_schema(
         tags=['Services'],
         summary='List floors',
-        responses={200: FloorSerializer(many=True)},
+        description=(
+            'Returns all floors for the company. '
+            'Each floor includes `plan_image_url` (absolute URL or null). '
+            'Accessible by any company member.'
+        ),
+        responses={
+            200: OpenApiResponse(
+                response=FloorSerializer(many=True),
+                description='Floors retrieved successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Floor list',
+                        value=[_FLOOR_EXAMPLE],
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+        },
     ),
     retrieve=extend_schema(
         tags=['Services'],
-        summary='Get floor with map points',
-        responses={200: FloorSerializer, 404: OpenApiResponse(description='Not found')},
-    ),
-    create=extend_schema(
-        tags=['Services'],
-        summary='Create floor (superadmin)',
-        request=FloorSerializer,
+        summary='Get floor details with map points',
+        description=(
+            'Returns floor details including all `map_points` (nested). '
+            'Accessible by any company member.'
+        ),
         responses={
-            201: FloorSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            200: OpenApiResponse(
+                response=FloorDetailSerializer,
+                description='Floor with nested map points.',
+                examples=[
+                    OpenApiExample(
+                        'Floor detail',
+                        value=_FLOOR_WITH_POINTS_EXAMPLE,
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
         },
     ),
     partial_update=extend_schema(
         tags=['Services'],
-        summary='Update floor',
-        request=FloorSerializer,
-        responses={200: FloorSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        summary='Partially update floor (superadmin only)',
+        description='Updates one or more fields of a floor. All fields are optional. Restricted to superadmin.',
+        request=inline_serializer(
+            name='FloorPartialUpdateRequest',
+            fields={
+                'number': fields.IntegerField(
+                    required=False, help_text='New floor number.'
+                ),
+                'name': fields.CharField(
+                    required=False, help_text='New floor name.'
+                ),
+                'plan_image': fields.ImageField(
+                    required=False, help_text='Replacement floor plan image file.'
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(
+                response=FloorSerializer,
+                description='Floor updated successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Updated floor',
+                        value=_FLOOR_EXAMPLE,
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Validation error.',
+                examples=[
+                    OpenApiExample(
+                        'Validation error',
+                        value=_ERROR_400,
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
+        },
     ),
     destroy=extend_schema(
         tags=['Services'],
-        summary='Delete floor',
-        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+        summary='Delete floor (superadmin only)',
+        description=(
+            'Permanently deletes the floor and the plan image file from disk. '
+            'Cascades to all map_points on this floor. '
+            'Restricted to superadmin.'
+        ),
+        responses={
+            204: OpenApiResponse(description='Floor and all its map_points deleted.'),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
+        },
     ),
 )
 class FloorViewSet(viewsets.ModelViewSet):
-    queryset = Floor.objects.prefetch_related('points')
+    """
+    Floors are building-level objects, not company-scoped.
+    Superadmin creates floors (company=null); all company members must see them.
+
+    QuerySet rules:
+      - superadmin  → all floors
+      - company member → floors where company IS NULL  OR  company = user.company
+      - no company (guest) → only global floors (company IS NULL)
+    """
+
+    queryset = Floor.objects.prefetch_related('points__resource', 'points__company').select_related('company')
     serializer_class = FloorSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'superadmin':
+            return qs
+        if user.company_id:
+            return qs.filter(company__isnull=True) | qs.filter(company=user.company_id)
+        # guest or user without company — show only global floors
+        return qs.filter(company__isnull=True)
+
+    def perform_create(self, serializer):
+        # Floors are global; superadmin creates them without a company.
+        serializer.save(company=None)
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyMember()]
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return FloorDetailSerializer
+        return FloorSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action == 'retrieve':
+            context['now'] = timezone.now()
+        return context
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        old_path = instance.plan_image.name if instance.plan_image else None
+        instance = serializer.save()
+        new_path = instance.plan_image.name if instance.plan_image else None
+        # If the file was replaced — delete the old one from storage
+        if old_path and old_path != new_path:
+            instance.plan_image.storage.delete(old_path)
+
+    def perform_destroy(self, instance):
+        image_name = instance.plan_image.name if instance.plan_image else None
+        storage = instance.plan_image.storage if instance.plan_image else None
+        instance.delete()
+        # Physically remove the file after the DB row is gone
+        if image_name and storage:
+            storage.delete(image_name)
 
 
 @extend_schema_view(
@@ -93,8 +382,10 @@ class FloorViewSet(viewsets.ModelViewSet):
     ),
 )
 class MapPointViewSet(viewsets.ModelViewSet):
-    queryset = MapPoint.objects.all()
+    queryset = MapPoint.objects.select_related('resource', 'company')
     serializer_class = MapPointSerializer
+    filter_backends = [SearchFilter]
+    search_fields = ['label']
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):

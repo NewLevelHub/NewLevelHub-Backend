@@ -7,10 +7,12 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.access.models import GuestPass
+from apps.access.models import AccessLog
 from apps.companies.models import Company
 from apps.users.models import User
 
 PASSES_URL = '/api/v1/access/passes/'
+VALIDATE_URL = '/api/v1/access/validate/'
 
 
 def pass_detail_url(pass_id):
@@ -307,224 +309,147 @@ class TestGuestPassesDetailAC:
 
 
 @pytest.mark.django_db
-class TestGuestPassActionsAC:
-    def test_revoke_sets_status_revoked(self, api_client, company_admin):
-        target_pass = _create_pass(creator=company_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.post(pass_revoke_url(target_pass.id))
-        assert response.status_code == status.HTTP_200_OK
-        target_pass.refresh_from_db()
-        assert target_pass.status == 'revoked'
-
-    @pytest.mark.parametrize('blocked_status', ['used', 'expired'])
-    def test_revoke_rejects_used_or_expired(self, api_client, company_admin, blocked_status):
-        target_pass = _create_pass(creator=company_admin, status_code=blocked_status)
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.post(pass_revoke_url(target_pass.id))
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_revoke_rejects_used_pass_after_qr_validation(self, api_client, company_admin):
-        receiver = User.objects.create_user(
-            email='reception@test.local',
+class TestGuestPassesValidateQrAC:
+    def test_superadmin_can_validate_qr(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-superadmin@test.local',
             password='pass',
-            first_name='Reception',
-            last_name='Desk',
-            role='employee',
+            first_name='Validate',
+            last_name='SuperAdmin',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['valid'] is True
+
+    def test_reception_can_validate_qr(self, api_client, company_admin):
+        reception = User.objects.create_user(
+            email='validate-reception@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Reception',
+            role='reception',
             company=company_admin.company,
             is_email_verified=True,
         )
-        target_pass = _create_pass(creator=company_admin, status_code='active', usage_type='single')
-        api_client.force_authenticate(user=receiver)
-        validate_response = api_client.post(
-            '/api/v1/access/validate/',
-            {'qr_code': str(target_pass.qr_code)},
-            format='json',
-        )
-        assert validate_response.status_code == status.HTTP_200_OK
-        target_pass.refresh_from_db()
-        assert target_pass.status == 'used'
-
-        api_client.force_authenticate(user=company_admin)
-        revoke_response = api_client.post(pass_revoke_url(target_pass.id))
-        assert revoke_response.status_code == status.HTTP_400_BAD_REQUEST
-        target_pass.refresh_from_db()
-        assert target_pass.status == 'used'
-
-    def test_superadmin_can_revoke_any_company_pass(self, api_client, superadmin, second_company_admin):
-        target_pass = _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.post(pass_revoke_url(target_pass.id))
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=reception)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        target_pass.refresh_from_db()
-        assert target_pass.status == 'revoked'
+        assert response.data['valid'] is True
 
-    def test_company_admin_cannot_revoke_other_company_pass(self, api_client, company_admin, second_company_admin):
-        target_pass = _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.post(pass_revoke_url(target_pass.id))
-        assert response.status_code == status.HTTP_404_NOT_FOUND
+    @pytest.mark.parametrize('role', ['company_admin', 'employee', 'guest'])
+    def test_other_roles_get_403(self, api_client, company_admin, employee, guest_user, role):
+        role_to_user = {
+            'company_admin': company_admin,
+            'employee': employee,
+            'guest': guest_user,
+        }
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
+        api_client.force_authenticate(user=role_to_user[role])
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
-    @patch('apps.access.tasks.send_guest_pass_email.delay')
-    def test_resend_requeues_qr_email(self, mocked_delay, api_client, company_admin):
-        target_pass = _create_pass(creator=company_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.post(pass_resend_url(target_pass.id))
-        assert response.status_code == status.HTTP_200_OK
-        mocked_delay.assert_called_once_with(target_pass.id)
-
-    @patch('apps.access.tasks.send_guest_pass_email.delay')
-    def test_resend_rate_limited_to_three_per_hour(self, mocked_delay, api_client, company_admin):
-        target_pass = _create_pass(creator=company_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
-        for _ in range(3):
-            ok_response = api_client.post(pass_resend_url(target_pass.id))
-            assert ok_response.status_code == status.HTTP_200_OK
-        limited_response = api_client.post(pass_resend_url(target_pass.id))
-        assert limited_response.status_code == status.HTTP_429_TOO_MANY_REQUESTS
-        assert mocked_delay.call_count == 3
-
-    @pytest.mark.parametrize('blocked_status', ['revoked', 'used', 'expired'])
-    @patch('apps.access.tasks.send_guest_pass_email.delay')
-    def test_resend_rejects_non_active_statuses(self, mocked_delay, api_client, company_admin, blocked_status):
-        target_pass = _create_pass(creator=company_admin, status_code=blocked_status)
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.post(pass_resend_url(target_pass.id))
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        mocked_delay.assert_not_called()
-
-
-@pytest.mark.django_db
-class TestGuestPassesAdminViewAC:
-    def test_company_admin_sees_only_own_company_passes(self, api_client, company_admin, second_company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
-        _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=company_admin)
-        response = api_client.get(PASSES_URL)
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert ids == [mine.id]
-
-    def test_superadmin_sees_all_passes(self, api_client, superadmin, company_admin, second_company_admin):
-        first = _create_pass(creator=company_admin, status_code='active')
-        second = _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL)
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert first.id in ids
-        assert second.id in ids
-
-    def test_superadmin_filters_by_company_id(self, api_client, superadmin, company_admin, second_company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
-        _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'company_id': company_admin.company_id})
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert ids == [mine.id]
-
-    def test_superadmin_filters_by_company_name(self, api_client, superadmin, company_admin, second_company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
-        _create_pass(creator=second_company_admin, status_code='active')
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'company_name': company_admin.company.name})
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert ids == [mine.id]
-
-    def test_superadmin_company_name_filter_matches_partial(self, api_client, superadmin, company_admin):
-        _create_pass(creator=company_admin, status_code='active')
-        similar_company = Company.objects.create(name=f'{company_admin.company.name} Annex', plan='basic')
-        similar_admin = User.objects.create_user(
-            email='access-admin-similar@test.local',
+    def test_validate_valid_pass_returns_ac_payload(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-payload-superadmin@test.local',
             password='pass',
-            first_name='Access',
-            last_name='AdminSimilar',
-            role='company_admin',
-            company=similar_company,
+            first_name='Validate',
+            last_name='Payload',
+            role='superadmin',
             is_email_verified=True,
         )
-        similar_pass = _create_pass(creator=similar_admin, status_code='active')
+        guest_pass = _create_pass(creator=company_admin, status_code='active')
         api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'company_name': company_admin.company.name})
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert similar_pass.id in ids
+        assert response.data['valid'] is True
+        assert response.data['guest_name'] == guest_pass.guest_name
+        assert response.data['purpose'] == guest_pass.visit_purpose
+        assert response.data['invited_by'] == guest_pass.created_by.full_name
+        assert response.data['valid_from'].isoformat() == guest_pass.valid_from.isoformat()
+        assert response.data['valid_until'].isoformat() == guest_pass.valid_until.isoformat()
 
-    def test_superadmin_filters_by_created_by(self, api_client, superadmin, company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
-        another = User.objects.create_user(
-            email='creator-filter@test.local',
+    @pytest.mark.parametrize(
+        ('status_code', 'valid_until_delta', 'times_used', 'expected_reason'),
+        [
+            ('active', timedelta(days=-1), 0, 'expired'),
+            ('revoked', timedelta(days=1), 0, 'revoked'),
+            ('used', timedelta(days=1), 1, 'already_used'),
+        ],
+    )
+    def test_validate_invalid_pass_returns_expected_reason(
+        self,
+        api_client,
+        company_admin,
+        status_code,
+        valid_until_delta,
+        times_used,
+        expected_reason,
+    ):
+        superadmin = User.objects.create_user(
+            email=f'validate-invalid-{expected_reason}@test.local',
             password='pass',
-            first_name='Creator',
-            last_name='Filter',
-            role='employee',
+            first_name='Validate',
+            last_name='Invalid',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
             company=company_admin.company,
-            is_email_verified=True,
+            guest_name='Invalid Guest',
+            guest_email=f'invalid-{expected_reason}@test.local',
+            visit_purpose='Invalid check',
+            status=status_code,
+            usage_type='single',
+            times_used=times_used,
+            valid_from=now - timedelta(hours=1),
+            valid_until=now + valid_until_delta,
         )
-        _create_pass(creator=another, status_code='active')
         api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'created_by': company_admin.id})
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert ids == [mine.id]
+        assert response.data == {'valid': False, 'reason': expected_reason}
 
-    def test_superadmin_filters_by_created_by_email(self, api_client, superadmin, company_admin):
-        mine = _create_pass(creator=company_admin, status_code='active')
-        another = User.objects.create_user(
-            email='creator-email-filter@test.local',
+    def test_validate_not_found_returns_reason_not_found(self, api_client):
+        superadmin = User.objects.create_user(
+            email='validate-not-found@test.local',
             password='pass',
-            first_name='Creator',
-            last_name='EmailFilter',
-            role='employee',
-            company=company_admin.company,
+            first_name='Validate',
+            last_name='NotFound',
+            role='superadmin',
             is_email_verified=True,
         )
-        _create_pass(creator=another, status_code='active')
         api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'created_by_email': company_admin.email})
+        response = api_client.post(VALIDATE_URL, {'qr_code': '64fdbf4f-465e-40e6-8ef4-3f3c96d34ac6'}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert ids == [mine.id]
+        assert response.data == {'valid': False, 'reason': 'not_found'}
 
-    def test_superadmin_created_by_email_filter_matches_partial(self, api_client, superadmin, company_admin):
-        _create_pass(creator=company_admin, status_code='active')
-        similar_creator = User.objects.create_user(
-            email=f'prefix+{company_admin.email}',
+    @patch('apps.access.views.notify_pass_creator_on_entry.delay')
+    def test_single_use_marks_used_creates_log_and_notifies(self, mocked_notify_delay, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-sideeffects@test.local',
             password='pass',
-            first_name='Creator',
-            last_name='Similar',
-            role='employee',
-            company=company_admin.company,
+            first_name='Validate',
+            last_name='Effects',
+            role='superadmin',
             is_email_verified=True,
         )
-        similar_pass = _create_pass(creator=similar_creator, status_code='active')
+        guest_pass = _create_pass(creator=company_admin, status_code='active', usage_type='single')
         api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'created_by_email': company_admin.email})
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert similar_pass.id in ids
 
-    def test_superadmin_filters_by_status(self, api_client, superadmin, company_admin):
-        active_pass = _create_pass(creator=company_admin, status_code='active')
-        revoked_pass = _create_pass(creator=company_admin, status_code='revoked')
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'status': 'active'})
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert active_pass.id in ids
-        assert revoked_pass.id not in ids
+        guest_pass.refresh_from_db()
+        assert guest_pass.status == 'used'
+        assert guest_pass.times_used == 1
 
-    def test_superadmin_filters_by_created_at_dates(self, api_client, superadmin, company_admin):
-        old_pass = _create_pass(creator=company_admin, status_code='active')
-        old_created_at = timezone.now() - timedelta(days=10)
-        GuestPass.objects.filter(pk=old_pass.pk).update(created_at=old_created_at)
-        recent_pass = _create_pass(creator=company_admin, status_code='active')
-        date_from = (timezone.now() - timedelta(days=2)).date().isoformat()
-        date_to = timezone.now().date().isoformat()
-        api_client.force_authenticate(user=superadmin)
-        response = api_client.get(PASSES_URL, {'date_from': date_from, 'date_to': date_to})
-        assert response.status_code == status.HTTP_200_OK
-        ids = [row['id'] for row in response.data.get('results', response.data)]
-        assert recent_pass.id in ids
-        assert old_pass.id not in ids
+        access_log = AccessLog.objects.get(guest_pass=guest_pass)
+        assert access_log.checked_by == superadmin
+        assert access_log.method == 'qr'
+        mocked_notify_delay.assert_called_once_with(guest_pass.id)

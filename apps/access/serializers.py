@@ -121,10 +121,25 @@ class GuestPassValidateSerializer(serializers.Serializer):
 
 
 class AccessLogSerializer(serializers.ModelSerializer):
+    invited_by = serializers.SerializerMethodField()
+    validated_at = serializers.DateTimeField(source='created_at', read_only=True)
+    validated_by = serializers.SerializerMethodField()
+
     class Meta:
         model = AccessLog
         fields = [
             'id', 'guest_pass', 'user', 'checked_by',
             'entry_point', 'method', 'is_entry', 'created_at',
+            'invited_by', 'validated_at', 'validated_by',
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_invited_by(self, obj):
+        if obj.guest_pass and obj.guest_pass.created_by:
+            return obj.guest_pass.created_by.full_name
+        return None
+
+    def get_validated_by(self, obj):
+        if obj.checked_by:
+            return obj.checked_by.full_name
+        return None

@@ -1,0 +1,20 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+    dependencies = [
+        ('access', '0004_guestpass_qr_image'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='guestpass',
+            name='resend_attempts_in_window',
+            field=models.PositiveSmallIntegerField(default=0),
+        ),
+        migrations.AddField(
+            model_name='guestpass',
+            name='resend_window_started_at',
+            field=models.DateTimeField(blank=True, null=True),
+        ),
+    ]

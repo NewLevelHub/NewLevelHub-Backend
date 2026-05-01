@@ -350,7 +350,9 @@ class TestTaskList:
     ):
         task_b = Task.objects.create(column=column_b, title='Other Co', priority='low', position=1)
         api_client.force_authenticate(superadmin)
-        res = api_client.get(TASKS_URL)
+        # Use page_size=100 to avoid false negatives when other tests have already
+        # inserted tasks and the default first page (size=20) doesn't include task_a.
+        res = api_client.get(TASKS_URL, {'page_size': 100})
         assert res.status_code == status.HTTP_200_OK
         ids = [t['id'] for t in res.data['results']]
         assert task_a.id in ids

@@ -1,13 +1,16 @@
 """Integration tests for Floor Plans CRUD (services app)."""
 
 import io
+from datetime import timedelta
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from apps.bookings.models import Resource
 from apps.companies.models import Company
 from apps.services.models import Floor, MapPoint
 from apps.users.models import User
@@ -18,6 +21,10 @@ FLOORS_URL = '/api/v1/services/floors/'
 
 def floors_detail_url(floor_id):
     return f'{FLOORS_URL}{floor_id}/'
+
+
+def floors_map_url(floor_id):
+    return f'{FLOORS_URL}{floor_id}/map/'
 
 
 def make_image_file(name='plan.jpg'):
@@ -251,6 +258,51 @@ def test_retrieve_floor_plan_image_url_is_none_when_no_image(api_client, employe
     response = api_client.get(floors_detail_url(floor.id))
     assert response.status_code == status.HTTP_200_OK
     assert response.json()['plan_image_url'] is None
+
+
+@pytest.mark.django_db
+def test_floor_map_returns_blocked_status_for_active_resource_block(api_client, superadmin, employee, company):
+    floor = Floor.objects.create(number=4, name='Fourth Floor', company=company)
+    resource = Resource.objects.create(
+        name='Desk A-11',
+        resource_type='desk',
+        floor=floor.number,
+    )
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='desk',
+        x=15.0,
+        y=25.0,
+        label='Desk A-11',
+        resource=resource,
+        company=company,
+    )
+
+    check_time = timezone.now().replace(microsecond=0)
+    block_start = check_time - timedelta(minutes=30)
+    block_end = check_time + timedelta(minutes=30)
+
+    auth(api_client, superadmin)
+    block_response = api_client.post(
+        f'/api/v1/bookings/resources/{resource.id}/block/',
+        {
+            'start_time': block_start.isoformat(),
+            'end_time': block_end.isoformat(),
+            'reason': 'Maintenance window',
+        },
+        format='json',
+    )
+    assert block_response.status_code == status.HTTP_201_CREATED
+
+    auth(api_client, employee)
+    map_response = api_client.get(
+        floors_map_url(floor.id),
+        {'datetime': check_time.isoformat()},
+    )
+    assert map_response.status_code == status.HTTP_200_OK
+    points = map_response.json()['points']
+    point_payload = next(item for item in points if item['id'] == point.id)
+    assert point_payload['resource_status'] == 'blocked'
 
 
 # ── PATCH ─────────────────────────────────────────────────────────────────────

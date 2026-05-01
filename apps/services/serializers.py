@@ -3,7 +3,7 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
-from apps.bookings.models import Booking
+from apps.bookings.models import Booking, ResourceBlock
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 SOON_AVAILABLE_MINUTES = 30
@@ -31,6 +31,18 @@ class MapPointSerializer(serializers.ModelSerializer):
             return None
 
         now = self.context.get('now') or timezone.now()
+        active_block = (
+            ResourceBlock.objects
+            .filter(
+                resource_id=obj.resource_id,
+                start_time__lte=now,
+                end_time__gt=now,
+            )
+            .order_by('end_time')
+            .first()
+        )
+        if active_block is not None:
+            return 'blocked'
 
         active_booking = (
             Booking.objects

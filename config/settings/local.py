@@ -29,6 +29,10 @@ if DEBUG:
 # Email backend for development (configurable via .env)
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
+# Celery — run tasks synchronously in local/test environments (no broker required)
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = False
+
 # Logging
 LOGGING = {
     'version': 1,

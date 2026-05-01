@@ -48,6 +48,21 @@ def expire_guest_passes():
 
 @shared_task
 def notify_pass_creator_on_entry(guest_pass_id):
-    """Уведомить создателя пропуска, что гость прошёл."""
-    # TODO: отправить уведомление
-    pass
+    """Notify the pass creator via email that the guest has been validated at reception."""
+    try:
+        guest_pass = GuestPass.objects.select_related('created_by').get(id=guest_pass_id)
+    except GuestPass.DoesNotExist:
+        return
+
+    from apps.notifications.tasks import send_notification_email
+    send_notification_email.delay(
+        guest_pass.created_by.id,
+        'guest_validated',
+        {
+            'subject': 'Гостевой пропуск подтверждён',
+            'guest_name': guest_pass.guest_name,
+            'visit_purpose': guest_pass.visit_purpose,
+            'validated_at': timezone.now().strftime('%Y-%m-%d %H:%M'),
+            'action_url': '/access/',
+        },
+    )

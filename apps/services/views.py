@@ -392,23 +392,21 @@ class FloorViewSet(viewsets.ModelViewSet):
         })
 
     def perform_update(self, serializer):
-        old_image = self.get_object().plan_image
+        instance = serializer.instance
+        old_path = instance.plan_image.name if instance.plan_image else None
         instance = serializer.save()
-        # Если файл заменили — удалить старый с диска
-        if old_image and old_image != instance.plan_image:
-            if os.path.isfile(old_image.path):
-                os.remove(old_image.path)
+        new_path = instance.plan_image.name if instance.plan_image else None
+        # If the file was replaced — delete the old one from storage
+        if old_path and old_path != new_path:
+            instance.plan_image.storage.delete(old_path)
 
     def perform_destroy(self, instance):
-        from django.conf import settings
-        # Save the file name BEFORE deleting the DB row.
         image_name = instance.plan_image.name if instance.plan_image else None
+        storage = instance.plan_image.storage if instance.plan_image else None
         instance.delete()
-        # Physically remove the file only after the DB row is gone.
-        if image_name:
-            image_path = os.path.join(settings.MEDIA_ROOT, image_name)
-            if os.path.isfile(image_path):
-                os.remove(image_path)
+        # Physically remove the file after the DB row is gone
+        if image_name and storage:
+            storage.delete(image_name)
 
 
 @extend_schema_view(

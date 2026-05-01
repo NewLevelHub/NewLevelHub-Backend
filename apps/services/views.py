@@ -1,5 +1,3 @@
-import os
-
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime

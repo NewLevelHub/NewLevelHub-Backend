@@ -6,9 +6,13 @@ from apps.core.models import TimeStampedModel
 # ── Карта здания ──────────────────────────────────────────────────────
 
 class Floor(TimeStampedModel):
-    number = models.PositiveIntegerField(unique=True)
+    number = models.PositiveIntegerField()
     name = models.CharField(max_length=100, blank=True, default='')
-    plan_image = models.ImageField(upload_to='floor_plans/', null=True, blank=True)
+    plan_image = models.ImageField(upload_to='floors/plans/', null=True, blank=True)
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE,
+        null=True, blank=True, related_name='floors',
+    )
 
     class Meta:
         db_table = 'building_floors'

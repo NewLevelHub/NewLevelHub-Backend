@@ -19,7 +19,7 @@ from apps.core.permissions import (
     IsCompanyAdminOrReadOnly,
     IsOwnerOrSuperAdmin,
 )
-from apps.core.mixins import CompanyIsolationMixin
+from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead

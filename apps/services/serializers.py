@@ -3,12 +3,8 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 
-<<<<<<< dev-109
 from apps.companies.models import Company
-
-=======
 from apps.bookings.models import Booking
->>>>>>> main
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 SOON_AVAILABLE_MINUTES = 30

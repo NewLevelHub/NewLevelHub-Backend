@@ -5,6 +5,12 @@ from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string, TemplateDoesNotExist
 
+from apps.notifications.utils import (
+    _build_unsubscribe_url,
+    _email_dedup_key,
+    EMAIL_DEDUP_TTL,
+)
+
 
 # Maps notification_type → NotificationPreference email field name.
 # Uses granular per-type fields where available; falls back to legacy group
@@ -136,6 +142,10 @@ def send_notification_email(user_id, notification_type, context):
     """
     from apps.users.models import User
 
+    from django.core.cache import cache
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         user = User.objects.get(pk=user_id)
     except User.DoesNotExist:
@@ -156,6 +166,18 @@ def send_notification_email(user_id, notification_type, context):
 
     subject = ctx.get('subject') or _DEFAULT_SUBJECTS.get(notification_type, 'Уведомление NewLevelHub')
 
+    # Deduplication: skip if the same (user, type, subject) was sent within EMAIL_DEDUP_TTL.
+    dedup_key = _email_dedup_key(user, notification_type, subject)
+    if cache.get(dedup_key):
+        logger.debug(
+            'Duplicate email suppressed for user=%s type=%s subject=%r',
+            user_id, notification_type, subject,
+        )
+        return
+
+    # Build unsubscribe URL and inject into template context.
+    ctx['unsubscribe_url'] = _build_unsubscribe_url(user)
+
     template_name = f'notifications/email/{notification_type}.html'
     fallback_template = 'notifications/email/base_notification.html'
 
@@ -165,14 +187,21 @@ def send_notification_email(user_id, notification_type, context):
         html_message = render_to_string(fallback_template, ctx)
 
     plain_message = _html_to_plain(html_message)
-    send_mail(
-        subject=subject,
-        message=plain_message,
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[user.email],
-        html_message=html_message,
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject=subject,
+            message=plain_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        cache.set(dedup_key, True, EMAIL_DEDUP_TTL)
+    except Exception:
+        logger.exception(
+            'Failed to send notification email to user=%s type=%s',
+            user_id, notification_type,
+        )
 
 
 @shared_task

@@ -34,6 +34,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         ('superadmin', 'Super Admin'),
         ('company_admin', 'Company Admin'),
         ('employee', 'Employee'),
+        ('reception', 'Reception'),
         ('guest', 'Guest'),
     ]
 

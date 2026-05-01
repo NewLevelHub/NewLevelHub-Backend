@@ -1,7 +1,7 @@
 from datetime import timedelta
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, permission_classes, action
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 import rest_framework.fields as fields
@@ -12,6 +12,7 @@ from django.utils import timezone
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .models import GuestPass, AccessLog
+from .tasks import notify_pass_creator_on_entry
 from .filters import GuestPassFilter
 from . import tasks
 from .serializers import (
@@ -154,6 +155,14 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         return Response({'detail': 'QR code resent'})
 
 
+class IsSuperAdminOrReception(BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user and user.is_authenticated and user.role in ('superadmin', 'reception')
+        )
+
+
 @extend_schema(
     tags=['Access'],
     summary='Validate QR code (reception desk)',
@@ -164,27 +173,35 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
             fields={
                 'valid': fields.BooleanField(),
                 'guest_name': fields.CharField(),
-                'visit_purpose': fields.CharField(),
-                'created_by': fields.CharField(),
+                'purpose': fields.CharField(),
+                'invited_by': fields.CharField(),
+                'valid_from': fields.DateTimeField(),
+                'valid_until': fields.DateTimeField(),
             },
         ),
-        400: OpenApiResponse(description='Invalid or missing QR code'),
+        400: OpenApiResponse(description='Invalid or missing QR code in payload'),
         401: OpenApiResponse(description='Not authenticated'),
-        404: OpenApiResponse(description='Pass not found'),
+        403: OpenApiResponse(description='Only superadmin and reception can validate'),
     },
 )
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsSuperAdminOrReception])
 def validate_qr(request):
     serializer = GuestPassValidateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     try:
         guest_pass = GuestPass.objects.get(qr_code=serializer.validated_data['qr_code'])
     except GuestPass.DoesNotExist:
-        return Response({'valid': False, 'reason': 'Pass not found'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'valid': False, 'reason': 'not_found'})
 
-    if not guest_pass.is_valid:
-        return Response({'valid': False, 'reason': f'Pass status: {guest_pass.status}'})
+    if guest_pass.valid_until < timezone.now():
+        return Response({'valid': False, 'reason': 'expired'})
+    if guest_pass.status == 'revoked':
+        return Response({'valid': False, 'reason': 'revoked'})
+    if guest_pass.status == 'used' or (guest_pass.usage_type == 'single' and guest_pass.times_used > 0):
+        return Response({'valid': False, 'reason': 'already_used'})
+    if guest_pass.status != 'active':
+        return Response({'valid': False, 'reason': 'not_found'})
 
     # Зафиксировать использование
     guest_pass.times_used += 1
@@ -197,12 +214,17 @@ def validate_qr(request):
         checked_by=request.user,
         method='qr',
     )
-    # TODO: уведомить создателя пропуска
+    try:
+        notify_pass_creator_on_entry.delay(guest_pass.id)
+    except Exception:
+        pass
     return Response({
         'valid': True,
         'guest_name': guest_pass.guest_name,
-        'visit_purpose': guest_pass.visit_purpose,
-        'created_by': guest_pass.created_by.full_name,
+        'purpose': guest_pass.visit_purpose,
+        'invited_by': guest_pass.created_by.full_name,
+        'valid_from': guest_pass.valid_from,
+        'valid_until': guest_pass.valid_until,
     })
 
 

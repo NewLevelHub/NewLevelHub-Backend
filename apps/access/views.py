@@ -5,14 +5,20 @@ from django.core.cache import cache
 from django.db import transaction
 from django.http import HttpResponse
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+    inline_serializer,
+)
 import rest_framework.fields as fields
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from .filters import AccessLogFilter, GuestPassFilter
 from .models import AccessLog, GuestPass

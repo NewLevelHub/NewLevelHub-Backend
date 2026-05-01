@@ -179,7 +179,15 @@ class TestAccessLogPermissionsAC:
 
 @pytest.mark.django_db
 class TestAccessLogFieldsAC:
-    def test_list_response_contains_required_ac_fields(self, api_client, superadmin, log_a, pass_a, admin_a, reception_a):
+    def test_list_response_contains_required_ac_fields(
+        self,
+        api_client,
+        superadmin,
+        log_a,
+        pass_a,
+        admin_a,
+        reception_a,
+    ):
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(LOGS_URL)
         assert response.status_code == status.HTTP_200_OK

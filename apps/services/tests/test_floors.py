@@ -1,13 +1,16 @@
 """Integration tests for Floor Plans CRUD (services app)."""
 
 import io
+from datetime import timedelta
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
 from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from apps.bookings.models import Booking, Resource
 from apps.companies.models import Company
 from apps.services.models import Floor, MapPoint
 from apps.users.models import User
@@ -18,6 +21,10 @@ FLOORS_URL = '/api/v1/services/floors/'
 
 def floors_detail_url(floor_id):
     return f'{FLOORS_URL}{floor_id}/'
+
+
+def floors_map_url(floor_id):
+    return f'{FLOORS_URL}{floor_id}/map/'
 
 
 def make_image_file(name='plan.jpg'):
@@ -251,6 +258,184 @@ def test_retrieve_floor_plan_image_url_is_none_when_no_image(api_client, employe
     response = api_client.get(floors_detail_url(floor.id))
     assert response.status_code == status.HTTP_200_OK
     assert response.json()['plan_image_url'] is None
+
+
+@pytest.mark.django_db
+def test_floor_map_returns_blocked_status_for_active_resource_block(api_client, superadmin, employee, company):
+    floor = Floor.objects.create(number=4, name='Fourth Floor', company=company)
+    resource = Resource.objects.create(
+        name='Desk A-11',
+        resource_type='desk',
+        floor=floor.number,
+    )
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='desk',
+        x=15.0,
+        y=25.0,
+        label='Desk A-11',
+        resource=resource,
+        company=company,
+    )
+
+    check_time = timezone.now().replace(microsecond=0)
+    block_start = check_time - timedelta(minutes=30)
+    block_end = check_time + timedelta(minutes=30)
+
+    auth(api_client, superadmin)
+    block_response = api_client.post(
+        f'/api/v1/bookings/resources/{resource.id}/block/',
+        {
+            'start_time': block_start.isoformat(),
+            'end_time': block_end.isoformat(),
+            'reason': 'Maintenance window',
+        },
+        format='json',
+    )
+    assert block_response.status_code == status.HTTP_201_CREATED
+
+    auth(api_client, employee)
+    map_response = api_client.get(
+        floors_map_url(floor.id),
+        {'datetime': check_time.isoformat()},
+    )
+    assert map_response.status_code == status.HTTP_200_OK
+    points = map_response.json()['points']
+    point_payload = next(item for item in points if item['id'] == point.id)
+    assert point_payload['resource_status'] == 'blocked'
+
+
+@pytest.mark.django_db
+def test_floor_map_blocked_has_priority_over_active_booking(api_client, superadmin, employee, company):
+    floor = Floor.objects.create(number=5, name='Fifth Floor', company=company)
+    resource = Resource.objects.create(name='Desk B-01', resource_type='desk', floor=floor.number)
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='desk',
+        x=11.0,
+        y=22.0,
+        label='Desk B-01',
+        resource=resource,
+        company=company,
+    )
+    check_time = timezone.now().replace(microsecond=0)
+
+    Booking.objects.create(
+        resource=resource,
+        user=employee,
+        company=company,
+        start_time=check_time - timedelta(minutes=10),
+        end_time=check_time + timedelta(minutes=40),
+        status='confirmed',
+    )
+
+    auth(api_client, superadmin)
+    block_response = api_client.post(
+        f'/api/v1/bookings/resources/{resource.id}/block/',
+        {
+            'start_time': (check_time - timedelta(minutes=5)).isoformat(),
+            'end_time': (check_time + timedelta(minutes=20)).isoformat(),
+            'reason': 'Emergency maintenance',
+        },
+        format='json',
+    )
+    assert block_response.status_code == status.HTTP_201_CREATED
+
+    auth(api_client, employee)
+    response = api_client.get(floors_map_url(floor.id), {'datetime': check_time.isoformat()})
+    assert response.status_code == status.HTTP_200_OK
+    payload = next(item for item in response.json()['points'] if item['id'] == point.id)
+    assert payload['resource_status'] == 'blocked'
+    assert payload['resource_status_reason'] == 'active_block'
+    assert payload['next_free_at'] is not None
+
+
+@pytest.mark.django_db
+def test_floor_map_status_boundary_between_occupied_and_soon_available(api_client, employee, company):
+    floor = Floor.objects.create(number=6, name='Sixth Floor', company=company)
+    resource = Resource.objects.create(name='Desk C-01', resource_type='desk', floor=floor.number)
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='desk',
+        x=13.0,
+        y=23.0,
+        label='Desk C-01',
+        resource=resource,
+        company=company,
+    )
+    check_time = timezone.now().replace(microsecond=0)
+
+    booking = Booking.objects.create(
+        resource=resource,
+        user=employee,
+        company=company,
+        start_time=check_time - timedelta(minutes=5),
+        end_time=check_time + timedelta(minutes=31),
+        status='confirmed',
+    )
+
+    auth(api_client, employee)
+    occupied_response = api_client.get(floors_map_url(floor.id), {'datetime': check_time.isoformat()})
+    assert occupied_response.status_code == status.HTTP_200_OK
+    occupied_payload = next(item for item in occupied_response.json()['points'] if item['id'] == point.id)
+    assert occupied_payload['resource_status'] == 'occupied'
+    assert occupied_payload['resource_status_reason'] == 'active_booking'
+
+    booking.end_time = check_time + timedelta(minutes=30)
+    booking.save(update_fields=['end_time'])
+
+    soon_response = api_client.get(floors_map_url(floor.id), {'datetime': check_time.isoformat()})
+    assert soon_response.status_code == status.HTTP_200_OK
+    soon_payload = next(item for item in soon_response.json()['points'] if item['id'] == point.id)
+    assert soon_payload['resource_status'] == 'soon_available'
+    assert soon_payload['resource_status_reason'] == 'active_booking_ends_within_threshold'
+    assert soon_payload['next_free_at'] is not None
+
+
+@pytest.mark.django_db
+def test_floor_map_returns_free_when_no_active_booking_or_block(api_client, employee, company):
+    floor = Floor.objects.create(number=7, name='Seventh Floor', company=company)
+    resource = Resource.objects.create(name='Desk D-01', resource_type='desk', floor=floor.number)
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='desk',
+        x=14.0,
+        y=24.0,
+        label='Desk D-01',
+        resource=resource,
+        company=company,
+    )
+    check_time = timezone.now().replace(microsecond=0)
+
+    auth(api_client, employee)
+    response = api_client.get(floors_map_url(floor.id), {'datetime': check_time.isoformat()})
+    assert response.status_code == status.HTTP_200_OK
+    payload = next(item for item in response.json()['points'] if item['id'] == point.id)
+    assert payload['resource_status'] == 'free'
+    assert payload['resource_status_reason'] == 'no_active_booking_or_block'
+    assert payload['next_free_at'] is None
+
+
+@pytest.mark.django_db
+def test_floor_map_returns_null_status_for_non_resource_points(api_client, employee, company):
+    floor = Floor.objects.create(number=8, name='Eighth Floor', company=company)
+    point = MapPoint.objects.create(
+        floor=floor,
+        point_type='kitchen',
+        x=35.0,
+        y=45.0,
+        label='Kitchen Zone',
+        company=company,
+    )
+    check_time = timezone.now().replace(microsecond=0)
+
+    auth(api_client, employee)
+    response = api_client.get(floors_map_url(floor.id), {'datetime': check_time.isoformat()})
+    assert response.status_code == status.HTTP_200_OK
+    payload = next(item for item in response.json()['points'] if item['id'] == point.id)
+    assert payload['resource_status'] is None
+    assert payload['resource_status_reason'] == 'not_a_bookable_resource'
+    assert payload['next_free_at'] is None
 
 
 # ── PATCH ─────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 
-class SuperAdminDashboardSerializer(serializers.Serializer):
+class SuperAdminOverviewSerializer(serializers.Serializer):
     total_companies = serializers.IntegerField()
     active_companies = serializers.IntegerField()
     total_users = serializers.IntegerField()
@@ -9,6 +9,15 @@ class SuperAdminDashboardSerializer(serializers.Serializer):
     bookings_today = serializers.IntegerField()
     guests_today = serializers.IntegerField()
     open_service_requests = serializers.IntegerField()
+
+
+class SuperAdminDashboardSerializer(serializers.Serializer):
+    """Superadmin analytics overview: period metadata plus nested counters."""
+
+    period = serializers.CharField()
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    overview = SuperAdminOverviewSerializer()
 
 
 class CompanyAdminDashboardSerializer(serializers.Serializer):

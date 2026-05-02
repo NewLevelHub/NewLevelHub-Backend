@@ -8,5 +8,6 @@ router.register('', views.NotificationViewSet, basename='notification')
 urlpatterns = [
     path('preferences/', views.notification_preferences, name='notification-preferences'),
     path('do-not-disturb/', views.do_not_disturb, name='notification-do-not-disturb'),
+    path('unsubscribe/', views.unsubscribe, name='notification-unsubscribe'),
     path('', include(router.urls)),
 ]

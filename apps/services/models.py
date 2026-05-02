@@ -6,9 +6,13 @@ from apps.core.models import TimeStampedModel
 # ── Карта здания ──────────────────────────────────────────────────────
 
 class Floor(TimeStampedModel):
-    number = models.PositiveIntegerField(unique=True)
+    number = models.PositiveIntegerField()
     name = models.CharField(max_length=100, blank=True, default='')
-    plan_image = models.ImageField(upload_to='floor_plans/', null=True, blank=True)
+    plan_image = models.ImageField(upload_to='floors/plans/', null=True, blank=True)
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE,
+        null=True, blank=True, related_name='floors',
+    )
 
     class Meta:
         db_table = 'building_floors'
@@ -67,16 +71,29 @@ class ServiceRequest(TimeStampedModel):
         ('completed', 'Completed'),
     ]
     URGENCY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
         ('normal', 'Normal'),
         ('urgent', 'Urgent'),
     ]
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='service_requests')
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        related_name='service_requests', null=True,
+    )
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.CASCADE,
+        related_name='service_requests', null=True, blank=True,
+    )
     request_type = models.CharField(max_length=20, choices=TYPE_CHOICES, db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='new', db_index=True)
-    urgency = models.CharField(max_length=10, choices=URGENCY_CHOICES, default='normal')
+    urgency = models.CharField(max_length=10, choices=URGENCY_CHOICES, default='low')
 
-    floor = models.PositiveIntegerField(null=True, blank=True)
+    floor = models.ForeignKey(
+        'services.Floor', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='service_requests',
+    )
     location = models.CharField(max_length=255, blank=True, default='')
     description = models.TextField(blank=True, default='')
     photo = models.ImageField(upload_to='service_requests/', null=True, blank=True)
@@ -109,6 +126,9 @@ class Announcement(TimeStampedModel):
         ('event', 'Event'),
     ]
 
+    # ``scope`` is now derived data — kept for legacy admin/list filters but
+    # always recomputed from ``company`` on save.  ``company is None`` means a
+    # building-wide (БЦ) announcement; a non-null company means a company feed.
     scope = models.CharField(max_length=10, choices=SCOPE_CHOICES, default='building')
     company = models.ForeignKey(
         'companies.Company', on_delete=models.CASCADE,
@@ -126,6 +146,10 @@ class Announcement(TimeStampedModel):
     class Meta:
         db_table = 'announcements'
         ordering = ['-is_pinned', '-created_at']
+
+    def save(self, *args, **kwargs):
+        self.scope = 'company' if self.company_id else 'building'
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title

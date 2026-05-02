@@ -1,102 +1,580 @@
+from django.db.models import Q
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
+from rest_framework.filters import SearchFilter
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    extend_schema, extend_schema_view, OpenApiResponse, OpenApiExample, OpenApiParameter, inline_serializer,
+)
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdminOrReadOnly
-from apps.core.mixins import SetCompanyOnCreateMixin
+
+from apps.core.permissions import (
+    IsSuperAdmin,
+    IsCompanyMember,
+    IsCompanyAdmin,
+    IsCompanyAdminOrReadOnly,
+    IsOwnerOrSuperAdmin,
+)
+from apps.core.mixins import CompanyIsolationMixin
+from apps.core.pagination import StandardPagination, FeedCursorPagination
+from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
-    FloorSerializer, MapPointSerializer,
-    ServiceRequestSerializer, ServiceRequestUpdateSerializer,
-    AnnouncementSerializer,
+    FloorSerializer, FloorDetailSerializer, MapPointSerializer,
+    MapPointSearchSerializer,
+    ServiceRequestSerializer, ServiceRequestStatusSerializer, ServiceRequestRateSerializer,
+    AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
+from .filters import ServiceRequestFilter
 
 
 # ── Карта здания ──────────────────────────────────────────────────────
 
+_FLOOR_EXAMPLE = {
+    'id': 1,
+    'number': 3,
+    'name': 'Third Floor',
+    'plan_image': 'floors/plan_3.png',
+    'plan_image_url': 'https://api.example.com/media/floors/plan_3.png',
+    'company': 7,
+    'created_at': '2024-01-15T09:00:00+06:00',
+    'updated_at': '2024-03-20T14:30:00+06:00',
+}
+
+_FLOOR_WITH_POINTS_EXAMPLE = {
+    **_FLOOR_EXAMPLE,
+    'map_points': [
+        {
+            'id': 12,
+            'floor': 1,
+            'point_type': 'desk',
+            'label': 'Desk A1',
+            'x': 120.5,
+            'y': 87.3,
+            'resource': 5,
+            'company': 7,
+        },
+        {
+            'id': 13,
+            'floor': 1,
+            'point_type': 'meeting_room',
+            'label': 'Conf Room B',
+            'x': 340.0,
+            'y': 200.0,
+            'resource': None,
+            'company': 7,
+        },
+    ],
+}
+
+_ERROR_400 = {'error': True, 'status_code': 400, 'detail': {'number': ['This field is required.']}}
+_ERROR_401 = {'error': True, 'status_code': 401, 'detail': 'Authentication credentials were not provided.'}
+_ERROR_403 = {'error': True, 'status_code': 403, 'detail': 'You do not have permission to perform this action.'}
+_ERROR_404 = {'error': True, 'status_code': 404, 'detail': 'Not found.'}
+
+
 @extend_schema_view(
+    create=extend_schema(
+        tags=['Services'],
+        summary='Create floor (superadmin only)',
+        description=(
+            'Creates a new floor for the company. '
+            'Accepts multipart/form-data to allow uploading an optional floor plan image. '
+            'Restricted to superadmin.'
+        ),
+        request=inline_serializer(
+            name='FloorCreateRequest',
+            fields={
+                'number': fields.IntegerField(help_text='Floor number (e.g. 1, 2, 3).'),
+                'name': fields.CharField(help_text='Human-readable floor name.'),
+                'plan_image': fields.ImageField(required=False, help_text='Optional floor plan image file.'),
+            },
+        ),
+        responses={
+            201: OpenApiResponse(
+                response=FloorSerializer,
+                description='Floor created successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Created floor',
+                        value=_FLOOR_EXAMPLE,
+                        response_only=True,
+                        status_codes=['201'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Validation error.',
+                examples=[
+                    OpenApiExample(
+                        'Validation error',
+                        value=_ERROR_400,
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            401: OpenApiResponse(
+                description='Not authenticated.',
+                examples=[
+                    OpenApiExample(
+                        'Unauthenticated',
+                        value=_ERROR_401,
+                        response_only=True,
+                        status_codes=['401'],
+                    ),
+                ],
+            ),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+        },
+    ),
     list=extend_schema(
         tags=['Services'],
         summary='List floors',
-        responses={200: FloorSerializer(many=True)},
+        description=(
+            'Returns all floors for the company. '
+            'Each floor includes `plan_image_url` (absolute URL or null). '
+            'Accessible by any company member.'
+        ),
+        responses={
+            200: OpenApiResponse(
+                response=FloorSerializer(many=True),
+                description='Floors retrieved successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Floor list',
+                        value=[_FLOOR_EXAMPLE],
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+        },
     ),
     retrieve=extend_schema(
         tags=['Services'],
-        summary='Get floor with map points',
-        responses={200: FloorSerializer, 404: OpenApiResponse(description='Not found')},
-    ),
-    create=extend_schema(
-        tags=['Services'],
-        summary='Create floor (superadmin)',
-        request=FloorSerializer,
+        summary='Get floor details with map points',
+        description=(
+            'Returns floor details including all `map_points` (nested). '
+            'Accessible by any company member.'
+        ),
         responses={
-            201: FloorSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            200: OpenApiResponse(
+                response=FloorDetailSerializer,
+                description='Floor with nested map points.',
+                examples=[
+                    OpenApiExample(
+                        'Floor detail',
+                        value=_FLOOR_WITH_POINTS_EXAMPLE,
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
         },
     ),
     partial_update=extend_schema(
         tags=['Services'],
-        summary='Update floor',
-        request=FloorSerializer,
-        responses={200: FloorSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        summary='Partially update floor (superadmin only)',
+        description='Updates one or more fields of a floor. All fields are optional. Restricted to superadmin.',
+        request=inline_serializer(
+            name='FloorPartialUpdateRequest',
+            fields={
+                'number': fields.IntegerField(
+                    required=False, help_text='New floor number.'
+                ),
+                'name': fields.CharField(
+                    required=False, help_text='New floor name.'
+                ),
+                'plan_image': fields.ImageField(
+                    required=False, help_text='Replacement floor plan image file.'
+                ),
+            },
+        ),
+        responses={
+            200: OpenApiResponse(
+                response=FloorSerializer,
+                description='Floor updated successfully.',
+                examples=[
+                    OpenApiExample(
+                        'Updated floor',
+                        value=_FLOOR_EXAMPLE,
+                        response_only=True,
+                        status_codes=['200'],
+                    ),
+                ],
+            ),
+            400: OpenApiResponse(
+                description='Validation error.',
+                examples=[
+                    OpenApiExample(
+                        'Validation error',
+                        value=_ERROR_400,
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                ],
+            ),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
+        },
     ),
     destroy=extend_schema(
         tags=['Services'],
-        summary='Delete floor',
-        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+        summary='Delete floor (superadmin only)',
+        description=(
+            'Permanently deletes the floor and the plan image file from disk. '
+            'Cascades to all map_points on this floor. '
+            'Restricted to superadmin.'
+        ),
+        responses={
+            204: OpenApiResponse(description='Floor and all its map_points deleted.'),
+            403: OpenApiResponse(
+                description='Superadmin only.',
+                examples=[
+                    OpenApiExample(
+                        'Forbidden',
+                        value=_ERROR_403,
+                        response_only=True,
+                        status_codes=['403'],
+                    ),
+                ],
+            ),
+            404: OpenApiResponse(
+                description='Floor not found.',
+                examples=[
+                    OpenApiExample(
+                        'Not found',
+                        value=_ERROR_404,
+                        response_only=True,
+                        status_codes=['404'],
+                    ),
+                ],
+            ),
+        },
     ),
 )
 class FloorViewSet(viewsets.ModelViewSet):
-    queryset = Floor.objects.prefetch_related('points')
+    """
+    Floors are building-level objects, not company-scoped.
+    Superadmin creates floors (company=null); all company members must see them.
+
+    QuerySet rules:
+      - superadmin  → all floors
+      - company member → floors where company IS NULL  OR  company = user.company
+      - no company (guest) → only global floors (company IS NULL)
+    """
+
+    queryset = Floor.objects.prefetch_related('points__resource', 'points__company').select_related('company')
     serializer_class = FloorSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'superadmin':
+            return qs
+        if user.company_id:
+            return qs.filter(company__isnull=True) | qs.filter(company=user.company_id)
+        # guest or user without company — show only global floors
+        return qs.filter(company__isnull=True)
+
+    def perform_create(self, serializer):
+        # Floors are global; superadmin creates them without a company.
+        serializer.save(company=None)
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
-        return [IsAuthenticated()]
+        return [IsCompanyMember()]
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return FloorDetailSerializer
+        return FloorSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.action == 'retrieve':
+            context['now'] = timezone.now()
+        return context
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Floor map with resource statuses',
+        description=(
+            'Returns map points with booking-derived `resource_status` for the requested time. '
+            'Status precedence is deterministic: `blocked` > booking-derived states (`occupied`/`soon_available`) > '
+            '`free`. For non-bookable points or points without a linked resource, `resource_status` is null. '
+            f'`soon_available` means the active confirmed booking ends in <= {SOON_AVAILABLE_MINUTES} minutes.'
+        ),
+        parameters=[
+            OpenApiParameter(
+                'datetime',
+                OpenApiTypes.DATETIME,
+                OpenApiParameter.QUERY,
+                required=False,
+                description='Point in time for status calculation (ISO 8601). Defaults to now.',
+            ),
+        ],
+        responses={
+            200: inline_serializer(
+                name='FloorMapResponse',
+                fields={
+                    'floor_id': fields.IntegerField(),
+                    'floor_name': fields.CharField(),
+                    'at_time': fields.DateTimeField(),
+                    'points': MapPointSerializer(many=True),
+                },
+            ),
+            400: OpenApiResponse(description='Invalid datetime parameter'),
+            404: OpenApiResponse(description='Floor not found'),
+        },
+        examples=[
+            OpenApiExample(
+                'Map status example',
+                value={
+                    'floor_id': 2,
+                    'floor_name': 'Second Floor',
+                    'at_time': '2026-05-01T11:00:00+06:00',
+                    'points': [
+                        {
+                            'id': 100,
+                            'floor': 2,
+                            'point_type': 'desk',
+                            'label': 'Desk A-01',
+                            'x': 15.0,
+                            'y': 20.0,
+                            'resource': 50,
+                            'resource_name': 'Desk A-01',
+                            'resource_status': 'soon_available',
+                            'resource_status_reason': 'active_booking_ends_within_threshold',
+                            'next_free_at': '2026-05-01T11:25:00+06:00',
+                            'company': 7,
+                            'company_name': 'ACME',
+                        },
+                        {
+                            'id': 101,
+                            'floor': 2,
+                            'point_type': 'kitchen',
+                            'label': 'Kitchen',
+                            'x': 70.0,
+                            'y': 40.0,
+                            'resource': None,
+                            'resource_name': None,
+                            'resource_status': None,
+                            'resource_status_reason': 'not_a_bookable_resource',
+                            'next_free_at': None,
+                            'company': 7,
+                            'company_name': 'ACME',
+                        },
+                    ],
+                },
+                response_only=True,
+                status_codes=['200'],
+            ),
+        ],
+    )
+    @action(detail=True, methods=['get'], url_path='map')
+    def map(self, request, pk=None):
+        floor = self.get_object()
+        datetime_param = request.query_params.get('datetime')
+        if datetime_param:
+            at_time = parse_datetime(datetime_param)
+            if at_time is None:
+                return Response(
+                    {'detail': 'Invalid datetime format. Use ISO 8601.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            at_time = timezone.now()
+
+        points = MapPoint.objects.select_related('resource', 'company').filter(floor=floor)
+        serializer = MapPointSerializer(
+            points,
+            many=True,
+            context={'now': at_time, 'request': request},
+        )
+        return Response({
+            'floor_id': floor.id,
+            'floor_name': floor.name,
+            'at_time': at_time,
+            'points': serializer.data,
+        })
+
+    def perform_update(self, serializer):
+        instance = serializer.instance
+        old_path = instance.plan_image.name if instance.plan_image else None
+        instance = serializer.save()
+        new_path = instance.plan_image.name if instance.plan_image else None
+        # If the file was replaced — delete the old one from storage
+        if old_path and old_path != new_path:
+            instance.plan_image.storage.delete(old_path)
+
+    def perform_destroy(self, instance):
+        image_name = instance.plan_image.name if instance.plan_image else None
+        storage = instance.plan_image.storage if instance.plan_image else None
+        instance.delete()
+        # Physically remove the file after the DB row is gone
+        if image_name and storage:
+            storage.delete(image_name)
 
 
 @extend_schema_view(
     list=extend_schema(
         tags=['Services'],
         summary='List map points',
+        parameters=[OpenApiParameter(
+            'search', OpenApiTypes.STR, OpenApiParameter.QUERY,
+            required=False, description='Filter by label (partial match).',
+        )],
         responses={200: MapPointSerializer(many=True)},
     ),
     create=extend_schema(
         tags=['Services'],
         summary='Create map point (superadmin)',
-        request=MapPointSerializer,
+        request=inline_serializer(
+            name='MapPointCreateRequest',
+            fields={
+                'floor': fields.IntegerField(help_text='Floor ID.'),
+                'point_type': fields.CharField(help_text='One of: desk, meeting_room, parking, capsule, toilet, '
+                                               'kitchen, elevator, exit, office, other.'),
+                'x': fields.FloatField(help_text='Horizontal position 0–100 (%).'),
+                'y': fields.FloatField(help_text='Vertical position 0–100 (%).'),
+                'label': fields.CharField(required=False, help_text='Optional human-readable label.'),
+                'resource': fields.IntegerField(
+                    required=False,
+                    help_text='Resource ID (required for desk/meeting_room/parking/capsule).',
+                ),
+                'company': fields.IntegerField(required=False, help_text='Company ID (required for office).'),
+            },
+        ),
         responses={
             201: MapPointSerializer,
-            400: OpenApiResponse(description='Validation error'),
+            400: OpenApiResponse(description='Validation error (missing resource/company, x/y out of range, etc.)'),
             403: OpenApiResponse(description='Superadmin only'),
         },
     ),
     partial_update=extend_schema(
         tags=['Services'],
-        summary='Update map point',
-        request=MapPointSerializer,
-        responses={200: MapPointSerializer, 403: OpenApiResponse(description='Superadmin only')},
+        summary='Update map point (superadmin)',
+        request=inline_serializer(
+            name='MapPointUpdateRequest',
+            fields={
+                'x': fields.FloatField(required=False, help_text='Horizontal position 0–100 (%).'),
+                'y': fields.FloatField(required=False, help_text='Vertical position 0–100 (%).'),
+                'label': fields.CharField(required=False),
+                'resource': fields.IntegerField(required=False),
+                'company': fields.IntegerField(required=False),
+            },
+        ),
+        responses={
+            200: MapPointSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
     destroy=extend_schema(
         tags=['Services'],
-        summary='Delete map point',
-        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Superadmin only')},
+        summary='Delete map point (superadmin)',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
 )
 class MapPointViewSet(viewsets.ModelViewSet):
-    queryset = MapPoint.objects.all()
+    queryset = MapPoint.objects.select_related('resource', 'company')
     serializer_class = MapPointSerializer
+    filter_backends = [SearchFilter]
+    search_fields = ['label']
 
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Search map points by label or resource name',
+        parameters=[
+            OpenApiParameter(
+                'q',
+                OpenApiTypes.STR,
+                OpenApiParameter.QUERY,
+                required=True,
+                description='Search query matched against label and linked resource name.',
+            ),
+        ],
+        responses={
+            200: MapPointSearchSerializer(many=True),
+            400: OpenApiResponse(description='Missing or empty q parameter'),
+        },
+    )
+    @action(detail=False, methods=['get'], url_path='search')
+    def search(self, request):
+        q = request.query_params.get('q', '').strip()
+        if not q:
+            return Response(
+                {'detail': 'Query parameter "q" is required and must not be empty.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        points = (
+            MapPoint.objects
+            .select_related('resource', 'floor')
+            .filter(Q(label__icontains=q) | Q(resource__name__icontains=q))
+        )
+        serializer = MapPointSearchSerializer(points, many=True)
+        return Response(serializer.data)
 
 
 # ── Сервисные заявки ──────────────────────────────────────────────────
@@ -105,6 +583,22 @@ class MapPointViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Services'],
         summary='List service requests',
+        parameters=[
+            OpenApiParameter(name='request_type', description='Filter by type', required=False, type=str,
+                             enum=['cleaning', 'repair', 'supplies', 'general']),
+            OpenApiParameter(
+                name='type',
+                description='Backward-compatible alias for request_type',
+                required=False,
+                type=str,
+                enum=['cleaning', 'repair', 'supplies', 'general'],
+            ),
+            OpenApiParameter(name='status', description='Filter by status', required=False, type=str,
+                             enum=['new', 'accepted', 'in_progress', 'completed']),
+            OpenApiParameter(name='urgency', description='Filter by urgency', required=False, type=str,
+                             enum=['low', 'medium', 'high', 'normal', 'urgent']),
+            OpenApiParameter(name='floor', description='Filter by floor ID', required=False, type=int),
+        ],
         responses={200: ServiceRequestSerializer(many=True)},
     ),
     create=extend_schema(
@@ -115,97 +609,245 @@ class MapPointViewSet(viewsets.ModelViewSet):
             201: ServiceRequestSerializer,
             400: OpenApiResponse(description='Validation error'),
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
         },
     ),
     retrieve=extend_schema(
         tags=['Services'],
         summary='Get service request details',
-        responses={200: ServiceRequestSerializer, 404: OpenApiResponse(description='Not found')},
+        responses={
+            200: ServiceRequestSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
     ),
 )
-class ServiceRequestViewSet(viewsets.ModelViewSet):
+class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = ServiceRequestSerializer
     permission_classes = [IsCompanyMember]
-    filterset_fields = ['request_type', 'status', 'urgency']
+    pagination_class = StandardPagination
+    filterset_class = ServiceRequestFilter
+    ordering = ['-created_at']
+    # CompanyIsolationMixin uses company_field='company' — matches our FK name
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
     def get_queryset(self):
         user = self.request.user
+        base_qs = ServiceRequest.objects.select_related(
+            'created_by', 'assigned_to', 'floor', 'company',
+        ).order_by('-created_at')
         if user.role == 'superadmin':
-            return ServiceRequest.objects.all()
-        return ServiceRequest.objects.filter(user=user)
+            return base_qs
+        if user.role == 'company_admin' and user.company_id:
+            # Company admins see all requests within their company
+            return base_qs.filter(company=user.company_id)
+        # Regular employees see only their own requests
+        return base_qs.filter(created_by=user)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        serializer.save(
+            created_by=self.request.user,
+            company=self.request.user.company,
+        )
 
     @extend_schema(
         tags=['Services'],
         summary='Quick cleaning request',
         request=inline_serializer(
             name='QuickCleaningRequest',
-            fields={'floor': fields.IntegerField(required=False)},
+            fields={'floor': fields.IntegerField(required=False, allow_null=True)},
         ),
         responses={
             201: ServiceRequestSerializer,
+            400: OpenApiResponse(description='No floor could be determined'),
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
         },
     )
-    @action(detail=False, methods=['post'], url_path='cleaning')
+    @action(detail=False, methods=['post'], url_path='quick-cleaning')
     def quick_cleaning(self, request):
-        sr = ServiceRequest.objects.create(
-            user=request.user,
-            request_type='cleaning',
-            urgency='normal',
-            floor=request.data.get('floor'),
-            description='Quick cleaning request',
-        )
-        return Response(ServiceRequestSerializer(sr).data, status=status.HTTP_201_CREATED)
+        return self._handle_quick_cleaning(request)
 
     @extend_schema(
         tags=['Services'],
-        summary='Update request status (superadmin)',
-        request=ServiceRequestUpdateSerializer,
+        summary='[Deprecated] Quick cleaning request (legacy alias)',
+        description='Backward-compatible alias for POST /api/v1/services/requests/quick-cleaning/. '
+                    'Use /quick-cleaning/ as canonical endpoint.',
+        request=inline_serializer(
+            name='QuickCleaningRequestLegacy',
+            fields={'floor': fields.IntegerField(required=False, allow_null=True)},
+        ),
+        responses={
+            201: ServiceRequestSerializer,
+            400: OpenApiResponse(description='No floor could be determined'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+        },
+        deprecated=True,
+    )
+    @action(detail=False, methods=['post'], url_path='cleaning')
+    def quick_cleaning_legacy(self, request):
+        return self._handle_quick_cleaning(request)
+
+    def _handle_quick_cleaning(self, request):
+        from apps.bookings.models import Booking
+
+        floor_id = request.data.get('floor')
+        floor_obj = None
+
+        if floor_id is not None:
+            try:
+                floor_obj = Floor.objects.get(pk=floor_id)
+            except Floor.DoesNotExist:
+                return Response(
+                    {'detail': 'Floor not found.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            # Try to determine floor from user's most recent booking
+            last_booking = (
+                Booking.objects.filter(
+                    user=request.user,
+                    company=request.user.company,
+                )
+                .select_related('resource')
+                .order_by('-start_time')
+                .first()
+            )
+            if last_booking and last_booking.resource and last_booking.resource.floor:
+                # resource.floor is a PositiveIntegerField (floor number),
+                # try to find the Floor object by number
+                floor_obj = Floor.objects.filter(
+                    number=last_booking.resource.floor
+                ).first()
+
+            if floor_obj is None:
+                return Response(
+                    {'detail': 'No floor provided and no recent booking found to determine floor.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        sr = ServiceRequest.objects.create(
+            created_by=request.user,
+            company=request.user.company,
+            request_type='cleaning',
+            urgency='low',
+            floor=floor_obj,
+            description='Quick cleaning request',
+        )
+        serializer = ServiceRequestSerializer(sr, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Update request status (company_admin or superadmin)',
+        request=ServiceRequestStatusSerializer,
         responses={
             200: ServiceRequestSerializer,
-            400: OpenApiResponse(description='Validation error'),
-            403: OpenApiResponse(description='Superadmin only'),
+            400: OpenApiResponse(description='Invalid status transition'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Admin only'),
             404: OpenApiResponse(description='Not found'),
         },
     )
-    @action(detail=True, methods=['patch'], url_path='update-status', permission_classes=[IsSuperAdmin])
+    @action(detail=True, methods=['patch'], url_path='status', permission_classes=[IsCompanyAdmin])
     def update_status(self, request, pk=None):
+        return self._handle_status_update(request)
+
+    @extend_schema(
+        tags=['Services'],
+        summary='[Deprecated] Update request status (legacy alias for /status/)',
+        description='Backward-compatible alias for PATCH /api/v1/services/requests/{id}/status/. '
+                    'Use /status/ as canonical endpoint.',
+        request=ServiceRequestStatusSerializer,
+        responses={
+            200: ServiceRequestSerializer,
+            400: OpenApiResponse(description='Invalid status transition'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Admin only'),
+            404: OpenApiResponse(description='Not found'),
+        },
+        deprecated=True,
+    )
+    @action(detail=True, methods=['patch'], url_path='update-status', permission_classes=[IsCompanyAdmin])
+    def update_status_legacy(self, request, pk=None):
+        return self._handle_status_update(request)
+
+    def _handle_status_update(self, request):
+        if 'status' not in request.data:
+            return Response(
+                {'status': ['This field is required.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         sr = self.get_object()
-        serializer = ServiceRequestUpdateSerializer(sr, data=request.data, partial=True)
+        previous_status = sr.status
+        serializer = ServiceRequestStatusSerializer(sr, data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        if sr.status == 'completed':
+
+        sr.refresh_from_db()
+        status_changed = sr.status != previous_status
+
+        if status_changed and sr.status == 'completed' and sr.completed_at is None:
             sr.completed_at = timezone.now()
             sr.save(update_fields=['completed_at'])
-        # TODO: уведомить пользователя о смене статуса
-        return Response(ServiceRequestSerializer(sr).data)
+
+        if status_changed and sr.created_by:
+            create_notification(
+                user=sr.created_by,
+                notification_type='service_request_update',
+                title='Service request status updated',
+                message=f'Your service request status has been changed to: {sr.get_status_display()}',
+            )
+
+        return Response(
+            ServiceRequestSerializer(sr, context={'request': request}).data,
+        )
 
     @extend_schema(
         tags=['Services'],
         summary='Rate completed request',
-        request=inline_serializer(
-            name='RateServiceRequest',
-            fields={'rating': fields.IntegerField(min_value=1, max_value=5)},
-        ),
+        request=ServiceRequestRateSerializer,
         responses={
-            200: OpenApiResponse(description='Rating saved'),
-            400: OpenApiResponse(description='Rating must be 1-5'),
+            200: ServiceRequestSerializer,
+            400: OpenApiResponse(description='Request not completed or already rated'),
             401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Not the request creator'),
             404: OpenApiResponse(description='Not found'),
         },
     )
     @action(detail=True, methods=['post'], url_path='rate')
     def rate(self, request, pk=None):
         sr = self.get_object()
-        rating = request.data.get('rating')
-        if not rating or int(rating) not in range(1, 6):
-            return Response({'detail': 'Rating must be 1-5'}, status=status.HTTP_400_BAD_REQUEST)
-        sr.rating = int(rating)
+
+        if sr.created_by != request.user:
+            return Response(
+                {'detail': 'You can only rate your own requests.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if sr.status != 'completed':
+            return Response(
+                {'detail': 'Request must be completed before rating.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sr.rating is not None:
+            return Response(
+                {'detail': 'This request has already been rated.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = ServiceRequestRateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sr.rating = serializer.validated_data['rating']
         sr.save(update_fields=['rating'])
-        return Response({'detail': 'Rated'})
+
+        return Response(
+            ServiceRequestSerializer(sr, context={'request': request}).data,
+        )
 
 
 # ── Объявления ────────────────────────────────────────────────────────
@@ -232,21 +874,71 @@ class ServiceRequestViewSet(viewsets.ModelViewSet):
         responses={200: AnnouncementSerializer, 404: OpenApiResponse(description='Not found')},
     ),
 )
-class AnnouncementViewSet(SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+class AnnouncementViewSet(viewsets.ModelViewSet):
+    """
+    DEV-100: building / company announcement feed.
+
+    Visibility (queryset):
+      - superadmin       → every announcement (БЦ + all companies)
+      - company_admin    → БЦ (company=null) + own company
+      - employee         → БЦ (company=null) + own company
+      - guest            → БЦ only (company=null)
+
+    Create:
+      - superadmin sets ``company_id`` explicitly (null = БЦ); when omitted, the
+        announcement is building-wide.
+      - company_admin always posts under their own company (any value supplied
+        in ``company_id`` is overwritten).
+      - employees and guests are blocked by ``IsCompanyAdminOrReadOnly``.
+
+    Delete (DEV-100 AC #5):
+      - Only the author or a superadmin may delete.  Even another company_admin
+        in the same company is rejected with 403.
+
+    Pagination:
+      - Cursor-based (``FeedCursorPagination``) for infinite scroll.
+    """
+
     serializer_class = AnnouncementSerializer
     permission_classes = [IsCompanyAdminOrReadOnly]
-    filterset_fields = ['scope', 'category', 'is_pinned']
+    pagination_class = FeedCursorPagination
+    filterset_fields = ['category', 'is_pinned']
+    # Required by DRF when CursorPagination cohabits with OrderingFilter:
+    # the global OrderingFilter must be able to derive a non-None default
+    # ordering, otherwise pagination raises an AssertionError.
+    ordering = ('-is_pinned', '-created_at', '-id')
 
     def get_queryset(self):
         user = self.request.user
-        building_qs = Announcement.objects.filter(scope='building')
+        qs = Announcement.objects.all().select_related('author', 'company')
+        if not user.is_authenticated:
+            return qs.none()
+        if user.role == 'superadmin':
+            return qs
+        if user.role == 'guest':
+            return qs.filter(company__isnull=True)
         if user.company_id:
-            company_qs = Announcement.objects.filter(scope='company', company=user.company)
-            return (building_qs | company_qs).distinct()
-        return building_qs
+            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id))
+        return qs.filter(company__isnull=True)
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            # AC: only the author or a superadmin may delete.
+            perm = IsOwnerOrSuperAdmin()
+            perm.owner_field = 'author'
+            return [perm]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user, company=self.request.user.company)
+        user = self.request.user
+        if user.role == 'superadmin':
+            # Honour ``company_id`` from validated data — null means БЦ.
+            company = serializer.validated_data.get('company', None)
+        else:
+            # company_admin (and any future write-allowed role) is forced
+            # onto their own company; never let them post under another tenant.
+            company = user.company
+        serializer.save(author=user, company=company)
         # TODO: если notify_email=True — Celery task рассылки
 
     @extend_schema(

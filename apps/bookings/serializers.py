@@ -649,6 +649,24 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                             link=f'/bookings/{booking.id}',
                         )
 
+        # Send booking confirmation email to the booking owner
+        import logging
+        from apps.notifications.tasks import send_notification_email
+        try:
+            send_notification_email.delay(
+                user.id,
+                'booking_confirmed',
+                {
+                    'subject': 'Ваше бронирование подтверждено',
+                    'resource_name': resource.name,
+                    'start_time': start_time.strftime('%Y-%m-%d %H:%M'),
+                    'end_time': end_time.strftime('%Y-%m-%d %H:%M'),
+                    'action_url': f'/bookings/{booking.id}',
+                },
+            )
+        except Exception:
+            logging.getLogger(__name__).warning('Failed to enqueue notification email', exc_info=True)
+
         return booking
 
 

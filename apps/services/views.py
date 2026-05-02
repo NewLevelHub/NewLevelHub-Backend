@@ -32,6 +32,7 @@ from .serializers import (
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 from .filters import ServiceRequestFilter
+from .tasks import send_announcement_emails
 
 
 # ── Карта здания ──────────────────────────────────────────────────────
@@ -938,21 +939,23 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             # company_admin (and any future write-allowed role) is forced
             # onto their own company; never let them post under another tenant.
             company = user.company
-        serializer.save(author=user, company=company)
-        # TODO: если notify_email=True — Celery task рассылки
+        announcement = serializer.save(author=user, company=company)
+        if announcement.is_pinned and announcement.notify_email:
+            send_announcement_emails.delay(announcement.id)
 
     @extend_schema(
         tags=['Services'],
         summary='Mark announcement as read',
         request=None,
         responses={
-            200: OpenApiResponse(description='Marked as read'),
+            200: AnnouncementSerializer,
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='read')
+    @action(detail=True, methods=['post'], url_path='read', permission_classes=[IsAuthenticated])
     def mark_read(self, request, pk=None):
         announcement = self.get_object()
         AnnouncementRead.objects.get_or_create(announcement=announcement, user=request.user)
-        return Response({'detail': 'Marked as read'})
+        serializer = AnnouncementSerializer(announcement, context={'request': request})
+        return Response(serializer.data)

@@ -306,13 +306,14 @@ class AnnouncementSerializer(serializers.ModelSerializer):
     )
     author_name = serializers.CharField(source='author.full_name', read_only=True)
     is_read = serializers.SerializerMethodField()
+    read_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
         fields = [
             'id', 'scope', 'company_id', 'author', 'author_name',
             'title', 'text', 'category', 'image',
-            'is_pinned', 'notify_email', 'is_read',
+            'is_pinned', 'notify_email', 'is_read', 'read_count',
             'created_at',
         ]
         read_only_fields = ['id', 'scope', 'author', 'created_at']
@@ -322,3 +323,6 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         return obj.reads.filter(user=request.user).exists()
+
+    def get_read_count(self, obj):
+        return obj.reads.count()

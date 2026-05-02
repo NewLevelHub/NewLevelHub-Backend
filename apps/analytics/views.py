@@ -86,7 +86,7 @@ def company_dashboard(request):
     week_ago = now - timedelta(days=7)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    employees_qs = company.members.filter(is_active=True)
+    employees_qs = company.members.filter(is_active=True).exclude(role='superadmin')
     last_30_days = now - timedelta(days=30)
 
     storage_used = File.objects.filter(company=company).aggregate(total=Sum('file_size'))['total'] or 0

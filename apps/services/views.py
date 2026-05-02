@@ -13,9 +13,16 @@ from drf_spectacular.utils import (
 )
 import rest_framework.fields as fields
 
-from apps.core.permissions import IsSuperAdmin, IsCompanyMember, IsCompanyAdmin, IsCompanyAdminOrReadOnly
-from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from apps.core.pagination import StandardPagination
+
+from apps.core.permissions import (
+    IsSuperAdmin,
+    IsCompanyMember,
+    IsCompanyAdmin,
+    IsCompanyAdminOrReadOnly,
+    IsOwnerOrSuperAdmin,
+)
+from apps.core.mixins import CompanyIsolationMixin
+from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
@@ -867,21 +874,71 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         responses={200: AnnouncementSerializer, 404: OpenApiResponse(description='Not found')},
     ),
 )
-class AnnouncementViewSet(SetCompanyOnCreateMixin, viewsets.ModelViewSet):
+class AnnouncementViewSet(viewsets.ModelViewSet):
+    """
+    DEV-100: building / company announcement feed.
+
+    Visibility (queryset):
+      - superadmin       → every announcement (БЦ + all companies)
+      - company_admin    → БЦ (company=null) + own company
+      - employee         → БЦ (company=null) + own company
+      - guest            → БЦ only (company=null)
+
+    Create:
+      - superadmin sets ``company_id`` explicitly (null = БЦ); when omitted, the
+        announcement is building-wide.
+      - company_admin always posts under their own company (any value supplied
+        in ``company_id`` is overwritten).
+      - employees and guests are blocked by ``IsCompanyAdminOrReadOnly``.
+
+    Delete (DEV-100 AC #5):
+      - Only the author or a superadmin may delete.  Even another company_admin
+        in the same company is rejected with 403.
+
+    Pagination:
+      - Cursor-based (``FeedCursorPagination``) for infinite scroll.
+    """
+
     serializer_class = AnnouncementSerializer
     permission_classes = [IsCompanyAdminOrReadOnly]
-    filterset_fields = ['scope', 'category', 'is_pinned']
+    pagination_class = FeedCursorPagination
+    filterset_fields = ['category', 'is_pinned']
+    # Required by DRF when CursorPagination cohabits with OrderingFilter:
+    # the global OrderingFilter must be able to derive a non-None default
+    # ordering, otherwise pagination raises an AssertionError.
+    ordering = ('-is_pinned', '-created_at', '-id')
 
     def get_queryset(self):
         user = self.request.user
-        building_qs = Announcement.objects.filter(scope='building')
+        qs = Announcement.objects.all().select_related('author', 'company')
+        if not user.is_authenticated:
+            return qs.none()
+        if user.role == 'superadmin':
+            return qs
+        if user.role == 'guest':
+            return qs.filter(company__isnull=True)
         if user.company_id:
-            company_qs = Announcement.objects.filter(scope='company', company=user.company)
-            return (building_qs | company_qs).distinct()
-        return building_qs
+            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id))
+        return qs.filter(company__isnull=True)
+
+    def get_permissions(self):
+        if self.action == 'destroy':
+            # AC: only the author or a superadmin may delete.
+            perm = IsOwnerOrSuperAdmin()
+            perm.owner_field = 'author'
+            return [perm]
+        return super().get_permissions()
 
     def perform_create(self, serializer):
-        serializer.save(author=self.request.user, company=self.request.user.company)
+        user = self.request.user
+        if user.role == 'superadmin':
+            # Honour ``company_id`` from validated data — null means БЦ.
+            company = serializer.validated_data.get('company', None)
+        else:
+            # company_admin (and any future write-allowed role) is forced
+            # onto their own company; never let them post under another tenant.
+            company = user.company
+        serializer.save(author=user, company=company)
         # TODO: если notify_email=True — Celery task рассылки
 
     @extend_schema(

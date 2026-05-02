@@ -126,6 +126,9 @@ class Announcement(TimeStampedModel):
         ('event', 'Event'),
     ]
 
+    # ``scope`` is now derived data — kept for legacy admin/list filters but
+    # always recomputed from ``company`` on save.  ``company is None`` means a
+    # building-wide (БЦ) announcement; a non-null company means a company feed.
     scope = models.CharField(max_length=10, choices=SCOPE_CHOICES, default='building')
     company = models.ForeignKey(
         'companies.Company', on_delete=models.CASCADE,
@@ -143,6 +146,10 @@ class Announcement(TimeStampedModel):
     class Meta:
         db_table = 'announcements'
         ordering = ['-is_pinned', '-created_at']
+
+    def save(self, *args, **kwargs):
+        self.scope = 'company' if self.company_id else 'building'
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.title

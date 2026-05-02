@@ -38,6 +38,7 @@ def _normalize_column_status(column_name):
         return 'done'
     return None
 
+
 PERIOD_CHOICES = frozenset(('7d', '30d', '90d', 'custom'))
 PERIOD_DAY_LENGTH = {'7d': 7, '30d': 30, '90d': 90}
 

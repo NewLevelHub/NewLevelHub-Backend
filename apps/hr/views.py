@@ -397,7 +397,7 @@ def onboarding_team_progress(request):
         return Response([])
 
     team_members = (
-        request.user.company.members
+        request.user.company.members.exclude(role='superadmin')
         .annotate(
             completed_steps=Count(
                 'onboarding_progress',

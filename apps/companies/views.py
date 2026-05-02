@@ -414,7 +414,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='Filter by role: superadmin, company_admin, employee, guest.',
+                description='Filter by role: company_admin, employee, guest. '
+                            'Global superadmin users are never included in the company roster.',
             ),
             OpenApiParameter(
                 name='is_active',
@@ -459,7 +460,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             company_qs = company_qs.filter(id=request.user.company_id)
         company = get_object_or_404(company_qs, pk=pk)
 
-        qs = User.objects.filter(company=company)
+        qs = company.members.exclude(role='superadmin')
 
         # Apply filters
         member_filter = CompanyMemberFilter(request.query_params, queryset=qs)
@@ -509,7 +510,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
         return Response({
             'employees': {
-                'current': company.members.filter(is_active=True).count(),
+                'current': company.employee_count,
                 'max': company.max_employees,
             },
             'boards': {
@@ -939,7 +940,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         company = self.get_serializer_context()['company']
-        if company.members.filter(is_active=True).count() >= company.max_employees:
+        if company.employee_count >= company.max_employees:
             return Response({'detail': 'Employee limit reached'}, status=status.HTTP_400_BAD_REQUEST)
         return super().create(request, *args, **kwargs)
 
@@ -1057,7 +1058,7 @@ class CompanyDirectoryView(GenericAPIView):
     def get(self, request, company_id):
         company = self._get_company(request, company_id)
 
-        qs = User.objects.filter(company=company)
+        qs = company.members.exclude(role='superadmin')
         directory_filter = CompanyDirectoryFilter(request.query_params, queryset=qs)
         qs = directory_filter.qs
 

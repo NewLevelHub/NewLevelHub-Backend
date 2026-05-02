@@ -30,6 +30,35 @@ class CompanyAdminDashboardSerializer(serializers.Serializer):
     guest_visits_this_month = serializers.IntegerField()
 
 
+class CompanyStorageSerializer(serializers.Serializer):
+    used = serializers.IntegerField()
+    limit = serializers.IntegerField()
+
+
+class ActiveCrmTasksSerializer(serializers.Serializer):
+    todo = serializers.IntegerField()
+    in_progress = serializers.IntegerField()
+    done = serializers.IntegerField()
+
+
+class EmployeeActivitySerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    full_name = serializers.CharField()
+    booking_count_30d = serializers.IntegerField()
+    task_count_active = serializers.IntegerField()
+    last_login = serializers.DateTimeField(allow_null=True)
+
+
+class CompanyAnalyticsSerializer(serializers.Serializer):
+    total_employees = serializers.IntegerField()
+    active_7d = serializers.IntegerField()
+    bookings_month = serializers.IntegerField()
+    storage = CompanyStorageSerializer()
+    active_crm_tasks = ActiveCrmTasksSerializer()
+    guest_visits_month = serializers.IntegerField()
+    employee_activity = EmployeeActivitySerializer(many=True)
+
+
 class ResourceUsageSerializer(serializers.Serializer):
     resource_type = serializers.CharField()
     total_bookings = serializers.IntegerField()

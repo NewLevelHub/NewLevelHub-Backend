@@ -188,6 +188,18 @@ class TestMembersResponseShape:
         assert admin_b.pk in ids_b
         assert admin_a.pk not in ids_b
 
+    def test_global_superadmin_with_company_fk_not_in_roster(
+        self, api_client, company_a, admin_a, superadmin,
+    ):
+        """Platform superadmin must not appear in company employee lists."""
+        superadmin.company = company_a
+        superadmin.save(update_fields=['company'])
+        auth(api_client, admin_a)
+        resp = api_client.get(members_url(company_a.pk))
+        assert resp.status_code == status.HTTP_200_OK
+        ids = {m['id'] for m in resp.data['results']}
+        assert superadmin.pk not in ids
+
 
 # ---------------------------------------------------------------------------
 # Members list — filters

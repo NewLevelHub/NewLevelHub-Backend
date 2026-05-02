@@ -67,13 +67,73 @@ def _is_done_column(task):
     return bool(task.column and task.column.name == _done_column_name())
 
 
+def maybe_notify_deadline_tomorrow_once(
+    task,
+    *,
+    skip_if_in_done_column=True,
+    skip_same_calendar_day_dedup=False,
+):
+    """
+    Send in-app task_deadline (+ enqueue email) when the task's deadline falls on
+    calendar *tomorrow* in the active timezone.
+
+    Used by the periodic Celery job and synchronously after task create/update so that
+    tasks created *after* the daily beat run still notify (otherwise Tuesday's 8:00 job
+    misses tasks added Tuesday afternoon with deadline Wednesday).
+
+    When ``skip_if_in_done_column`` is True (default, used by Celery), tasks in the
+    column named "Готово" are skipped so finished work does not produce reminders.
+    API create/update passes False so a task filed under "Готово" still notifies if the
+    user sets deadline tomorrow—matching board UX where users often drop cards there first.
+
+    ``skip_same_calendar_day_dedup`` is set True from PATCH when the deadline *value*
+    actually changed (calendar date). Otherwise one reminder per task URL per day would
+    block a second in-app row when the user edits the deadline later the same day.
+
+    Also skips tasks without assignee/creator, and duplicate in-app rows for the same
+    user/url/calendar day when dedup is enabled.
+    """
+    if task.deadline is None:
+        return
+    if skip_if_in_done_column and _is_done_column(task):
+        return
+    tomorrow = timezone.localdate() + timedelta(days=1)
+    if timezone.localtime(task.deadline).date() != tomorrow:
+        return
+    user = _recipient_for_deadline(task)
+    if user is None:
+        return
+    today = timezone.localdate()
+    url = f'/crm/tasks/{task.pk}/'
+    if not skip_same_calendar_day_dedup and Notification.objects.filter(
+        user=user,
+        notification_type='task_deadline',
+        url=url,
+        created_at__date=today,
+    ).exists():
+        return
+    create_notification(
+        user=user,
+        notification_type='task_deadline',
+        title=f'Дедлайн завтра: {task.title}',
+        message=f'Срок выполнения — {timezone.localtime(task.deadline):%d.%m.%Y %H:%M}',
+        link=url,
+    )
+    send_notification_email.delay(
+        user.id,
+        'task_deadline',
+        {
+            'subject': 'Дедлайн задачи завтра',
+            'task_title': task.title,
+            'action_url': url,
+        },
+    )
+
+
 @shared_task
 def notify_deadline_approaching():
     """Notify assignee/creator about tasks whose deadline is tomorrow (local date)."""
     from apps.crm.models import Task
-
-    tomorrow = timezone.localdate() + timedelta(days=1)
-    today = timezone.localdate()
 
     qs = (
         Task.objects.filter(is_archived=False, deadline__isnull=False)
@@ -81,37 +141,7 @@ def notify_deadline_approaching():
     )
 
     for task in qs.iterator(chunk_size=200):
-        if _is_done_column(task):
-            continue
-        if timezone.localtime(task.deadline).date() != tomorrow:
-            continue
-        user = _recipient_for_deadline(task)
-        if user is None:
-            continue
-        url = f'/crm/tasks/{task.pk}/'
-        if Notification.objects.filter(
-            user=user,
-            notification_type='task_deadline',
-            url=url,
-            created_at__date=today,
-        ).exists():
-            continue
-        create_notification(
-            user=user,
-            notification_type='task_deadline',
-            title=f'Дедлайн завтра: {task.title}',
-            message=f'Срок выполнения — {timezone.localtime(task.deadline):%d.%m.%Y %H:%M}',
-            link=url,
-        )
-        send_notification_email.delay(
-            user.id,
-            'task_deadline',
-            {
-                'subject': 'Дедлайн задачи завтра',
-                'task_title': task.title,
-                'action_url': url,
-            },
-        )
+        maybe_notify_deadline_tomorrow_once(task)
 
 
 @shared_task

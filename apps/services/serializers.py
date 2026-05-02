@@ -222,13 +222,15 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
     assigned_to_name = serializers.CharField(source='assigned_to.full_name', allow_null=True, read_only=True)
     photo = serializers.ImageField(use_url=True, required=False, allow_null=True)
     floor = FloorPrimaryKeyOrNumberField(queryset=Floor.objects.all(), required=False, allow_null=True)
+    floor_number = serializers.IntegerField(source='floor.number', read_only=True, allow_null=True)
+    floor_name = serializers.CharField(source='floor.name', read_only=True, allow_null=True)
 
     class Meta:
         model = ServiceRequest
         fields = [
             'id', 'created_by', 'created_by_name', 'company',
             'request_type', 'status', 'urgency',
-            'floor', 'location', 'description', 'photo',
+            'floor', 'floor_number', 'floor_name', 'location', 'description', 'photo',
             'assigned_to', 'assigned_to_name', 'rating', 'completed_at',
             'created_at', 'updated_at',
         ]

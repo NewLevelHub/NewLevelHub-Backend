@@ -1488,6 +1488,16 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             cancel_reason=booking.cancel_reason,
             cancelled_at=now,
         )
+
+        reason_text = (booking.cancel_reason or '').strip()
+        create_notification(
+            user=booking.user,
+            notification_type='booking_cancelled',
+            title=f'Бронирование отменено: {booking.resource.name}',
+            message=reason_text or 'Бронирование отменено.',
+            link=f'/bookings/{booking.id}',
+        )
+
         return Response(BookingSerializer(booking).data)
 
     @extend_schema(
@@ -1525,6 +1535,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             notification_type='booking_cancelled',
             title=f'Бронирование отменено администратором: {booking.resource.name}',
             message=reason,
+            link=f'/bookings/{booking.id}',
         )
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 

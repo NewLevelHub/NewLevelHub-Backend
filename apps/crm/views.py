@@ -18,6 +18,7 @@ from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
 from .serializers import (
@@ -721,7 +722,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         # Normalize positions so the new task gets a clean sequential number
         # at the end of the column rather than inheriting any gaps.
         _normalize_positions(task.column)
-        if task.assignee and task.assignee != self.request.user:
+        if task.assignee:
             create_notification(
                 user=task.assignee,
                 notification_type='task_assigned',
@@ -729,22 +730,27 @@ class TaskViewSet(viewsets.ModelViewSet):
                 message=task.title,
                 link=f'/crm/tasks/{task.pk}/',
             )
-            import logging
-            from apps.notifications.tasks import send_notification_email
-            try:
-                send_notification_email.delay(
-                    task.assignee.id,
-                    'task_assigned',
-                    {
-                        'subject': 'Вам назначена задача',
-                        'task_title': task.title,
-                        'board_name': task.column.board.name if task.column else '',
-                        'assigned_by': self.request.user.full_name,
-                        'action_url': f'/crm/tasks/{task.pk}/',
-                    },
-                )
-            except Exception:
-                logging.getLogger(__name__).warning('Failed to enqueue notification email', exc_info=True)
+            # Email only when someone else assigns the task (avoid self-email noise).
+            if task.assignee != self.request.user:
+                import logging
+                from apps.notifications.tasks import send_notification_email
+                try:
+                    send_notification_email.delay(
+                        task.assignee.id,
+                        'task_assigned',
+                        {
+                            'subject': 'Вам назначена задача',
+                            'task_title': task.title,
+                            'board_name': task.column.board.name if task.column else '',
+                            'assigned_by': self.request.user.full_name,
+                            'action_url': f'/crm/tasks/{task.pk}/',
+                        },
+                    )
+                except Exception:
+                    logging.getLogger(__name__).warning('Failed to enqueue notification email', exc_info=True)
+
+        task = Task.objects.select_related('assignee', 'created_by', 'column').get(pk=task.pk)
+        maybe_notify_deadline_tomorrow_once(task, skip_if_in_done_column=False)
 
     def perform_update(self, serializer):
         task = serializer.instance
@@ -804,7 +810,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         new_assignee_id = new_instance.assignee_id
         new_assignee = new_instance.assignee
 
-        if new_assignee and new_assignee_id != old_assignee_id and new_assignee != self.request.user:
+        if new_assignee and new_assignee_id != old_assignee_id:
             create_notification(
                 user=new_assignee,
                 notification_type='task_assigned',
@@ -812,22 +818,23 @@ class TaskViewSet(viewsets.ModelViewSet):
                 message=new_instance.title,
                 link=f'/crm/tasks/{new_instance.pk}/',
             )
-            import logging
-            from apps.notifications.tasks import send_notification_email
-            try:
-                send_notification_email.delay(
-                    new_assignee.id,
-                    'task_assigned',
-                    {
-                        'subject': 'Вам назначена задача',
-                        'task_title': new_instance.title,
-                        'board_name': new_instance.column.board.name if new_instance.column else '',
-                        'assigned_by': self.request.user.full_name,
-                        'action_url': f'/crm/tasks/{new_instance.pk}/',
-                    },
-                )
-            except Exception:
-                logging.getLogger(__name__).warning('Failed to enqueue notification email', exc_info=True)
+            if new_assignee != self.request.user:
+                import logging
+                from apps.notifications.tasks import send_notification_email
+                try:
+                    send_notification_email.delay(
+                        new_assignee.id,
+                        'task_assigned',
+                        {
+                            'subject': 'Вам назначена задача',
+                            'task_title': new_instance.title,
+                            'board_name': new_instance.column.board.name if new_instance.column else '',
+                            'assigned_by': self.request.user.full_name,
+                            'action_url': f'/crm/tasks/{new_instance.pk}/',
+                        },
+                    )
+                except Exception:
+                    logging.getLogger(__name__).warning('Failed to enqueue notification email', exc_info=True)
 
         # Log changes to scalar fields that were explicitly sent and actually changed.
         new_scalar_values = {
@@ -873,6 +880,19 @@ class TaskViewSet(viewsets.ModelViewSet):
                     old_value=old_label_info.get(lid, str(lid)),
                     new_value='',
                 )
+
+        deadline_task = Task.objects.select_related('assignee', 'created_by', 'column').get(
+            pk=new_instance.pk
+        )
+        new_deadline_str = _deadline_str(deadline_task.deadline)
+        deadline_date_changed = ('deadline' in validated) and (
+            _deadline_str(task_prefetched.deadline) != new_deadline_str
+        )
+        maybe_notify_deadline_tomorrow_once(
+            deadline_task,
+            skip_if_in_done_column=False,
+            skip_same_calendar_day_dedup=deadline_date_changed,
+        )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

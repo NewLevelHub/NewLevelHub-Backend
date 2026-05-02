@@ -2,6 +2,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import viewsets, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -23,6 +24,14 @@ from apps.core.permissions import (
 )
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
+
+
+class FloorsListPagination(PageNumberPagination):
+    """Floors list can grow with map points; allow clients to request enough rows in one page."""
+
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 500
 from apps.notifications.utils import create_notification
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
@@ -315,6 +324,7 @@ class FloorViewSet(viewsets.ModelViewSet):
     queryset = Floor.objects.prefetch_related('points__resource', 'points__company').select_related('company')
     serializer_class = FloorSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    pagination_class = FloorsListPagination
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -322,7 +332,8 @@ class FloorViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin':
             return qs
         if user.company_id:
-            return qs.filter(company__isnull=True) | qs.filter(company=user.company_id)
+            # Single OR query avoids subtle bugs from queryset-| unions with prefetch/joins.
+            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
         # guest or user without company — show only global floors
         return qs.filter(company__isnull=True)
 

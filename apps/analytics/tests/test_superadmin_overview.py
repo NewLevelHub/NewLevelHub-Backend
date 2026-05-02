@@ -208,3 +208,148 @@ class TestSuperadminOverview:
         api_client.force_authenticate(user=superadmin)
         r = api_client.get(SUPERADMIN_URL, {'period': '7d', 'company_id': company_a.id})
         assert r.json()['overview']['open_service_requests'] == 1
+
+    def test_extended_sections_exist_in_payload(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.get(SUPERADMIN_URL, {'period': '30d'})
+        assert r.status_code == status.HTTP_200_OK
+        body = r.json()
+        assert 'resource_utilization' in body
+        assert 'peak_hours' in body
+        assert 'new_registrations' in body
+        assert 'service_requests_by_type' in body
+        assert 'top_resources' in body
+        assert 'top_companies' in body
+        assert 'low_utilization' in body
+
+    def test_extended_analytics_ac_values(
+        self,
+        api_client,
+        superadmin,
+        company_a,
+        company_b,
+    ):
+        base = _aware_local(2026, 5, 2, 9, 0, 0)
+
+        emp_a = User.objects.create_user(
+            email='extended-a@x.test',
+            password='p',
+            first_name='Ext',
+            last_name='A',
+            role='employee',
+            company=company_a,
+        )
+        emp_b = User.objects.create_user(
+            email='extended-b@x.test',
+            password='p',
+            first_name='Ext',
+            last_name='B',
+            role='employee',
+            company=company_b,
+        )
+
+        User.objects.filter(pk=emp_a.pk).update(date_joined=base - timedelta(days=2))
+        User.objects.filter(pk=emp_b.pk).update(date_joined=base - timedelta(days=10))
+
+        desk_busy = Resource.objects.create(name='Desk Busy', resource_type='desk')
+        desk_low = Resource.objects.create(name='Desk Low', resource_type='desk')
+        room_hot = Resource.objects.create(name='Room Hot', resource_type='meeting_room')
+        parking_hot = Resource.objects.create(name='Park Hot', resource_type='parking')
+        capsule_hot = Resource.objects.create(name='Capsule Hot', resource_type='capsule')
+
+        # 2026-05-01, hour 10, Friday (4) — two bookings for heatmap peak
+        Booking.objects.create(
+            resource=desk_busy,
+            user=emp_a,
+            company=company_a,
+            start_time=_aware_local(2026, 5, 1, 10, 0, 0),
+            end_time=_aware_local(2026, 5, 1, 11, 0, 0),
+            status='confirmed',
+        )
+        Booking.objects.create(
+            resource=room_hot,
+            user=emp_a,
+            company=company_a,
+            start_time=_aware_local(2026, 5, 1, 10, 30, 0),
+            end_time=_aware_local(2026, 5, 1, 11, 30, 0),
+            status='confirmed',
+        )
+
+        # 2026-05-02, hour 9, Saturday (5)
+        Booking.objects.create(
+            resource=parking_hot,
+            user=emp_b,
+            company=company_b,
+            start_time=_aware_local(2026, 5, 2, 9, 0, 0),
+            end_time=_aware_local(2026, 5, 2, 10, 0, 0),
+            status='confirmed',
+        )
+        Booking.objects.create(
+            resource=capsule_hot,
+            user=emp_b,
+            company=company_b,
+            start_time=_aware_local(2026, 5, 2, 9, 30, 0),
+            end_time=_aware_local(2026, 5, 2, 10, 0, 0),
+            status='confirmed',
+        )
+
+        # Additional booking to push top resources/companies
+        Booking.objects.create(
+            resource=desk_busy,
+            user=emp_a,
+            company=company_a,
+            start_time=_aware_local(2026, 5, 2, 12, 0, 0),
+            end_time=_aware_local(2026, 5, 2, 13, 0, 0),
+            status='confirmed',
+        )
+        # Low-utilized resource (single booking in wide window)
+        Booking.objects.create(
+            resource=desk_low,
+            user=emp_a,
+            company=company_a,
+            start_time=_aware_local(2026, 5, 2, 14, 0, 0),
+            end_time=_aware_local(2026, 5, 2, 15, 0, 0),
+            status='confirmed',
+        )
+
+        ServiceRequest.objects.create(company=company_a, request_type='cleaning', status='new')
+        ServiceRequest.objects.create(company=company_a, request_type='cleaning', status='completed')
+        ServiceRequest.objects.create(company=company_b, request_type='repair', status='accepted')
+
+        api_client.force_authenticate(user=superadmin)
+        with patch('django.utils.timezone.now', return_value=base):
+            r = api_client.get(SUPERADMIN_URL, {'period': '7d'})
+        assert r.status_code == status.HTTP_200_OK
+        data = r.json()
+
+        # resource_utilization rows and per-type counters
+        util_by_date = {row['date']: row for row in data['resource_utilization']}
+        assert util_by_date['2026-05-01']['desk_bookings'] == 1
+        assert util_by_date['2026-05-01']['room_bookings'] == 1
+        assert util_by_date['2026-05-02']['parking_bookings'] == 1
+        assert util_by_date['2026-05-02']['capsule_bookings'] == 1
+
+        # peak hours heatmap bins
+        peak_lookup = {(row['day_of_week'], row['hour']): row['booking_count'] for row in data['peak_hours']}
+        assert peak_lookup[(4, 10)] == 2
+        assert peak_lookup[(5, 9)] == 2
+
+        # registrations grouped by ISO week
+        registrations = {row['week']: row['count'] for row in data['new_registrations']}
+        assert sum(registrations.values()) >= 2
+
+        # service requests grouped by request_type
+        sr_by_type = {row['type']: row['count'] for row in data['service_requests_by_type']}
+        assert sr_by_type['cleaning'] == 2
+        assert sr_by_type['repair'] == 1
+
+        # top tables are capped and include expected leaders
+        assert len(data['top_resources']) <= 5
+        assert len(data['top_companies']) <= 5
+        assert data['top_resources'][0]['name'] == 'Desk Busy'
+        assert data['top_resources'][0]['booking_count'] == 2
+        assert data['top_companies'][0]['company_name'] == company_a.name
+        assert data['top_companies'][0]['booking_count'] == 4
+
+        # low-utilization table only contains rows under 20%
+        assert all(item['utilization_percent'] < 20 for item in data['low_utilization'])

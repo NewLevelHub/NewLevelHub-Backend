@@ -25,7 +25,7 @@ from apps.access.models import GuestPass
 from apps.companies.models import Company
 from apps.crm.models import Board, Column, Task
 from apps.notifications.models import Notification
-from apps.services.models import Announcement, Floor
+from apps.services.models import Floor
 from apps.users.models import User
 
 
@@ -258,7 +258,7 @@ def test_ac_access_validate_qr_emits_guest_validated_in_app(mock_delay, api_clie
 @pytest.mark.django_db
 def test_ac_access_guest_pass_expiring_emits_notification(company_admin, company):
     soon = timezone.now() + timedelta(hours=6)
-    gp = GuestPass.objects.create(
+    GuestPass.objects.create(
         company=company,
         created_by=company_admin,
         guest_name='Soon Guest',

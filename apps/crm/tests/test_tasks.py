@@ -205,7 +205,9 @@ class TestTaskCreate:
         ).exists()
 
     @patch('apps.crm.tasks.send_notification_email.delay')
-    def test_create_task_deadline_tomorrow_emits_task_deadline(self, _mock_email, api_client, employee_a, column_a, board_a):
+    def test_create_task_deadline_tomorrow_emits_task_deadline(
+        self, _mock_email, api_client, employee_a, column_a, board_a,
+    ):
         tomorrow_date = timezone.localdate() + timedelta(days=1)
         naive = datetime.combine(tomorrow_date, time(12, 0))
         deadline = timezone.make_aware(naive, timezone.get_current_timezone())

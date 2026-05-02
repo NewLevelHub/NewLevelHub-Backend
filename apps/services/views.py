@@ -24,15 +24,8 @@ from apps.core.permissions import (
 )
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
-
-
-class FloorsListPagination(PageNumberPagination):
-    """Floors list can grow with map points; allow clients to request enough rows in one page."""
-
-    page_size = 50
-    page_size_query_param = 'page_size'
-    max_page_size = 500
 from apps.notifications.utils import create_notification
+
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
@@ -41,6 +34,14 @@ from .serializers import (
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 from .filters import ServiceRequestFilter
+
+
+class FloorsListPagination(PageNumberPagination):
+    """Floors list can grow with map points; allow clients to request enough rows in one page."""
+
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 500
 
 
 # ── Карта здания ──────────────────────────────────────────────────────

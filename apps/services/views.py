@@ -798,8 +798,9 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             create_notification(
                 user=sr.created_by,
                 notification_type='service_request_update',
-                title='Service request status updated',
-                message=f'Your service request status has been changed to: {sr.get_status_display()}',
+                title='Обновление заявки на сервис',
+                message=f'Статус: {sr.get_status_display()}',
+                link='/service-requests/',
             )
 
         return Response(
@@ -938,8 +939,37 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             # company_admin (and any future write-allowed role) is forced
             # onto their own company; never let them post under another tenant.
             company = user.company
-        serializer.save(author=user, company=company)
-        # TODO: если notify_email=True — Celery task рассылки
+        announcement = serializer.save(author=user, company=company)
+        if announcement.notify_email:
+            from apps.notifications.tasks import send_bulk_email
+
+            send_bulk_email.delay(announcement.id)
+        self._notify_announcement_subscribers(announcement)
+
+    def _notify_announcement_subscribers(self, announcement):
+        """In-app fan-out for company or building-wide announcements (excludes author)."""
+        from apps.users.models import User
+
+        author_id = announcement.author_id
+        preview = (announcement.body or '')[:500]
+        if announcement.company_id:
+            qs = User.objects.filter(
+                company_id=announcement.company_id,
+                is_active=True,
+            ).exclude(pk=author_id)
+        else:
+            qs = User.objects.filter(
+                is_active=True,
+                role__in=['superadmin', 'company_admin', 'employee', 'reception'],
+            ).exclude(pk=author_id)
+        for recipient in qs.iterator(chunk_size=100):
+            create_notification(
+                user=recipient,
+                notification_type='announcement',
+                title=announcement.title,
+                message=preview,
+                link='/announcements/',
+            )
 
     @extend_schema(
         tags=['Services'],

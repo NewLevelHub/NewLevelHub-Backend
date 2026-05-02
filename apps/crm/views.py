@@ -951,11 +951,29 @@ class TaskViewSet(viewsets.ModelViewSet):
         _normalize_positions(target_column_obj)
 
         task.refresh_from_db()
+        task = Task.objects.select_related('assignee', 'created_by').get(pk=task.pk)
 
         TaskHistory.objects.create(
             task=task, user=request.user, action='moved',
             old_value=old_column_name, new_value=target_column_obj.name,
         )
+
+        if old_column.pk != target_column_obj.pk:
+            actor_id = request.user.id
+            recipients = []
+            if task.assignee_id and task.assignee_id != actor_id and task.assignee:
+                recipients.append(task.assignee)
+            if task.created_by_id and task.created_by_id != actor_id and task.created_by:
+                if task.created_by not in recipients:
+                    recipients.append(task.created_by)
+            for recipient in recipients:
+                create_notification(
+                    user=recipient,
+                    notification_type='task_moved',
+                    title='Задача перемещена',
+                    message=f'«{task.title}»: {old_column_name} → {target_column_obj.name}',
+                    link=f'/crm/tasks/{task.pk}/',
+                )
         return Response(TaskSerializer(task, context={'request': request}).data)
 
     @extend_schema(

@@ -113,9 +113,32 @@ def auto_complete_bookings():
 
 @shared_task
 def send_booking_reminder(booking_id):
-    """Напоминание за N мин до начала бронирования (one-off, legacy stub)."""
-    # TODO: получить Booking, отправить уведомление пользователю и участникам
-    pass
+    """One-off in-app reminder for a booking (owner + meeting participants)."""
+    from apps.bookings.models import Booking, BookingParticipant
+    from apps.notifications.utils import create_notification
+
+    try:
+        booking = Booking.objects.select_related('user', 'resource').get(pk=booking_id)
+    except Booking.DoesNotExist:
+        return
+
+    if booking.status != 'confirmed':
+        return
+
+    resource_name = booking.resource.name
+    start_local = timezone.localtime(booking.start_time)
+    recipients = {booking.user}
+    for row in BookingParticipant.objects.filter(booking_id=booking.pk).select_related('user'):
+        recipients.add(row.user)
+
+    for user in recipients:
+        create_notification(
+            user=user,
+            notification_type='booking_reminder',
+            title=f'Напоминание: {resource_name}',
+            message=f'Бронирование начинается в {start_local:%d.%m.%Y %H:%M}',
+            link=f'/bookings/{booking.id}',
+        )
 
 
 @shared_task

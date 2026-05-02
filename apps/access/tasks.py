@@ -1,10 +1,19 @@
-from celery import shared_task
+from datetime import timedelta
 from io import BytesIO
+
+import qrcode
+from celery import shared_task
 from django.core.mail import EmailMessage
 from django.utils import timezone
-import qrcode
+
+from apps.notifications.models import Notification
+from apps.notifications.utils import create_notification
 
 from .models import GuestPass
+
+
+# NOTE: In-app guest_validated notification is created synchronously in validate_qr;
+# this task sends email only.
 
 
 @shared_task
@@ -66,3 +75,39 @@ def notify_pass_creator_on_entry(guest_pass_id):
             'action_url': '/access/',
         },
     )
+
+
+@shared_task
+def notify_guest_passes_expiring_soon():
+    """Warn creators about guest passes expiring within the next 24 hours (once per pass per day)."""
+    now = timezone.now()
+    window_end = now + timedelta(hours=24)
+    today = timezone.localdate()
+
+    qs = GuestPass.objects.filter(
+        status='active',
+        valid_until__gt=now,
+        valid_until__lte=window_end,
+    ).select_related('created_by')
+
+    for gp in qs.iterator(chunk_size=100):
+        creator = gp.created_by
+        if creator is None:
+            continue
+        marker = f'[gp:{gp.pk}]'
+        if Notification.objects.filter(
+            user=creator,
+            notification_type='guest_pass_expiring',
+            created_at__date=today,
+            body__contains=marker,
+        ).exists():
+            continue
+        create_notification(
+            user=creator,
+            notification_type='guest_pass_expiring',
+            title=f'Пропуск скоро истечёт: {gp.guest_name}',
+            message=(
+                f'Действителен до {timezone.localtime(gp.valid_until):%d.%m.%Y %H:%M}. {marker}'
+            ),
+            link='/access/',
+        )

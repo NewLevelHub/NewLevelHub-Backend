@@ -2,6 +2,8 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 from apps.users.models import User
+from apps.notifications.utils import create_notification
+
 from .limits import notify_company_admins_limit_thresholds
 from .models import Company, CompanySettings, Invitation
 from .tasks import send_invitation_email
@@ -293,6 +295,13 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         validated_data['company'] = company
         validated_data['invited_by'] = self.context['request'].user
         invitation = super().create(validated_data)
+        create_notification(
+            user=invitation.invited_by,
+            notification_type='invitation',
+            title='Приглашение отправлено',
+            message=f'На адрес {invitation.email} отправлено приглашение.',
+            link='/team/manage',
+        )
         send_invitation_email.delay(invitation.id)
         current_employees = company.members.filter(is_active=True).count()
         notify_company_admins_limit_thresholds(

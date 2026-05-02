@@ -12,7 +12,6 @@ from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResp
 from apps.companies.models import CompanySettings
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
-from apps.notifications.models import Notification
 from apps.notifications.utils import create_notification
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
@@ -84,12 +83,12 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
                 is_active=True,
             )
             for admin in admins:
-                Notification.objects.create(
+                create_notification(
                     user=admin,
                     notification_type='leave_review',
                     title=f'Заявка на отпуск от {employee.full_name}',
-                    body=f'{employee.full_name} подал(а) заявку на отпуск.',
-                    url='/hr/leave-requests/',
+                    message=f'{employee.full_name} подал(а) заявку на отпуск.',
+                    link='/hr/leaves',
                 )
                 send_notification_email.delay(
                     admin.id,
@@ -100,7 +99,7 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
                         'leave_type': leave_request.leave_type,
                         'start_date': str(leave_request.start_date),
                         'end_date': str(leave_request.end_date),
-                        'action_url': '/hr/leave-requests/',
+                        'action_url': '/hr/leaves',
                     },
                 )
 

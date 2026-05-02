@@ -45,7 +45,9 @@ def _resolve_period_metadata(query_params):
         dt_raw = query_params.get('date_to')
         if not df_raw or not dt_raw:
             raise ValidationError(
-                'For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.',
+                {
+                    'detail': 'For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.',
+                },
             )
         date_from = parse_date(df_raw)
         date_to = parse_date(dt_raw)
@@ -54,7 +56,7 @@ def _resolve_period_metadata(query_params):
         if date_to is None:
             raise ValidationError({'date_to': ['Enter a valid date (YYYY-MM-DD).']})
         if date_from > date_to:
-            raise ValidationError('date_from must be on or before date_to.')
+            raise ValidationError({'detail': 'date_from must be on or before date_to.'})
         return period, date_from, date_to
 
     span = PERIOD_DAY_LENGTH[period]

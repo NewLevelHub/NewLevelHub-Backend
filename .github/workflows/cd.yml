@@ -112,10 +112,18 @@ jobs:
               exit 1
             fi
 
+            # Pin BACKEND_IMAGE on disk so compose (backend + celery) matches this deploy; avoids
+            # drift when .env had :latest while CI deployed :sha-<commit>.
+            grep -v '^BACKEND_IMAGE=' .env.production > .env.production.tmp
+            echo "BACKEND_IMAGE=${BACKEND_IMAGE}" >> .env.production.tmp
+            mv .env.production.tmp .env.production
+
             docker pull "$BACKEND_IMAGE"
 
-            docker rm -f nlh_backend_prod nlh_nginx_prod 2>/dev/null || true
-            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate --remove-orphans backend nginx
+            docker rm -f nlh_backend_prod nlh_nginx_prod nlh_celery_prod 2>/dev/null || true
+            # Recreate backend, nginx, and celery so all use the same freshly pulled BACKEND_IMAGE.
+            # `docker compose restart celery` is NOT enough: restart keeps the old container image.
+            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate --remove-orphans backend nginx celery
 
             echo "Waiting for backend container to finish migrate + gunicorn startup..."
             for i in $(seq 1 60); do
@@ -132,9 +140,6 @@ jobs:
             done
 
             docker compose --env-file .env.production -f docker-compose.prod.yml exec -T backend python manage.py collectstatic --noinput || echo "WARNING: collectstatic failed"
-
-            echo "Restarting celery worker..."
-            docker compose --env-file .env.production -f docker-compose.prod.yml restart celery
 
             echo "=== Production deploy complete ==="
             echo "Image: $BACKEND_IMAGE"

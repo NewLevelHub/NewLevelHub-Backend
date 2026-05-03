@@ -44,7 +44,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_employee_count(self, obj):
-        return obj.members.filter(is_active=True).count()
+        return obj.employee_count
 
     def get_storage_used(self, obj):
         """Return total file_size (bytes) used by this company's files."""
@@ -263,7 +263,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         company = self.context['company']
         email = attrs['email'].strip()
 
-        if company.members.filter(is_active=True).count() >= company.max_employees:
+        if company.employee_count >= company.max_employees:
             raise serializers.ValidationError('Employee limit reached')
 
         if User.objects.filter(email__iexact=email).exists():
@@ -303,7 +303,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             link='/team/manage',
         )
         send_invitation_email.delay(invitation.id)
-        current_employees = company.members.filter(is_active=True).count()
+        current_employees = company.employee_count
         notify_company_admins_limit_thresholds(
             company=company,
             metric='employees',

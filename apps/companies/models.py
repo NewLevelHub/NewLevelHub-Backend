@@ -72,7 +72,8 @@ class Company(TimeStampedModel, SoftDeleteModel):
 
     @property
     def employee_count(self):
-        return self.members.filter(is_active=True).count()
+        # Global superadmin may have company_id set; they never count as company roster/limit.
+        return self.members.filter(is_active=True).exclude(role='superadmin').count()
 
     @property
     def is_employee_limit_reached(self):

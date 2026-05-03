@@ -34,6 +34,7 @@ from .serializers import (
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 from .filters import ServiceRequestFilter
+from .tasks import send_announcement_emails
 
 
 class FloorsListPagination(PageNumberPagination):
@@ -953,9 +954,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             company = user.company
         announcement = serializer.save(author=user, company=company)
         if announcement.notify_email:
-            from apps.notifications.tasks import send_bulk_email
-
-            send_bulk_email.delay(announcement.id)
+            send_announcement_emails.delay(announcement.id)
         self._notify_announcement_subscribers(announcement)
 
     def _notify_announcement_subscribers(self, announcement):
@@ -997,13 +996,14 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         summary='Mark announcement as read',
         request=None,
         responses={
-            200: OpenApiResponse(description='Marked as read'),
+            200: AnnouncementSerializer,
             401: OpenApiResponse(description='Not authenticated'),
             404: OpenApiResponse(description='Not found'),
         },
     )
-    @action(detail=True, methods=['post'], url_path='read')
+    @action(detail=True, methods=['post'], url_path='read', permission_classes=[IsAuthenticated])
     def mark_read(self, request, pk=None):
         announcement = self.get_object()
         AnnouncementRead.objects.get_or_create(announcement=announcement, user=request.user)
-        return Response({'detail': 'Marked as read'})
+        serializer = AnnouncementSerializer(announcement, context={'request': request})
+        return Response(serializer.data)

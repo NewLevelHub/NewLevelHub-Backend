@@ -1,4 +1,8 @@
+from datetime import datetime, time, timedelta
+from unittest.mock import patch
+
 import pytest
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -184,6 +188,89 @@ class TestTaskCreate:
         assert res.status_code == status.HTTP_201_CREATED
         assert res.data['title'] == 'New Task'
         assert res.data['priority'] == 'high'
+
+    def test_create_self_assign_creates_in_app_notification(self, api_client, employee_a, column_a, board_a):
+        api_client.force_authenticate(employee_a)
+        res = api_client.post(TASKS_URL, {
+            'board_id': board_a.id,
+            'column_id': column_a.id,
+            'title': 'Self-assigned from create',
+            'priority': 'low',
+            'assignee_id': employee_a.id,
+        }, format='json')
+        assert res.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=employee_a,
+            notification_type='task_assigned',
+        ).exists()
+
+    @patch('apps.crm.tasks.send_notification_email.delay')
+    def test_create_task_deadline_tomorrow_emits_task_deadline(
+        self, _mock_email, api_client, employee_a, column_a, board_a,
+    ):
+        tomorrow_date = timezone.localdate() + timedelta(days=1)
+        naive = datetime.combine(tomorrow_date, time(12, 0))
+        deadline = timezone.make_aware(naive, timezone.get_current_timezone())
+        api_client.force_authenticate(employee_a)
+        res = api_client.post(TASKS_URL, {
+            'board_id': board_a.id,
+            'column_id': column_a.id,
+            'title': 'Due tomorrow create',
+            'priority': 'low',
+            'assignee_id': employee_a.id,
+            'deadline': deadline.isoformat(),
+        }, format='json')
+        assert res.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=employee_a,
+            notification_type='task_deadline',
+            url=f'/crm/tasks/{res.data["id"]}/',
+        ).exists()
+
+    @patch('apps.crm.tasks.send_notification_email.delay')
+    def test_create_task_deadline_tomorrow_date_only_string_emits_task_deadline(
+        self, _mock_email, api_client, employee_a, column_a, board_a,
+    ):
+        """HTML date input sends YYYY-MM-DD only; must match calendar day for 'tomorrow' notify."""
+        tomorrow_date = timezone.localdate() + timedelta(days=1)
+        api_client.force_authenticate(employee_a)
+        res = api_client.post(TASKS_URL, {
+            'board_id': board_a.id,
+            'column_id': column_a.id,
+            'title': 'Due tomorrow date-only',
+            'priority': 'low',
+            'assignee_id': employee_a.id,
+            'deadline': tomorrow_date.isoformat(),
+        }, format='json')
+        assert res.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=employee_a,
+            notification_type='task_deadline',
+            url=f'/crm/tasks/{res.data["id"]}/',
+        ).exists()
+
+    @patch('apps.crm.tasks.send_notification_email.delay')
+    def test_create_task_deadline_tomorrow_in_gotovo_column_emits_task_deadline(
+        self, _mock_email, api_client, employee_a, board_a,
+    ):
+        """Create in column 'Готово' must still notify: boards use that column for new cards too."""
+        col_done = Column.objects.create(board=board_a, name='Готово', position=5)
+        tomorrow_date = timezone.localdate() + timedelta(days=1)
+        api_client.force_authenticate(employee_a)
+        res = api_client.post(TASKS_URL, {
+            'board_id': board_a.id,
+            'column_id': col_done.id,
+            'title': 'In done column',
+            'priority': 'low',
+            'assignee_id': employee_a.id,
+            'deadline': tomorrow_date.isoformat(),
+        }, format='json')
+        assert res.status_code == status.HTTP_201_CREATED
+        assert Notification.objects.filter(
+            user=employee_a,
+            notification_type='task_deadline',
+            url=f'/crm/tasks/{res.data["id"]}/',
+        ).exists()
 
     def test_admin_can_create_task_with_assignee(self, api_client, admin_a, employee_a, column_a, board_a):
         api_client.force_authenticate(admin_a)
@@ -467,6 +554,38 @@ class TestTaskUpdate:
         res = api_client.patch(task_url(task_a.id), {'priority': 'urgent'}, format='json')
         assert res.status_code == status.HTTP_200_OK
         assert res.data['priority'] == 'urgent'
+
+    @patch('apps.crm.tasks.send_notification_email.delay')
+    def test_patch_deadline_change_to_tomorrow_inserts_even_if_task_deadline_exists_today(
+        self, _mock_email, api_client, admin_a, employee_a, task_a,
+    ):
+        """Editing deadline later same day must not be blocked by per-day dedup."""
+        from apps.notifications.utils import create_notification
+
+        task_a.assignee = employee_a
+        task_a.save()
+        url = f'/crm/tasks/{task_a.id}/'
+        create_notification(
+            user=employee_a,
+            notification_type='task_deadline',
+            title='Earlier',
+            message='m',
+            link=url,
+        )
+        assert Notification.objects.filter(
+            user=employee_a, notification_type='task_deadline', url=url,
+        ).count() == 1
+        week_ahead = timezone.localdate() + timedelta(days=7)
+        naive = datetime.combine(week_ahead, time(12, 0))
+        task_a.deadline = timezone.make_aware(naive, timezone.get_current_timezone())
+        task_a.save()
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        api_client.force_authenticate(admin_a)
+        res = api_client.patch(task_url(task_a.id), {'deadline': tomorrow.isoformat()}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        assert Notification.objects.filter(
+            user=employee_a, notification_type='task_deadline', url=url,
+        ).count() == 2
 
     def test_cross_company_task_returns_404(self, api_client, employee_a, column_b):
         task_b = Task.objects.create(column=column_b, title='Other', priority='low', position=1)

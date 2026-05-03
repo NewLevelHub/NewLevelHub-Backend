@@ -20,6 +20,7 @@ from rest_framework.response import Response
 
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
+from apps.notifications.utils import create_notification
 from .filters import AccessLogFilter, GuestPassFilter
 from .models import AccessLog, GuestPass
 from . import tasks
@@ -214,7 +215,9 @@ def validate_qr(request):
     serializer = GuestPassValidateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     try:
-        guest_pass = GuestPass.objects.get(qr_code=serializer.validated_data['qr_code'])
+        guest_pass = GuestPass.objects.select_related('created_by').get(
+            qr_code=serializer.validated_data['qr_code']
+        )
     except GuestPass.DoesNotExist:
         return Response({'valid': False, 'reason': 'not_found'})
 
@@ -237,6 +240,16 @@ def validate_qr(request):
         guest_pass=guest_pass,
         checked_by=request.user,
         method='qr',
+    )
+    create_notification(
+        user=guest_pass.created_by,
+        notification_type='guest_validated',
+        title='Гостевой пропуск подтверждён',
+        message=(
+            f'{guest_pass.guest_name} — {guest_pass.visit_purpose or "визит"} '
+            f'({timezone.now().strftime("%Y-%m-%d %H:%M")})'
+        ),
+        link='/access/',
     )
     try:
         notify_pass_creator_on_entry.delay(guest_pass.id)

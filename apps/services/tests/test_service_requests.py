@@ -155,6 +155,8 @@ def test_create_service_request_employee(api_client, employee, floor):
     assert data['created_by'] == employee.pk
     assert data['company'] == employee.company_id
     assert data['floor'] == floor.pk
+    assert data['floor_number'] == floor.number
+    assert data['floor_name'] == floor.name
 
 
 @pytest.mark.django_db

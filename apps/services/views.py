@@ -2,6 +2,7 @@ from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import viewsets, status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -24,6 +25,7 @@ from apps.core.permissions import (
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
+
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
@@ -33,6 +35,14 @@ from .serializers import (
 )
 from .filters import ServiceRequestFilter
 from .tasks import send_announcement_emails
+
+
+class FloorsListPagination(PageNumberPagination):
+    """Floors list can grow with map points; allow clients to request enough rows in one page."""
+
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 500
 
 
 # ── Карта здания ──────────────────────────────────────────────────────
@@ -316,6 +326,7 @@ class FloorViewSet(viewsets.ModelViewSet):
     queryset = Floor.objects.prefetch_related('points__resource', 'points__company').select_related('company')
     serializer_class = FloorSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    pagination_class = FloorsListPagination
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -323,7 +334,8 @@ class FloorViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin':
             return qs
         if user.company_id:
-            return qs.filter(company__isnull=True) | qs.filter(company=user.company_id)
+            # Single OR query avoids subtle bugs from queryset-| unions with prefetch/joins.
+            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
         # guest or user without company — show only global floors
         return qs.filter(company__isnull=True)
 
@@ -799,8 +811,9 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             create_notification(
                 user=sr.created_by,
                 notification_type='service_request_update',
-                title='Service request status updated',
-                message=f'Your service request status has been changed to: {sr.get_status_display()}',
+                title='Обновление заявки на сервис',
+                message=f'Статус: {sr.get_status_display()}',
+                link='/service-requests/',
             )
 
         return Response(
@@ -942,6 +955,41 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         announcement = serializer.save(author=user, company=company)
         if announcement.is_pinned and announcement.notify_email:
             send_announcement_emails.delay(announcement.id)
+        self._notify_announcement_subscribers(announcement)
+
+    def _notify_announcement_subscribers(self, announcement):
+        """In-app fan-out for company or building-wide announcements (excludes author)."""
+        from apps.users.models import User
+
+        author_id = announcement.author_id
+        headline = (announcement.title or '').strip()
+        preview = (announcement.body or '').strip()
+        if preview:
+            preview = preview[:500]
+        parts = []
+        if headline:
+            parts.append(headline)
+        if preview:
+            parts.append(preview)
+        body_text = '\n\n'.join(parts) if parts else 'Откройте раздел объявлений.'
+        if announcement.company_id:
+            qs = User.objects.filter(
+                company_id=announcement.company_id,
+                is_active=True,
+            ).exclude(pk=author_id)
+        else:
+            qs = User.objects.filter(
+                is_active=True,
+                role__in=['superadmin', 'company_admin', 'employee', 'reception'],
+            ).exclude(pk=author_id)
+        for recipient in qs.iterator(chunk_size=100):
+            create_notification(
+                user=recipient,
+                notification_type='announcement',
+                title='Новое объявление',
+                message=body_text,
+                link='/announcements/',
+            )
 
     @extend_schema(
         tags=['Services'],

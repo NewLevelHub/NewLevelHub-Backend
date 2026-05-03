@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, time
 
 from django.utils import timezone
-from django.db.models import Count, Avg, F, Sum
+from django.db.models import Count, Avg, F, Sum, Q
+from django.db.models.functions import TruncDate, ExtractHour
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound, ValidationError
@@ -91,6 +92,61 @@ def _local_day_bounds(target_date):
     return start, end
 
 
+def _build_resource_utilization(bookings_in_period):
+    rows = (
+        bookings_in_period
+        .annotate(day=TruncDate('start_time'))
+        .values('day')
+        .annotate(
+            desk_bookings=Count('id', filter=Q(resource__resource_type='desk')),
+            room_bookings=Count('id', filter=Q(resource__resource_type='meeting_room')),
+            parking_bookings=Count('id', filter=Q(resource__resource_type='parking')),
+            capsule_bookings=Count('id', filter=Q(resource__resource_type='capsule')),
+        )
+        .order_by('day')
+    )
+    return [
+        {
+            'date': row['day'],
+            'desk_bookings': row['desk_bookings'],
+            'room_bookings': row['room_bookings'],
+            'parking_bookings': row['parking_bookings'],
+            'capsule_bookings': row['capsule_bookings'],
+        }
+        for row in rows
+    ]
+
+
+def _build_peak_hours(bookings_in_period):
+    rows = bookings_in_period.annotate(hour=ExtractHour('start_time')).values('start_time', 'hour')
+    aggregated = {}
+    tz = timezone.get_current_timezone()
+    for row in rows:
+        dt_local = timezone.localtime(row['start_time'], tz)
+        key = (dt_local.weekday(), row['hour'])
+        aggregated[key] = aggregated.get(key, 0) + 1
+
+    return [
+        {
+            'day_of_week': day_of_week,
+            'hour': hour,
+            'booking_count': count,
+        }
+        for (day_of_week, hour), count in sorted(aggregated.items())
+    ]
+
+
+def _build_new_registrations(user_qs):
+    weeks = {}
+    tz = timezone.get_current_timezone()
+    for joined in user_qs.values_list('date_joined', flat=True):
+        local_date = timezone.localtime(joined, tz).date()
+        iso_year, iso_week, _ = local_date.isocalendar()
+        week_key = f'{iso_year}-W{iso_week:02d}'
+        weeks[week_key] = weeks.get(week_key, 0) + 1
+    return [{'week': week, 'count': count} for week, count in sorted(weeks.items())]
+
+
 @extend_schema(
     tags=['Analytics'],
     summary='Superadmin dashboard',
@@ -161,6 +217,8 @@ def superadmin_dashboard(request):
     today = timezone.localdate()
     week_ago = now - timedelta(days=7)
     day_start, day_end = _local_day_bounds(today)
+    period_start, _ = _local_day_bounds(date_from)
+    _, period_end = _local_day_bounds(date_to)
 
     if company_id is not None:
         company_qs = Company.objects.filter(pk=company_id)
@@ -211,11 +269,103 @@ def superadmin_dashboard(request):
         'open_service_requests': open_service_requests,
     }
 
+    bookings_in_period = Booking.objects.filter(
+        status='confirmed',
+        start_time__gte=period_start,
+        start_time__lte=period_end,
+    )
+    if company_id is not None:
+        bookings_in_period = bookings_in_period.filter(company_id=company_id)
+
+    resource_utilization = _build_resource_utilization(bookings_in_period)
+    peak_hours = _build_peak_hours(bookings_in_period)
+
+    registrations_qs = User.objects.filter(
+        date_joined__gte=period_start,
+        date_joined__lte=period_end,
+    )
+    if company_id is not None:
+        registrations_qs = registrations_qs.filter(company_id=company_id)
+    new_registrations = _build_new_registrations(registrations_qs)
+
+    sr_period_qs = ServiceRequest.objects.filter(
+        created_at__gte=period_start,
+        created_at__lte=period_end,
+    )
+    if company_id is not None:
+        sr_period_qs = sr_period_qs.filter(company_id=company_id)
+    service_requests_by_type = list(
+        sr_period_qs.values('request_type').annotate(count=Count('id')).order_by('request_type'),
+    )
+    service_requests_by_type = [
+        {'type': row['request_type'], 'count': row['count']}
+        for row in service_requests_by_type
+    ]
+
+    top_resources_qs = list(
+        bookings_in_period.values('resource_id', 'resource__name', 'resource__resource_type')
+        .annotate(booking_count=Count('id'))
+        .order_by('-booking_count', 'resource_id')[:5],
+    )
+    top_resources = [
+        {
+            'resource_id': row['resource_id'],
+            'name': row['resource__name'],
+            'resource_type': row['resource__resource_type'],
+            'booking_count': row['booking_count'],
+        }
+        for row in top_resources_qs
+    ]
+
+    top_companies_qs = list(
+        bookings_in_period
+        .exclude(company_id__isnull=True)
+        .values('company_id', 'company__name')
+        .annotate(booking_count=Count('id'))
+        .order_by('-booking_count', 'company_id')[:5],
+    )
+    top_companies = [
+        {
+            'company_id': row['company_id'],
+            'company_name': row['company__name'],
+            'booking_count': row['booking_count'],
+        }
+        for row in top_companies_qs
+    ]
+
+    period_days = (date_to - date_from).days + 1
+    capacity = max(period_days, 1)
+    low_utilization_qs = (
+        bookings_in_period.values('resource_id', 'resource__name', 'resource__resource_type')
+        .annotate(booking_count=Count('id'))
+        .order_by('resource_id')
+    )
+    low_utilization = []
+    for row in low_utilization_qs:
+        utilization_percent = round((row['booking_count'] / capacity) * 100, 2)
+        if utilization_percent < 20:
+            low_utilization.append(
+                {
+                    'resource_id': row['resource_id'],
+                    'name': row['resource__name'],
+                    'resource_type': row['resource__resource_type'],
+                    'booking_count': row['booking_count'],
+                    'utilization_percent': utilization_percent,
+                },
+            )
+
     payload = {
         'period': period,
         'date_from': date_from,
         'date_to': date_to,
         'overview': overview,
+        'resource_utilization': resource_utilization,
+        'peak_hours': peak_hours,
+        'new_registrations': new_registrations,
+        'service_requests_by_type': service_requests_by_type,
+        'top_resources': top_resources,
+        'top_companies': top_companies,
+        'low_utilization': low_utilization,
     }
     return Response(SuperAdminDashboardSerializer(instance=payload).data)
 

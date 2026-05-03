@@ -33,7 +33,7 @@ def notify_service_request_status_change(request_id):
 @shared_task
 def send_announcement_emails(announcement_id):
     """
-    Email when notify_email=True.
+    Email for important (pinned) announcements when notify_email=True.
 
     - Company-scoped: delegates to notifications.send_bulk_email (templates, prefs).
     - Building-wide (company=null): send_bulk_email skips these; fan out via SMTP here.
@@ -48,7 +48,7 @@ def send_announcement_emails(announcement_id):
         logger.warning('send_announcement_emails: Announcement id=%s not found', announcement_id)
         return
 
-    if not announcement.notify_email:
+    if not announcement.notify_email or not announcement.is_pinned:
         return
 
     if announcement.company_id:

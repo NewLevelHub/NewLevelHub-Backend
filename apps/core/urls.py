@@ -5,4 +5,5 @@ urlpatterns = [
     path('health/', views.health_check, name='health-check'),
     path('ping/', views.ping, name='ping'),
     path('calendar/events/', views.calendar_events, name='calendar-events'),
+    path('dashboard/', views.dashboard, name='dashboard'),
 ]

@@ -308,10 +308,10 @@ def test_ac_new_announcement_emits_announcement_notifications(superadmin):
         format='json',
     )
     assert resp.status_code == status.HTTP_201_CREATED
-    assert Notification.objects.filter(
-        user=member,
-        notification_type='announcement',
-    ).exists()
+    notif = Notification.objects.get(user=member, notification_type='announcement')
+    assert notif.title == 'Новое объявление'
+    assert 'AC Title' in notif.body
+    assert 'AC Body' in notif.body
 
 
 @pytest.mark.django_db

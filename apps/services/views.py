@@ -963,7 +963,16 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         from apps.users.models import User
 
         author_id = announcement.author_id
-        preview = (announcement.body or '')[:500]
+        headline = (announcement.title or '').strip()
+        preview = (announcement.body or '').strip()
+        if preview:
+            preview = preview[:500]
+        parts = []
+        if headline:
+            parts.append(headline)
+        if preview:
+            parts.append(preview)
+        body_text = '\n\n'.join(parts) if parts else 'Откройте раздел объявлений.'
         if announcement.company_id:
             qs = User.objects.filter(
                 company_id=announcement.company_id,
@@ -978,8 +987,8 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             create_notification(
                 user=recipient,
                 notification_type='announcement',
-                title=announcement.title,
-                message=preview,
+                title='Новое объявление',
+                message=body_text,
                 link='/announcements/',
             )
 

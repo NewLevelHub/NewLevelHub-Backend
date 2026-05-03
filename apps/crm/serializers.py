@@ -1,6 +1,9 @@
 import os
 import re
+from datetime import datetime, time
 
+from django.utils import timezone as django_timezone
+from django.utils.dateparse import parse_date
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
@@ -30,6 +33,28 @@ class BoardMinimalSerializer(serializers.ModelSerializer):
         model = Board
         fields = ['id', 'name', 'description', 'is_archived', 'created_at']
         read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at']
+
+
+class DeadlineDateTimeField(serializers.DateTimeField):
+    """
+    Accept full ISO datetimes or date-only 'YYYY-MM-DD' (HTML date inputs).
+
+    Date-only values are stored as noon in the active timezone so
+    ``timezone.localtime(deadline).date()`` matches the chosen calendar day.
+    Plain ISO dates are often parsed as midnight UTC, which shifts the local
+    calendar day for timezones west of UTC and breaks 'deadline is tomorrow'
+    checks on create; PATCH after load can send a different shape and appear to work.
+    """
+
+    def to_internal_value(self, data):
+        if isinstance(data, str) and len(data) == 10 and data[4] == '-' and data[7] == '-':
+            d = parse_date(data)
+            if d is not None:
+                return django_timezone.make_aware(
+                    datetime.combine(d, time(12, 0)),
+                    django_timezone.get_current_timezone(),
+                )
+        return super().to_internal_value(data)
 
 
 class LabelSerializer(serializers.ModelSerializer):
@@ -253,6 +278,7 @@ class TaskSerializer(serializers.ModelSerializer):
     checklists = ChecklistSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(source='comments.count', read_only=True)
     attachments_count = serializers.IntegerField(source='attachments.count', read_only=True)
+    deadline = DeadlineDateTimeField(required=False, allow_null=True)
 
     class Meta:
         model = Task

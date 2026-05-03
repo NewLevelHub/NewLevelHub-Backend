@@ -628,6 +628,18 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             validated_data['company'] = user.company
             booking = super().create(validated_data)
 
+            # In-app confirmation for the booking owner (preferences + DND via helper)
+            create_notification(
+                user=user,
+                notification_type='booking_confirmed',
+                title=f'Бронирование подтверждено: {resource.name}',
+                message=(
+                    f'{timezone.localtime(start_time):%d.%m.%Y %H:%M} — '
+                    f'{timezone.localtime(end_time):%H:%M}'
+                ),
+                link=f'/bookings/{booking.id}',
+            )
+
             # Only create participants for meeting rooms
             if resource.resource_type == 'meeting_room' and participant_ids:
                 participant_users = list(User.objects.filter(id__in=participant_ids))

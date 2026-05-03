@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 
 from apps.bookings.models import Booking, Resource
 from apps.companies.models import Company
+from apps.notifications.models import Notification
 from apps.users.models import User
 
 RESERVATIONS_URL = '/api/v1/bookings/reservations/'
@@ -278,6 +279,11 @@ class TestCancelBookingStable:
         assert booking.status == 'cancelled'
         assert booking.cancel_reason == 'Changed plans'
         assert booking.cancelled_by == employee
+        assert Notification.objects.filter(
+            user=employee,
+            notification_type='booking_cancelled',
+            url=f'/bookings/{booking.id}',
+        ).exists()
 
     def test_company_admin_can_cancel_employee_booking(
         self, api_client, company_admin, employee, stable_resource, company
@@ -301,6 +307,10 @@ class TestCancelBookingStable:
         assert response.status_code == status.HTTP_200_OK
         booking.refresh_from_db()
         assert booking.status == 'cancelled'
+        assert Notification.objects.filter(
+            user=employee,
+            notification_type='booking_cancelled',
+        ).exists()
 
     def test_superadmin_can_cancel_any_booking(
         self, api_client, superadmin, employee, stable_resource, company

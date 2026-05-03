@@ -1,11 +1,16 @@
+import csv
+import io
 from datetime import datetime, timedelta, time
 
+from django.http import HttpResponse
 from django.utils import timezone
 from django.db.models import Count, Avg, F, Sum
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
@@ -91,54 +96,11 @@ def _local_day_bounds(target_date):
     return start, end
 
 
-@extend_schema(
-    tags=['Analytics'],
-    summary='Superadmin dashboard',
-    parameters=[
-        OpenApiParameter(
-            name='period',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='Report window for metadata (date_from / date_to).',
-            enum=['7d', '30d', '90d', 'custom'],
-        ),
-        OpenApiParameter(
-            name='date_from',
-            type=OpenApiTypes.DATE,
-            location=OpenApiParameter.QUERY,
-            description='Required when period=custom (inclusive, YYYY-MM-DD).',
-        ),
-        OpenApiParameter(
-            name='date_to',
-            type=OpenApiTypes.DATE,
-            location=OpenApiParameter.QUERY,
-            description='Required when period=custom (inclusive, YYYY-MM-DD).',
-        ),
-        OpenApiParameter(
-            name='company_id',
-            type=OpenApiTypes.INT,
-            location=OpenApiParameter.QUERY,
-            description='Optional: scope overview counters to this company (must exist).',
-        ),
-        OpenApiParameter(
-            name='resource_type',
-            type=str,
-            location=OpenApiParameter.QUERY,
-            description='Optional: filter bookings_today by Resource.resource_type.',
-            enum=[c[0] for c in Resource.TYPE_CHOICES],
-        ),
-    ],
-    responses={
-        200: SuperAdminDashboardSerializer,
-        400: OpenApiResponse(description='Validation error'),
-        404: OpenApiResponse(description='Company not found'),
-        401: OpenApiResponse(description='Not authenticated'),
-        403: OpenApiResponse(description='Superadmin only'),
-    },
-)
-@api_view(['GET'])
-@permission_classes([IsSuperAdmin])
-def superadmin_dashboard(request):
+def build_superadmin_dashboard_payload(request):
+    """
+    Same aggregated figures as JSON GET /analytics/superadmin/ (DEV-115).
+    Used by the dashboard response and CSV export.
+    """
     qp = request.query_params
     period, date_from, date_to = _resolve_period_metadata(qp)
 
@@ -157,9 +119,8 @@ def superadmin_dashboard(request):
     else:
         resource_type = None
 
-    now = timezone.now()
     today = timezone.localdate()
-    week_ago = now - timedelta(days=7)
+    week_ago = timezone.now() - timedelta(days=7)
     day_start, day_end = _local_day_bounds(today)
 
     if company_id is not None:
@@ -211,33 +172,17 @@ def superadmin_dashboard(request):
         'open_service_requests': open_service_requests,
     }
 
-    payload = {
+    return {
         'period': period,
         'date_from': date_from,
         'date_to': date_to,
         'overview': overview,
     }
-    return Response(SuperAdminDashboardSerializer(instance=payload).data)
 
 
-@extend_schema(
-    tags=['Analytics'],
-    summary='Company admin dashboard',
-    responses={
-        200: CompanyAnalyticsSerializer,
-        400: OpenApiResponse(description='No company assigned'),
-        401: OpenApiResponse(description='Not authenticated'),
-        403: OpenApiResponse(description='Company admin only'),
-    },
-)
-@api_view(['GET'])
-@permission_classes([IsCompanyAdmin])
-def company_dashboard(request):
-    user = request.user
+def build_company_analytics_data(user):
+    """Same figures as JSON GET /analytics/company/ (DEV-117). Caller must ensure user.company is set."""
     company = user.company
-    if not company:
-        return Response({'detail': 'No company'}, status=400)
-
     now = timezone.now()
     week_ago = now - timedelta(days=7)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -282,7 +227,7 @@ def company_dashboard(request):
         for employee in employees_qs.order_by('id')
     ]
 
-    data = {
+    return {
         'total_employees': employees_qs.count(),
         'active_7d': employees_qs.filter(last_login__gte=week_ago).count(),
         'bookings_month': Booking.objects.filter(company=company, start_time__gte=month_start).count(),
@@ -294,7 +239,266 @@ def company_dashboard(request):
         'guest_visits_month': GuestPass.objects.filter(company=company, created_at__gte=month_start).count(),
         'employee_activity': employee_activity,
     }
+
+
+def _http_csv_attachment(filename_stem, rows):
+    buffer = io.StringIO()
+    buffer.write('\ufeff')
+    writer = csv.writer(buffer)
+    for row in rows:
+        writer.writerow(row)
+    response = HttpResponse(buffer.getvalue(), content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="{filename_stem}.csv"'
+    return response
+
+
+def _rows_superadmin_csv(payload):
+    ov = payload['overview']
+    headers = [
+        'period',
+        'date_from',
+        'date_to',
+        'total_companies',
+        'active_companies',
+        'total_users',
+        'active_users_7d',
+        'bookings_today',
+        'guests_today',
+        'open_service_requests',
+    ]
+    data_row = [
+        payload['period'],
+        payload['date_from'].isoformat(),
+        payload['date_to'].isoformat(),
+        ov['total_companies'],
+        ov['active_companies'],
+        ov['total_users'],
+        ov['active_users_7d'],
+        ov['bookings_today'],
+        ov['guests_today'],
+        ov['open_service_requests'],
+    ]
+    return [headers, data_row]
+
+
+class _IgnoreDrfFormatQueryParamMixin:
+    """DRF reserves ?format= for renderers; CSV export uses format=csv as a domain parameter."""
+
+    def perform_content_negotiation(self, request, force=False):
+        renderers = self.get_renderers()
+        if renderers:
+            return (renderers[0], renderers[0].media_type)
+        return (JSONRenderer(), 'application/json')
+
+
+def _rows_company_csv(data):
+    act = data['active_crm_tasks']
+    summary_header = [
+        'total_employees',
+        'active_7d',
+        'bookings_month',
+        'storage_used',
+        'storage_limit',
+        'crm_todo',
+        'crm_in_progress',
+        'crm_done',
+        'guest_visits_month',
+    ]
+    summary_row = [
+        data['total_employees'],
+        data['active_7d'],
+        data['bookings_month'],
+        data['storage']['used'],
+        data['storage']['limit'],
+        act['todo'],
+        act['in_progress'],
+        act['done'],
+        data['guest_visits_month'],
+    ]
+    rows = [summary_header, summary_row, []]
+    rows.append(['user_id', 'full_name', 'booking_count_30d', 'task_count_active', 'last_login'])
+    for emp in data['employee_activity']:
+        last_login = emp['last_login'].isoformat() if emp['last_login'] else ''
+        rows.append([
+            emp['user_id'],
+            emp['full_name'],
+            emp['booking_count_30d'],
+            emp['task_count_active'],
+            last_login,
+        ])
+    return rows
+
+
+@extend_schema(
+    tags=['Analytics'],
+    summary='Superadmin dashboard',
+    parameters=[
+        OpenApiParameter(
+            name='period',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Report window for metadata (date_from / date_to).',
+            enum=['7d', '30d', '90d', 'custom'],
+        ),
+        OpenApiParameter(
+            name='date_from',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom (inclusive, YYYY-MM-DD).',
+        ),
+        OpenApiParameter(
+            name='date_to',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom (inclusive, YYYY-MM-DD).',
+        ),
+        OpenApiParameter(
+            name='company_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='Optional: scope overview counters to this company (must exist).',
+        ),
+        OpenApiParameter(
+            name='resource_type',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Optional: filter bookings_today by Resource.resource_type.',
+            enum=[c[0] for c in Resource.TYPE_CHOICES],
+        ),
+    ],
+    responses={
+        200: SuperAdminDashboardSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        404: OpenApiResponse(description='Company not found'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsSuperAdmin])
+def superadmin_dashboard(request):
+    payload = build_superadmin_dashboard_payload(request)
+    return Response(SuperAdminDashboardSerializer(instance=payload).data)
+
+
+@extend_schema(
+    tags=['Analytics'],
+    summary='Company admin dashboard',
+    responses={
+        200: CompanyAnalyticsSerializer,
+        400: OpenApiResponse(description='No company assigned'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Company admin only'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsCompanyAdmin])
+def company_dashboard(request):
+    user = request.user
+    company = user.company
+    if not company:
+        return Response({'detail': 'No company'}, status=400)
+
+    data = build_company_analytics_data(user)
     return Response(CompanyAnalyticsSerializer(data).data)
+
+
+@extend_schema(
+    tags=['Analytics'],
+    summary='Export superadmin analytics as CSV',
+    parameters=[
+        OpenApiParameter(
+            name='format',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Must be csv.',
+            enum=['csv'],
+            required=True,
+        ),
+        OpenApiParameter(
+            name='period',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Same as GET /analytics/superadmin/.',
+            enum=['7d', '30d', '90d', 'custom'],
+        ),
+        OpenApiParameter(
+            name='date_from',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom.',
+        ),
+        OpenApiParameter(
+            name='date_to',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom.',
+        ),
+        OpenApiParameter(
+            name='company_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='Optional company scope (same as dashboard).',
+        ),
+        OpenApiParameter(
+            name='resource_type',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Optional bookings_today filter (same as dashboard).',
+            enum=[c[0] for c in Resource.TYPE_CHOICES],
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(description='CSV (UTF-8 with BOM), Content-Disposition: attachment'),
+        400: OpenApiResponse(description='Validation error'),
+        404: OpenApiResponse(description='Company not found'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Superadmin only'),
+    },
+)
+class SuperadminExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
+    permission_classes = [IsSuperAdmin]
+
+    def get(self, request):
+        if request.query_params.get('format') != 'csv':
+            raise ValidationError({'format': ['Invalid or missing format. Use format=csv.']})
+        payload = build_superadmin_dashboard_payload(request)
+        stem = f'analytics-superadmin-{payload["period"]}'
+        return _http_csv_attachment(stem, _rows_superadmin_csv(payload))
+
+
+@extend_schema(
+    tags=['Analytics'],
+    summary='Export company analytics as CSV',
+    parameters=[
+        OpenApiParameter(
+            name='format',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Must be csv.',
+            enum=['csv'],
+            required=True,
+        ),
+    ],
+    responses={
+        200: OpenApiResponse(description='CSV (UTF-8 with BOM), Content-Disposition: attachment'),
+        400: OpenApiResponse(description='No company assigned'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Company admin only'),
+    },
+)
+class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
+    permission_classes = [IsCompanyAdmin]
+
+    def get(self, request):
+        if request.query_params.get('format') != 'csv':
+            raise ValidationError({'format': ['Invalid or missing format. Use format=csv.']})
+        user = request.user
+        if not user.company:
+            return Response({'detail': 'No company'}, status=400)
+        data = build_company_analytics_data(user)
+        safe_slug = ''.join(c if c.isalnum() else '-' for c in user.company.name.lower()) or 'company'
+        return _http_csv_attachment(f'analytics-company-{safe_slug}', _rows_company_csv(data))
 
 
 @extend_schema(

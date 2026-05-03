@@ -249,7 +249,8 @@ class TestSuperadminOverview:
         )
 
         User.objects.filter(pk=emp_a.pk).update(date_joined=base - timedelta(days=2))
-        User.objects.filter(pk=emp_b.pk).update(date_joined=base - timedelta(days=10))
+        # 7d window is inclusive [today - 6d, today]; keep emp_b inside it (base - 10d falls outside).
+        User.objects.filter(pk=emp_b.pk).update(date_joined=base - timedelta(days=5))
 
         desk_busy = Resource.objects.create(name='Desk Busy', resource_type='desk')
         desk_low = Resource.objects.create(name='Desk Low', resource_type='desk')
@@ -312,9 +313,20 @@ class TestSuperadminOverview:
             status='confirmed',
         )
 
-        ServiceRequest.objects.create(company=company_a, request_type='cleaning', status='new')
-        ServiceRequest.objects.create(company=company_a, request_type='cleaning', status='completed')
-        ServiceRequest.objects.create(company=company_b, request_type='repair', status='accepted')
+        sr_clean_new = ServiceRequest.objects.create(
+            company=company_a, request_type='cleaning', status='new',
+        )
+        sr_clean_done = ServiceRequest.objects.create(
+            company=company_a, request_type='cleaning', status='completed',
+        )
+        sr_repair = ServiceRequest.objects.create(
+            company=company_b, request_type='repair', status='accepted',
+        )
+        # Analytics filters by created_at inside period_*; default auto timestamps use wall-clock time.
+        ts_in_period = base - timedelta(hours=1)
+        ServiceRequest.objects.filter(pk__in=[sr_clean_new.pk, sr_clean_done.pk, sr_repair.pk]).update(
+            created_at=ts_in_period,
+        )
 
         api_client.force_authenticate(user=superadmin)
         with patch('django.utils.timezone.now', return_value=base):

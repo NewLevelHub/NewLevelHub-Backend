@@ -1187,21 +1187,28 @@ class CommentViewSet(viewsets.ModelViewSet):
 
     def _notify_task_participants(self, task, comment):
         """Notify task assignee and creator when a new comment is posted, skipping the author."""
-        author = comment.author
-        recipients = set()
+        author_id = comment.author_id
+        if author_id is None:
+            author_id = self.request.user.pk
 
-        if task.assignee and task.assignee != author:
-            recipients.add(task.assignee)
-        if task.created_by and task.created_by != author:
-            recipients.add(task.created_by)
+        # Re-load task so assignee/creator match persisted FKs (same pattern as task move).
+        fresh = Task.objects.select_related('assignee', 'created_by').get(pk=task.pk)
 
+        recipients = []
+        if fresh.assignee_id and fresh.assignee_id != author_id and fresh.assignee:
+            recipients.append(fresh.assignee)
+        if fresh.created_by_id and fresh.created_by_id != author_id and fresh.created_by:
+            if fresh.created_by not in recipients:
+                recipients.append(fresh.created_by)
+
+        link = f'/crm/tasks/{fresh.pk}/'
         for recipient in recipients:
             create_notification(
                 user=recipient,
                 notification_type='task_comment',
                 title='Новый комментарий к задаче',
-                message=task.title,
-                link=f'/crm/tasks/{task.pk}/',
+                message=fresh.title,
+                link=link,
             )
 
 

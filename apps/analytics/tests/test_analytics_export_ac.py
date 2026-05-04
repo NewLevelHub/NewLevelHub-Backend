@@ -219,3 +219,5 @@ class TestAnalyticsExportVsDashboardConsistency:
         assert int(summary['total_employees']) == dj['total_employees']
         assert int(summary['bookings_month']) == dj['bookings_month']
         assert int(summary['guest_visits_month']) == dj['guest_visits_month']
+        assert int(summary['crm_total']) == dj['active_crm_tasks']['total']
+        assert int(summary['crm_other']) == dj['active_crm_tasks']['other']

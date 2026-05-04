@@ -4,6 +4,7 @@ from rest_framework import serializers
 from apps.users.models import User
 from apps.notifications.utils import create_notification
 
+from .invite_policy import email_blocks_new_company_invitation
 from .limits import notify_company_admins_limit_thresholds
 from .models import Company, CompanySettings, Invitation
 from .tasks import send_invitation_email
@@ -238,8 +239,9 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         email = value.strip().lower()
         company = self.context['company']
 
-        if User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError('User with this email is already registered.')
+        block_msg = email_blocks_new_company_invitation(email, company)
+        if block_msg:
+            raise serializers.ValidationError(block_msg)
 
         has_active_invitation = Invitation.objects.filter(
             company=company,
@@ -265,11 +267,6 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
         if company.employee_count >= company.max_employees:
             raise serializers.ValidationError('Employee limit reached')
-
-        if User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError(
-                {'email': 'A user with this email is already registered.'},
-            )
 
         active_exists = Invitation.objects.filter(
             company=company,

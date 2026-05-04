@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
+from apps.companies.invite_policy import existing_user_cannot_accept_invite_error
 from apps.companies.models import Invitation
 from apps.hr.tasks import initialize_user_onboarding_progress
 from .models import User
@@ -17,13 +18,6 @@ from .models import User
 def _normalized_invite_email(raw_email):
     """Match UserManager.create_user email normalization for lookups."""
     return User.objects.normalize_email((raw_email or '').strip())
-
-
-def _user_exists_for_invite_email(raw_email):
-    lookup = _normalized_invite_email(raw_email)
-    if not lookup:
-        return False
-    return User.objects.filter(email__iexact=lookup).exists()
 
 
 # ── Constants ─────────────────────────────────────────────────────────
@@ -135,8 +129,11 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'token': 'Invitation already used'})
         if invitation.is_expired:
             raise serializers.ValidationError({'token': 'Invitation expired'})
-        if _user_exists_for_invite_email(invitation.email):
-            raise serializers.ValidationError({'email': 'A user with this email is already registered.'})
+        existing = User.objects.filter(email__iexact=_normalized_invite_email(invitation.email)).first()
+        if existing:
+            err = existing_user_cannot_accept_invite_error(existing, invitation)
+            if err:
+                raise serializers.ValidationError({'email': err})
         if invitation.company.is_employee_limit_reached:
             raise serializers.ValidationError('Employee limit reached')
 
@@ -153,26 +150,54 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'token': 'Invitation already used'})
             if invitation.is_expired:
                 raise serializers.ValidationError({'token': 'Invitation expired'})
-            if _user_exists_for_invite_email(invitation.email):
-                raise serializers.ValidationError({'email': 'A user with this email is already registered.'})
             if invitation.company.is_employee_limit_reached:
                 raise serializers.ValidationError('Employee limit reached')
 
-            try:
-                user = User.objects.create_user(
-                    email=invitation.email,
-                    first_name=validated_data['first_name'],
-                    last_name=validated_data['last_name'],
-                    phone=validated_data.get('phone', ''),
-                    password=validated_data['password'],
-                    company=invitation.company,
-                    role=invitation.role,
-                    is_email_verified=False,
+            email_key = _normalized_invite_email(invitation.email)
+            existing = User.objects.select_for_update().filter(email__iexact=email_key).first()
+            if existing:
+                err = existing_user_cannot_accept_invite_error(existing, invitation)
+                if err:
+                    raise serializers.ValidationError({'email': err})
+                existing.first_name = validated_data['first_name']
+                existing.last_name = validated_data['last_name']
+                existing.phone = validated_data.get('phone', '') or ''
+                existing.set_password(validated_data['password'])
+                existing.company = invitation.company
+                existing.role = invitation.role
+                existing.is_active = True
+                existing.is_email_verified = True
+                existing.save(
+                    update_fields=[
+                        'first_name',
+                        'last_name',
+                        'phone',
+                        'password',
+                        'company',
+                        'role',
+                        'is_active',
+                        'is_email_verified',
+                        'updated_at',
+                    ],
                 )
-            except IntegrityError as exc:
-                raise serializers.ValidationError(
-                    {'email': 'A user with this email is already registered.'},
-                ) from exc
+                user = existing
+            else:
+                try:
+                    user = User.objects.create_user(
+                        email=invitation.email,
+                        first_name=validated_data['first_name'],
+                        last_name=validated_data['last_name'],
+                        phone=validated_data.get('phone', ''),
+                        password=validated_data['password'],
+                        company=invitation.company,
+                        role=invitation.role,
+                        # Invite token proves control of this inbox — same assurance as link verification.
+                        is_email_verified=True,
+                    )
+                except IntegrityError as exc:
+                    raise serializers.ValidationError(
+                        {'email': 'A user with this email is already registered.'},
+                    ) from exc
 
             initialize_user_onboarding_progress(user)
 

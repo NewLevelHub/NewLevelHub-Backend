@@ -226,6 +226,85 @@ def test_ac_crm_deadline_tomorrow_emits_task_deadline(admin_a, board_a, employee
     ).exists()
 
 
+@pytest.mark.django_db
+def test_ac_crm_task_comment_emits_task_comment_to_assignee_and_creator(api_client, admin_a, board_a, employee_a):
+    """POST task comment → task_comment for assignee and creator (not author), correct title/body/url."""
+    col = Column.objects.create(board=board_a, name='В работе', position=1)
+    task = Task.objects.create(
+        column=col,
+        title='Комментарий AC',
+        created_by=admin_a,
+        assignee=employee_a,
+        position=1,
+    )
+    commenter = User.objects.create_user(
+        email='crm-ac-commenter@test.local',
+        password='pass',
+        first_name='Co',
+        last_name='Mment',
+        role='employee',
+        company=admin_a.company,
+        is_email_verified=True,
+    )
+    _auth(api_client, commenter)
+    resp = api_client.post(
+        f'{TASKS_URL}{task.pk}/comments/',
+        {'text': 'Привет'},
+        format='json',
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    exp_url = f'/crm/tasks/{task.pk}/'
+    for user in (admin_a, employee_a):
+        n = Notification.objects.filter(user=user, notification_type='task_comment').first()
+        assert n is not None, f'missing task_comment for {user.email}'
+        assert n.title == 'Новый комментарий к задаче'
+        assert n.body == task.title
+        assert n.url == exp_url
+
+
+@pytest.mark.django_db
+def test_ac_crm_task_comment_dedupes_when_assignee_is_creator(api_client, admin_a, board_a, employee_a):
+    """If assignee == creator, only one in-app task_comment row for that user."""
+    col = Column.objects.create(board=board_a, name='Колонка', position=1)
+    task = Task.objects.create(
+        column=col,
+        title='Один получатель',
+        created_by=admin_a,
+        assignee=admin_a,
+        position=1,
+    )
+    _auth(api_client, employee_a)
+    resp = api_client.post(
+        f'{TASKS_URL}{task.pk}/comments/',
+        {'text': 'Один комментарий'},
+        format='json',
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    assert Notification.objects.filter(user=admin_a, notification_type='task_comment').count() == 1
+
+
+@pytest.mark.django_db
+def test_ac_crm_task_comment_author_excluded_when_assignee(api_client, admin_a, board_a, employee_a):
+    """Comment author does not receive task_comment when they are the assignee."""
+    col = Column.objects.create(board=board_a, name='Todo', position=1)
+    task = Task.objects.create(
+        column=col,
+        title='Свой комментарий',
+        created_by=admin_a,
+        assignee=employee_a,
+        position=1,
+    )
+    _auth(api_client, employee_a)
+    resp = api_client.post(
+        f'{TASKS_URL}{task.pk}/comments/',
+        {'text': 'Сам себе'},
+        format='json',
+    )
+    assert resp.status_code == status.HTTP_201_CREATED
+    assert not Notification.objects.filter(user=employee_a, notification_type='task_comment').exists()
+    assert Notification.objects.filter(user=admin_a, notification_type='task_comment').exists()
+
+
 # ── Access AC ───────────────────────────────────────────────────────────
 
 

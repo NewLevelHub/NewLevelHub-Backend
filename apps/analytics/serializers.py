@@ -87,10 +87,20 @@ class CompanyStorageSerializer(serializers.Serializer):
     limit = serializers.IntegerField()
 
 
+class CrmColumnTaskCountSerializer(serializers.Serializer):
+    column_id = serializers.IntegerField()
+    name = serializers.CharField()
+    board_name = serializers.CharField()
+    count = serializers.IntegerField()
+
+
 class ActiveCrmTasksSerializer(serializers.Serializer):
+    total = serializers.IntegerField()
     todo = serializers.IntegerField()
     in_progress = serializers.IntegerField()
     done = serializers.IntegerField()
+    other = serializers.IntegerField()
+    by_column = CrmColumnTaskCountSerializer(many=True)
 
 
 class EmployeeActivitySerializer(serializers.Serializer):

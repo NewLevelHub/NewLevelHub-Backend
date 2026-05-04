@@ -344,11 +344,41 @@ def build_company_analytics_data(user):
     storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
     tasks_qs = Task.objects.filter(column__board__company=company, is_deleted=False, is_archived=False)
-    active_crm_tasks = {'todo': 0, 'in_progress': 0, 'done': 0}
-    for row in tasks_qs.values('column__name').annotate(count=Count('id')):
-        status_key = _normalize_column_status(row['column__name'])
+    column_agg = list(
+        tasks_qs.values(
+            'column_id',
+            'column__name',
+            'column__position',
+            'column__board_id',
+            'column__board__name',
+        ).annotate(count=Count('id')),
+    )
+    column_agg.sort(
+        key=lambda r: (
+            (r['column__board__name'] or '').lower(),
+            r['column__position'] or 0,
+            r['column_id'] or 0,
+        ),
+    )
+    buckets = {'todo': 0, 'in_progress': 0, 'done': 0, 'other': 0}
+    by_column = []
+    for row in column_agg:
+        cnt = row['count']
+        name = row['column__name'] or ''
+        status_key = _normalize_column_status(name)
         if status_key:
-            active_crm_tasks[status_key] += row['count']
+            buckets[status_key] += cnt
+        else:
+            buckets['other'] += cnt
+        by_column.append(
+            {
+                'column_id': row['column_id'],
+                'name': name,
+                'board_name': row['column__board__name'] or '',
+                'count': cnt,
+            },
+        )
+    active_crm_tasks = {'total': tasks_qs.count(), **buckets, 'by_column': by_column}
 
     employee_ids = list(employees_qs.values_list('id', flat=True))
     bookings_30d = {
@@ -449,9 +479,11 @@ def _rows_company_csv(data):
         'bookings_month',
         'storage_used',
         'storage_limit',
+        'crm_total',
         'crm_todo',
         'crm_in_progress',
         'crm_done',
+        'crm_other',
         'guest_visits_month',
     ]
     summary_row = [
@@ -460,9 +492,11 @@ def _rows_company_csv(data):
         data['bookings_month'],
         data['storage']['used'],
         data['storage']['limit'],
+        act['total'],
         act['todo'],
         act['in_progress'],
         act['done'],
+        act['other'],
         data['guest_visits_month'],
     ]
     rows = [summary_header, summary_row, []]

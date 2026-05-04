@@ -215,6 +215,9 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
             task_filter = TaskFilter(request.query_params, queryset=tasks_qs)
             tasks_qs = task_filter.qs
 
+            if 'is_archived' not in request.query_params:
+                tasks_qs = tasks_qs.filter(is_archived=False)
+
             # Apply search via SearchFilter
             search_filter = SearchFilter()
             self.search_fields = ['title']
@@ -557,6 +560,8 @@ class ColumnViewSet(viewsets.ModelViewSet):
         summary='List tasks',
         description=(
             'Returns tasks scoped to the authenticated user\'s company. '
+            'By default only active (non-archived) tasks are returned. '
+            'Pass `is_archived=true` to retrieve archived tasks instead. '
             'Filter by board_id, column_id, assignee_id, priority, label_ids, '
             'deadline_from, deadline_to, or use search= for title full-text search.'
         ),
@@ -575,6 +580,16 @@ class ColumnViewSet(viewsets.ModelViewSet):
                              required=False, description='Deadline >= this date (YYYY-MM-DD).'),
             OpenApiParameter(name='deadline_to', type=str, location=OpenApiParameter.QUERY,
                              required=False, description='Deadline <= this date (YYYY-MM-DD).'),
+            OpenApiParameter(
+                name='is_archived',
+                type=bool,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description=(
+                    'Filter by archive status. '
+                    'false (default) — active tasks only; true — archived tasks only.'
+                ),
+            ),
         ],
         responses={200: TaskSerializer(many=True)},
     ),
@@ -702,9 +717,12 @@ class TaskViewSet(viewsets.ModelViewSet):
         from .filters import TaskFilter
 
         # Apply TaskFilter (handles assignee_id, priority, label_ids, deadline enum,
-        # board_id, column_id, search via icontains, deadline_from/deadline_to)
+        # board_id, column_id, search via icontains, deadline_from/deadline_to, is_archived)
         f = TaskFilter(self.request.query_params, queryset=queryset)
         queryset = f.qs
+
+        if self.action == 'list' and 'is_archived' not in self.request.query_params:
+            queryset = queryset.filter(is_archived=False)
 
         # Apply ordering via OrderingFilter
         ordering_filter = OrderingFilter()
@@ -781,6 +799,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             'deadline': _deadline_str(task_prefetched.deadline),
             'assignee': task_prefetched.assignee.full_name if task_prefetched.assignee else '',
             'column': task_prefetched.column.name,
+            'is_archived': str(task_prefetched.is_archived),
         }
         # Determine which tracked fields were actually sent in this PATCH.
         # validated_data keys for relational fields use the source name:
@@ -790,6 +809,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         for field_key, vd_key in [
             ('title', 'title'), ('description', 'description'), ('priority', 'priority'),
             ('deadline', 'deadline'), ('assignee', 'assignee'), ('column', 'column'),
+            ('is_archived', 'is_archived'),
         ]:
             if vd_key in validated:
                 requested_tracked.add(field_key)
@@ -844,6 +864,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             'deadline': _deadline_str(new_instance.deadline),
             'assignee': new_instance.assignee.full_name if new_instance.assignee else '',
             'column': new_instance.column.name,
+            'is_archived': str(new_instance.is_archived),
         }
         for field_key in requested_tracked:
             old_val = tracked_scalar_fields[field_key]

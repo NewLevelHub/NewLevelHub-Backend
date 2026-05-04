@@ -449,3 +449,62 @@ class TestColumnDelete:
         url = _column_detail_url(board.pk, col.pk) + f'?move_to={other_col.pk}'
         response = api_client.delete(url)
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ---------------------------------------------------------------------------
+# PATCH /columns/{id}/ — WIP limit validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestColumnWipLimitValidation:
+    def _make_column(self, board, name='WIP Col', position=4):
+        return Column.objects.create(board=board, name=name, position=position)
+
+    def _make_tasks(self, column, admin, count):
+        return [
+            Task.objects.create(column=column, title=f'Task {i}', created_by=admin, position=i)
+            for i in range(1, count + 1)
+        ]
+
+    def test_reduce_wip_limit_below_active_tasks_returns_400(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 3)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_reduce_wip_limit_to_exact_active_count_succeeds(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 3)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 3}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_reduce_wip_limit_ignores_archived_tasks(self, api_client, board, admin):
+        col = self._make_column(board)
+        tasks = self._make_tasks(col, admin, 3)
+        tasks[2].is_archived = True
+        tasks[2].save()
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_reduce_wip_limit_ignores_deleted_tasks(self, api_client, board, admin):
+        col = self._make_column(board)
+        tasks = self._make_tasks(col, admin, 3)
+        tasks[2].soft_delete()
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_set_wip_limit_zero_always_succeeds(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 5)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 0}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_create_column_with_wip_limit_no_tasks_succeeds(self, api_client, board, admin):
+        api_client.force_authenticate(user=admin)
+        response = api_client.post(_columns_url(board.pk), {'name': 'Fresh', 'wip_limit': 1}, format='json')
+        assert response.status_code == status.HTTP_201_CREATED

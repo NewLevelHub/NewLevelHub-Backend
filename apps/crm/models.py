@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from apps.core.models import TimeStampedModel, SoftDeleteModel
 
@@ -29,6 +30,15 @@ class Column(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        if self.pk is not None and self.wip_limit != 0:
+            active_task_count = self.tasks.filter(is_archived=False).count()
+            if self.wip_limit < active_task_count:
+                raise ValidationError(
+                    f'WIP limit cannot be lower than the current number of active tasks in this column '
+                    f'({active_task_count}).'
+                )
 
 
 class Label(TimeStampedModel):

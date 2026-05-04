@@ -289,7 +289,7 @@ class TaskSerializer(serializers.ModelSerializer):
             'checklists', 'comments_count', 'attachments_count',
             'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_by', 'position', 'is_archived', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_by', 'position', 'created_at', 'updated_at']
 
     def get_board(self, obj):
         try:
@@ -412,6 +412,17 @@ class ColumnWriteSerializer(serializers.ModelSerializer):
         model = Column
         fields = ['id', 'name', 'position', 'wip_limit', 'board', 'created_at']
         read_only_fields = ['id', 'board', 'created_at']
+
+    def validate_wip_limit(self, value):
+        if self.instance is None or value == 0:
+            return value
+        active_task_count = self.instance.tasks.filter(is_deleted=False, is_archived=False).count()
+        if value < active_task_count:
+            raise serializers.ValidationError(
+                f'WIP limit cannot be lower than the current number of active tasks in this column '
+                f'({active_task_count}).'
+            )
+        return value
 
 
 class ColumnReorderSerializer(serializers.Serializer):

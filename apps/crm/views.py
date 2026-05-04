@@ -21,6 +21,7 @@ from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
 from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
+from .services import check_wip_limit
 from .serializers import (
     BoardSerializer, BoardListSerializer, ColumnSerializer, ColumnWriteSerializer, ColumnReorderSerializer,
     LabelSerializer, TaskSerializer, TaskDetailSerializer, TaskMoveSerializer,
@@ -488,21 +489,9 @@ class ColumnViewSet(viewsets.ModelViewSet):
         if target_column.pk == instance.pk:
             raise ValidationError({'move_to': 'Target column must differ from the deleted column.'})
 
-        # WIP limit check — 0 means no limit
-        if target_column.wip_limit > 0:
-            active_in_target = Task.objects.filter(
-                column=target_column, is_archived=False
-            ).count()
-            active_in_source = Task.objects.filter(
-                column=instance, is_archived=False
-            ).count()
-            if active_in_target + active_in_source > target_column.wip_limit:
-                raise ValidationError({
-                    'move_to': (
-                        f'Moving tasks would exceed the WIP limit of the target column '
-                        f'({active_in_target + active_in_source} tasks, limit is {target_column.wip_limit}).'
-                    )
-                })
+        active_in_source = Task.objects.filter(column=instance, is_archived=False).count()
+        if active_in_source > 0:
+            check_wip_limit(target_column, count=active_in_source)
 
         # Move all tasks
         Task.objects.filter(column=instance).update(column=target_column)
@@ -747,11 +736,6 @@ class TaskViewSet(viewsets.ModelViewSet):
         return queryset.distinct()
 
     def perform_create(self, serializer):
-        column = serializer.validated_data.get('column')
-        if column and column.wip_limit > 0:
-            active_count = Task.objects.filter(column=column, is_archived=False).count()
-            if active_count >= column.wip_limit:
-                raise ValidationError(f'WIP limit reached (max {column.wip_limit} tasks)')
         task = serializer.save(created_by=self.request.user)
         # Normalize positions so the new task gets a clean sequential number
         # at the end of the column rather than inheriting any gaps.
@@ -944,7 +928,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         description=(
             'Moves a task to a target column. The target column must belong to the same board '
             'and the same company. If the column has a WIP limit set (wip_limit > 0), the move '
-            'is rejected when the target column already has that many active tasks. '
+            'is rejected when adding the task would exceed the limit. '
+            'Returns `wip_limit_exceeded` error code in the 400 response when the WIP limit is hit. '
             'If `position` is omitted, the task is appended to the end of the target column.'
         ),
         request=TaskMoveSerializer,
@@ -972,17 +957,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             if target_column_obj.board.company_id != request.user.company_id:
                 raise ValidationError({'column_id': 'Target column does not belong to your company.'})
 
-        # WIP limit check: wip_limit == 0 means no limit.
-        # Task.objects (SoftDeleteManager) already excludes is_deleted=True.
-        if target_column_obj.wip_limit > 0:
-            active_count = Task.objects.filter(
-                column=target_column_obj,
-                is_archived=False,
-            ).exclude(pk=task.pk).count()
-            if active_count >= target_column_obj.wip_limit:
-                raise ValidationError(
-                    f'WIP limit reached (max {target_column_obj.wip_limit} tasks)'
-                )
+        check_wip_limit(target_column_obj, exclude_task_pk=task.pk)
 
         old_column = task.column
         old_column_name = old_column.name

@@ -696,7 +696,7 @@ class TestTaskMove:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'WIP limit reached' in str(res.data)
+        assert 'wip_limit_exceeded' in res.data['detail']
 
     def test_move_wip_limit_not_exceeded_returns_200(self, api_client, admin_a, task_a, column_a2):
         """Moving to a column under WIP capacity succeeds."""

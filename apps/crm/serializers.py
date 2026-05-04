@@ -352,6 +352,22 @@ class TaskSerializer(serializers.ModelSerializer):
                     {'label_ids': 'All labels must belong to your company.'}
                 )
 
+        from .services import check_wip_limit
+
+        column = attrs.get('column')
+
+        if instance is None and column is not None:
+            check_wip_limit(column)
+        elif instance is not None and column is not None and column != instance.column:
+            check_wip_limit(column, exclude_task_pk=instance.pk)
+        elif (
+            instance is not None
+            and column is None
+            and attrs.get('is_archived') is False
+            and instance.is_archived is True
+        ):
+            check_wip_limit(instance.column, exclude_task_pk=instance.pk)
+
         return attrs
 
     def create(self, validated_data):

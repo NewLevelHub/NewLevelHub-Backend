@@ -488,6 +488,22 @@ class ColumnViewSet(viewsets.ModelViewSet):
         if target_column.pk == instance.pk:
             raise ValidationError({'move_to': 'Target column must differ from the deleted column.'})
 
+        # WIP limit check — 0 means no limit
+        if target_column.wip_limit > 0:
+            active_in_target = Task.objects.filter(
+                column=target_column, is_archived=False
+            ).count()
+            active_in_source = Task.objects.filter(
+                column=instance, is_archived=False
+            ).count()
+            if active_in_target + active_in_source > target_column.wip_limit:
+                raise ValidationError({
+                    'move_to': (
+                        f'Moving tasks would exceed the WIP limit of the target column '
+                        f'({active_in_target + active_in_source} tasks, limit is {target_column.wip_limit}).'
+                    )
+                })
+
         # Move all tasks
         Task.objects.filter(column=instance).update(column=target_column)
 

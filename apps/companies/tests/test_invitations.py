@@ -109,6 +109,35 @@ class TestInvitationCreate:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_can_invite_same_email_after_member_removed_from_company(
+        self, mock_delay, api_client, company_admin, company, employee
+    ):
+        employee.company = None
+        employee.is_active = False
+        employee.role = 'guest'
+        employee.save(update_fields=['company', 'is_active', 'role', 'updated_at'])
+        auth(api_client, company_admin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': employee.email, 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        mock_delay.assert_called_once()
+
+    def test_cannot_invite_deactivated_member_still_in_company(self, api_client, company_admin, company, employee):
+        employee.is_active = False
+        employee.save(update_fields=['is_active'])
+        auth(api_client, company_admin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': employee.email, 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'deactivated' in str(response.data).lower()
+
     def test_cannot_invite_when_active_invite_exists(self, api_client, company_admin, company):
         Invitation.objects.create(
             company=company,

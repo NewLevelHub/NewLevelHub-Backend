@@ -10,11 +10,14 @@ Acceptance criteria:
   AC6 — Only company_admin (own company) and superadmin can access onboarding endpoints
 """
 
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.companies.models import Company, CompanySettings
+from apps.companies.models import Company, CompanySettings, Invitation
 from apps.crm.models import Board
 from apps.users.models import User
 
@@ -107,6 +110,10 @@ def onboarding_status_url(company_id):
 
 def skip_url(company_id):
     return f'/api/v1/companies/{company_id}/onboarding-status/skip/'
+
+
+REGISTER_INVITE_URL = '/api/v1/auth/register/invite/'
+BOARDS_URL = '/api/v1/crm/boards/'
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +280,44 @@ class TestOnboardingStepAutoDetection:
         auth(api_client, company_admin)
         response = api_client.get(onboarding_status_url(company.id))
         step = self._get_step(response, 'invite_first_employee')
+        assert step['completed'] is True
+
+
+@pytest.mark.django_db
+class TestInvitedCompanyAdminBoardOnboarding:
+    """Invited admins must create boards without separate email verification (CRM gate)."""
+
+    def test_invited_company_admin_post_board_marks_create_first_board(
+        self, api_client, company, company_admin
+    ):
+        invitation = Invitation.objects.create(
+            company=company,
+            email='invited.admin@onboarding-board.test',
+            invited_by=company_admin,
+            role='company_admin',
+            expires_at=timezone.now() + timedelta(hours=72),
+        )
+        reg = api_client.post(
+            REGISTER_INVITE_URL,
+            {
+                'token': str(invitation.token),
+                'first_name': 'Invited',
+                'last_name': 'Admin',
+                'password': 'StrongPass123!',
+            },
+            format='json',
+        )
+        assert reg.status_code == status.HTTP_201_CREATED
+        new_user = User.objects.get(email='invited.admin@onboarding-board.test')
+        assert new_user.is_email_verified is True
+
+        auth(api_client, new_user)
+        board_resp = api_client.post(BOARDS_URL, {'name': 'Onboarding Board'}, format='json')
+        assert board_resp.status_code == status.HTTP_201_CREATED
+
+        status_resp = api_client.get(onboarding_status_url(company.id))
+        assert status_resp.status_code == status.HTTP_200_OK
+        step = next(s for s in status_resp.data['steps'] if s['key'] == 'create_first_board')
         assert step['completed'] is True
 
 

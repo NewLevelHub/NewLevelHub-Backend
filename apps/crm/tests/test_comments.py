@@ -278,10 +278,14 @@ class TestCommentNotifications:
         task_a.save()
         api_client.force_authenticate(employee_a)
         api_client.post(comments_url(task_a.id), {'text': 'Hey assignee'}, format='json')
-        assert Notification.objects.filter(
+        notif = Notification.objects.filter(
             user=employee_a2,
             notification_type='task_comment',
-        ).exists()
+        ).first()
+        assert notif is not None
+        assert notif.title == 'Новый комментарий к задаче'
+        assert notif.body == task_a.title
+        assert notif.url == f'/crm/tasks/{task_a.pk}/'
 
     def test_creator_notified_on_comment(self, api_client, task_a, employee_a, admin_a):
         # task_a.created_by == admin_a; commenter == employee_a

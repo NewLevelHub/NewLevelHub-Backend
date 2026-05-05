@@ -15,12 +15,14 @@ class TaskFilter(django_filters.FilterSet):
     deadline_to = django_filters.DateFilter(field_name='deadline', lookup_expr='date__lte')
     deadline = django_filters.CharFilter(method='filter_deadline')
     search = django_filters.CharFilter(field_name='title', lookup_expr='icontains')
+    is_archived = django_filters.BooleanFilter(field_name='is_archived')
 
     class Meta:
         model = Task
         fields = [
             'board_id', 'column_id', 'assignee_id', 'priority',
             'label_ids', 'deadline_from', 'deadline_to', 'deadline', 'search',
+            'is_archived',
         ]
 
     def filter_deadline(self, queryset, name, value):

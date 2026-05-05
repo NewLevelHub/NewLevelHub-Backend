@@ -23,13 +23,13 @@ import rest_framework.fields as fields
 
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
+from apps.companies.invite_policy import existing_user_cannot_accept_invite_error, lookup_user_by_invite_email
 from apps.companies.models import Invitation
 from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
     UserRegistrationSerializer,
     InviteRegistrationSerializer,
-    _user_exists_for_invite_email,
     LoginSerializer,
     UserProfileSerializer,
     UserProfileUpdateSerializer,
@@ -162,8 +162,11 @@ def register_by_invite(request):
         if not invitation or invitation.is_used or invitation.is_expired:
             return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if _user_exists_for_invite_email(invitation.email):
-            raise ValidationError({'email': 'A user with this email is already registered.'})
+        existing = lookup_user_by_invite_email(invitation.email)
+        if existing:
+            err = existing_user_cannot_accept_invite_error(existing, invitation)
+            if err:
+                raise ValidationError({'email': err})
 
         return Response(
             {
@@ -176,8 +179,9 @@ def register_by_invite(request):
     serializer = InviteRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    token = create_email_verification_token(user)
-    send_verification_email.delay(user.id, str(token.token))
+    if not user.is_email_verified:
+        token = create_email_verification_token(user)
+        send_verification_email.delay(user.id, str(token.token))
     tokens = _get_tokens(user, remember_me=False)
     response = Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},

@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -72,6 +73,23 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
             models.Index(fields=['role', 'is_active']),
             models.Index(fields=['company', 'is_active']),
         ]
+        constraints = [
+            # Keep in sync with users.0004_user_company_required_roles (company_id, not company__isnull)
+            models.CheckConstraint(
+                check=(
+                    ~models.Q(role__in=['employee', 'company_admin'])
+                    | models.Q(company_id__isnull=False)
+                ),
+                name='users_employee_admin_requires_company',
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.role in ('employee', 'company_admin') and self.company_id is None:
+            raise ValidationError(
+                {'company': 'Users with this role must be assigned to a company.'}
+            )
 
     def __str__(self):
         return f'{self.email} ({self.get_role_display()})'

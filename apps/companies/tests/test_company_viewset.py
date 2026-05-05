@@ -280,6 +280,25 @@ class TestCompanyListScoping:
         response = api_client.get(COMPANIES_LIST_URL)
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
+    def test_employee_without_company_returns_company_not_assigned(self, api_client):
+        """
+        In-memory user (never saved) avoids violating the DB CHECK constraint
+        while still exercising the permission + exception handler contract.
+        """
+        user = User(
+            email='no_company_yet@test.com',
+            first_name='N',
+            last_name='C',
+            role='employee',
+            company=None,
+        )
+        api_client.force_authenticate(user=user)
+        response = api_client.get(COMPANIES_LIST_URL)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.data['error'] is True
+        assert response.data['detail']['code'] == 'company_not_assigned'
+        assert 'message' in response.data['detail']
+
 
 # ---------------------------------------------------------------------------
 # AC4 — GET detail: employee_count and storage_used present

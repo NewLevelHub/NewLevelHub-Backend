@@ -196,11 +196,14 @@ class TestCompanyAnalyticsAC:
             'used': 3072,
             'limit': int(company.storage_limit_gb * 1024 * 1024 * 1024),
         }
-        assert data['active_crm_tasks'] == {
-            'todo': 1,
-            'in_progress': 1,
-            'done': 1,
-        }
+        act = data['active_crm_tasks']
+        assert act['total'] == 3
+        assert act['todo'] == 1
+        assert act['in_progress'] == 1
+        assert act['done'] == 1
+        assert act['other'] == 0
+        assert len(act['by_column']) == 3
+        assert sum(c['count'] for c in act['by_column']) == 3
         assert data['guest_visits_month'] == 1
 
         by_user_id = {row['user_id']: row for row in data['employee_activity']}
@@ -247,7 +250,10 @@ class TestCompanyAnalyticsAC:
         assert response.data['bookings_month'] == 0
         assert response.data['storage']['used'] == 0
         assert response.data['guest_visits_month'] == 0
-        assert response.data['active_crm_tasks'] == {'todo': 0, 'in_progress': 0, 'done': 0}
+        z = response.data['active_crm_tasks']
+        assert z['total'] == 0
+        assert z['todo'] == z['in_progress'] == z['done'] == z['other'] == 0
+        assert z['by_column'] == []
 
     def test_crm_statuses_are_counted_for_flexible_column_names(self, api_client, company_admin, company):
         board = Board.objects.create(company=company, name='Alt names board', created_by=company_admin)
@@ -267,4 +273,30 @@ class TestCompanyAnalyticsAC:
         api_client.force_authenticate(user=company_admin)
         response = api_client.get(URL)
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['active_crm_tasks'] == {'todo': 1, 'in_progress': 1, 'done': 1}
+        act = response.data['active_crm_tasks']
+        assert act['total'] == 3
+        assert act['todo'] == act['in_progress'] == act['done'] == 1
+        assert act['other'] == 0
+
+    def test_custom_crm_columns_are_in_total_and_other_bucket(
+        self, api_client, company_admin, company,
+    ):
+        """Columns whose names do not match todo/in_progress/done heuristics still count in total and by_column."""
+        board = Board.objects.create(company=company, name='Sprint', created_by=company_admin)
+        col_review = Column.objects.create(board=board, name='Code review', position=0)
+        col_todo = Column.objects.create(board=board, name='To Do', position=1)
+        Task.objects.create(column=col_review, title='R1', assignee=company_admin, created_by=company_admin)
+        Task.objects.create(column=col_review, title='R2', assignee=company_admin, created_by=company_admin)
+        Task.objects.create(column=col_todo, title='T1', assignee=company_admin, created_by=company_admin)
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(URL)
+        assert response.status_code == status.HTTP_200_OK
+        act = response.data['active_crm_tasks']
+        assert act['total'] == 3
+        assert act['todo'] == 1
+        assert act['other'] == 2
+        assert act['in_progress'] == act['done'] == 0
+        assert len(act['by_column']) == 2
+        by_name = {c['name']: c['count'] for c in act['by_column']}
+        assert by_name == {'Code review': 2, 'To Do': 1}

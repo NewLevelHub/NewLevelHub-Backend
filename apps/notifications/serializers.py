@@ -140,17 +140,12 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
                 ]}
             )
 
-        # Role-based access: reject types the user's role cannot configure.
+        # Role-based access: silently skip types the user's role cannot configure.
         request = self.context.get('request')
         role = request.user.role if request and hasattr(request, 'user') else None
         if role:
             allowed = get_allowed_types_for_role(role)
-            restricted_keys = set(data.keys()) - allowed
-            if restricted_keys:
-                key = sorted(restricted_keys)[0]
-                raise serializers.ValidationError(
-                    {'detail': f'Notification type "{key}" is not available for your role.'}
-                )
+            data = {k: v for k, v in data.items() if k in allowed}
 
         errors = {}
         validated = {}

@@ -522,22 +522,23 @@ class TestRoleBasedFiltering:
 
 @pytest.mark.django_db
 class TestRoleBasedPatchValidation:
-    def test_employee_cannot_patch_restricted_type(self, auth_client):
-        # guest_validated is not in the employee allowed list.
+    def test_employee_patch_restricted_type_is_ignored(self, auth_client):
+        # guest_validated is not in the employee allowed list — it should be silently skipped.
         payload = {'guest_validated': {'in_app': True}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'guest_validated' in str(resp.data)
+        assert resp.status_code == status.HTTP_200_OK
+        # The response is filtered by role, so guest_validated must not appear.
+        assert 'guest_validated' not in resp.data
 
     def test_employee_cannot_patch_leave_review(self, auth_client):
         payload = {'leave_review': {'in_app': True}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_employee_cannot_patch_invitation(self, auth_client):
         payload = {'invitation': {'in_app': False}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_company_admin_can_patch_allowed_type(self, admin_client):
         payload = {'leave_review': {'in_app': True}}
@@ -551,9 +552,10 @@ class TestRoleBasedPatchValidation:
         assert resp.status_code == status.HTTP_200_OK
 
     def test_guest_cannot_patch_booking_type(self, guest_client):
+        # booking_confirmed is not in the guest allowed list — it should be silently skipped.
         payload = {'booking_confirmed': {'in_app': True}}
         resp = guest_client.patch(PREFERENCES_URL, payload, format='json')
-        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_guest_can_patch_allowed_type(self, guest_client):
         payload = {'system': {'email': False}}

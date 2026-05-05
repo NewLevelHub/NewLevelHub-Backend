@@ -37,7 +37,6 @@ services:
       POSTGRES_HOST: nlh_staging_postgres
       ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz,localhost,127.0.0.1"
       CORS_ALLOWED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
-      CORS_ALLOW_ALL_ORIGINS: "True"
       CSRF_TRUSTED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz,https://*.staging.newlevelhub.kz"
       FRONTEND_URL: "${FRONTEND_URL:-https://${PR_SLUG}.staging.newlevelhub.kz}"
       SECURE_SSL_REDIRECT: "False"

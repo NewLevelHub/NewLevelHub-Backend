@@ -89,6 +89,28 @@ services:
       - staging_network
     restart: unless-stopped
 
+  celery_beat:
+    image: ${BACKEND_IMAGE}
+    mem_limit: 128m
+    command: celery -A config.celery beat --loglevel=info
+    env_file:
+      - .env.staging
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.production
+      POSTGRES_DB: ${PREVIEW_DB_NAME}
+      POSTGRES_HOST: nlh_staging_postgres
+      ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz,localhost,127.0.0.1"
+      FRONTEND_URL: "${FRONTEND_URL:-https://${PR_SLUG}.staging.newlevelhub.kz}"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - staging_network
+    restart: unless-stopped
+
 networks:
   default: {}
   staging_network:

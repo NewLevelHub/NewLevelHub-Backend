@@ -94,5 +94,5 @@ class UserOnboardingProgress(TimeStampedModel):
     class Meta:
         db_table = 'hr_onboarding_progress'
         unique_together = ['user', 'step']
-        verbose_name = "User Onboarding Progress"
+        verbose_name = "User Onboarding Progresses"
         verbose_name_plural = "User Onboarding Progresses"

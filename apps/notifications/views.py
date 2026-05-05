@@ -144,10 +144,12 @@ class NotificationViewSet(
 def notification_preferences(request):
     prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
     if request.method == 'PATCH':
-        serializer = NotificationPreferenceDictSerializer(prefs, data=request.data, partial=True)
+        serializer = NotificationPreferenceDictSerializer(
+            prefs, data=request.data, partial=True, context={'request': request}
+        )
         serializer.is_valid(raise_exception=True)
         prefs = serializer.save()
-    return Response(NotificationPreferenceDictSerializer(prefs).data)
+    return Response(NotificationPreferenceDictSerializer(prefs, context={'request': request}).data)
 
 
 @extend_schema(

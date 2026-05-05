@@ -7,6 +7,7 @@ Coverage:
   - POST /api/v1/notifications/do-not-disturb/ — enables/disables DND
   - create_notification suppression by DND and per-type in_app preference
   - Unauthenticated → 401 on preferences and DND endpoints
+  - Role-based filtering: each role sees only its allowed types
 """
 
 import pytest
@@ -16,13 +17,16 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.notifications.models import Notification, NotificationPreference
-from apps.notifications.serializers import NOTIFICATION_TYPE_FIELD_MAP
+from apps.notifications.serializers import get_allowed_types_for_role
 from apps.notifications.utils import create_notification
 
 PREFERENCES_URL = '/api/v1/notifications/preferences/'
 DND_URL = '/api/v1/notifications/do-not-disturb/'
 
-ALL_PREF_TYPES = list(NOTIFICATION_TYPE_FIELD_MAP.keys())
+# Types visible to an employee (subset of NOTIFICATION_TYPE_FIELD_MAP).
+EMPLOYEE_PREF_TYPES = get_allowed_types_for_role('employee')
+# Types visible to a company_admin.
+COMPANY_ADMIN_PREF_TYPES = get_allowed_types_for_role('company_admin')
 
 
 # ---------------------------------------------------------------------------
@@ -68,8 +72,30 @@ def employee(make_user, company):
 
 
 @pytest.fixture
+def company_admin(make_user, company):
+    return make_user('pref_admin@test.com', role='company_admin', company=company)
+
+
+@pytest.fixture
+def guest_user(make_user, company):
+    return make_user('pref_guest@test.com', role='guest', company=company)
+
+
+@pytest.fixture
 def auth_client(api_client, employee):
     api_client.force_authenticate(user=employee)
+    return api_client
+
+
+@pytest.fixture
+def admin_client(api_client, company_admin):
+    api_client.force_authenticate(user=company_admin)
+    return api_client
+
+
+@pytest.fixture
+def guest_client(api_client, guest_user):
+    api_client.force_authenticate(user=guest_user)
     return api_client
 
 
@@ -83,11 +109,12 @@ class TestGetPreferences:
         resp = auth_client.get(PREFERENCES_URL)
         assert resp.status_code == status.HTTP_200_OK
 
-    def test_all_14_types_present(self, auth_client):
+    def test_employee_sees_only_allowed_types(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
         data = resp.data
-        for ntype in ALL_PREF_TYPES:
-            assert ntype in data, f"Missing notification type '{ntype}' in response"
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        returned_types = {k for k in data if k not in skip_keys}
+        assert returned_types == EMPLOYEE_PREF_TYPES
 
     def test_each_type_has_in_app_and_email(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
@@ -127,7 +154,6 @@ class TestGetPreferences:
     def test_defaults_are_true_for_in_app(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
         skip_keys = {'dnd_enabled', 'dnd_until'}
-        # By default, all in_app values should be True.
         for ntype, prefs in resp.data.items():
             if ntype in skip_keys:
                 continue
@@ -148,7 +174,6 @@ class TestPatchPreferences:
         payload = {'booking_reminder': {'email': False}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
         assert resp.status_code == status.HTTP_200_OK
-        # The booking group email should be updated.
         assert resp.data['booking_reminder']['email'] is False
 
     def test_partial_update_multiple_types(self, auth_client):
@@ -190,11 +215,12 @@ class TestPatchPreferences:
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_response_has_all_14_types(self, auth_client):
+    def test_response_has_employee_types(self, auth_client):
         payload = {'system': {'email': False}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
-        for ntype in ALL_PREF_TYPES:
-            assert ntype in resp.data
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        returned_types = {k for k in resp.data if k not in skip_keys}
+        assert returned_types == EMPLOYEE_PREF_TYPES
 
     def test_unauthenticated_returns_401(self, api_client):
         resp = api_client.patch(PREFERENCES_URL, {}, format='json')
@@ -209,9 +235,7 @@ class TestPatchPreferences:
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_patch_does_not_change_dnd_fields(self, auth_client, employee):
-        # Enable DND via DND endpoint.
         auth_client.post(DND_URL, {'enabled': True}, format='json')
-        # Now PATCH preferences — DND should be unchanged.
         auth_client.patch(PREFERENCES_URL, {'system': {'email': False}}, format='json')
         resp = auth_client.get(PREFERENCES_URL)
         assert resp.data['dnd_enabled'] is True
@@ -225,11 +249,9 @@ class TestPatchPreferences:
     def test_only_changed_type_is_affected(self, auth_client):
         skip_keys = {'dnd_enabled', 'dnd_until'}
 
-        # First, get defaults.
         resp = auth_client.get(PREFERENCES_URL)
         original = {k: dict(v) for k, v in resp.data.items() if k not in skip_keys}
 
-        # Patch only system.
         auth_client.patch(PREFERENCES_URL, {'system': {'in_app': False}}, format='json')
 
         resp2 = auth_client.get(PREFERENCES_URL)
@@ -272,9 +294,7 @@ class TestDoNotDisturb:
         assert pref.dnd_until is not None
 
     def test_disable_dnd(self, auth_client, employee):
-        # First enable.
         auth_client.post(DND_URL, {'enabled': True}, format='json')
-        # Then disable.
         resp = auth_client.post(DND_URL, {'enabled': False}, format='json')
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data['dnd_enabled'] is False
@@ -311,7 +331,6 @@ class TestDoNotDisturb:
         past = (timezone.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
         resp = auth_client.post(DND_URL, {'enabled': True, 'until': past}, format='json')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        # Error must be under 'dnd_until' key as specified.
         assert 'dnd_until' in str(resp.data)
 
     def test_future_dnd_until_is_accepted(self, auth_client):
@@ -322,7 +341,6 @@ class TestDoNotDisturb:
         assert resp.data['dnd_until'] is not None
 
     def test_disable_dnd_with_past_until_is_accepted(self, auth_client, employee):
-        # When enabled=False, until is cleared regardless — no 400 for past dates.
         past = (timezone.now() - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
         resp = auth_client.post(DND_URL, {'enabled': False, 'until': past}, format='json')
         assert resp.status_code == status.HTTP_200_OK
@@ -331,10 +349,8 @@ class TestDoNotDisturb:
         assert pref.dnd_until is None
 
     def test_disable_dnd_with_future_until_clears_until(self, auth_client, employee):
-        # First enable with a future until.
         future = (timezone.now() + timedelta(hours=2)).strftime('%Y-%m-%dT%H:%M:%SZ')
         auth_client.post(DND_URL, {'enabled': True, 'until': future}, format='json')
-        # Now disable — dnd_until should be cleared even if we pass a future time.
         resp = auth_client.post(DND_URL, {'enabled': False, 'until': future}, format='json')
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data['dnd_enabled'] is False
@@ -393,7 +409,6 @@ class TestCreateNotificationSuppression:
         assert result is not None
 
     def test_in_app_disabled_suppresses_notification(self, employee):
-        # Disable in_app for system.
         NotificationPreference.objects.create(user=employee, system_in_app=False)
         result = create_notification(
             user=employee,
@@ -425,7 +440,6 @@ class TestCreateNotificationSuppression:
             message='World',
         )
         assert result is not None
-        # Pref record should have been created.
         assert NotificationPreference.objects.filter(user=employee).exists()
 
     def test_per_type_in_app_disabled_suppresses_only_that_type(self, employee):
@@ -449,15 +463,99 @@ class TestCreateNotificationSuppression:
             booking_confirmed_in_app=True,
             booking_cancelled_in_app=True,
         )
-        # booking_reminder should be suppressed
         result_reminder = create_notification(
             user=employee, notification_type='booking_reminder', title='T', message='M',
         )
         assert result_reminder is None, 'booking_reminder should be suppressed'
 
-        # booking_confirmed should still be delivered
         Notification.objects.filter(user=employee).delete()
         result_confirmed = create_notification(
             user=employee, notification_type='booking_confirmed', title='T', message='M',
         )
         assert result_confirmed is not None, 'booking_confirmed should not be affected by booking_reminder toggle'
+
+
+# ---------------------------------------------------------------------------
+# AC5: Role-based filtering on GET /preferences/
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestRoleBasedFiltering:
+    def test_employee_cannot_see_company_admin_types(self, auth_client):
+        # These types are for company_admin only, not employee.
+        admin_only = {'guest_validated', 'leave_review', 'invitation'}
+        resp = auth_client.get(PREFERENCES_URL)
+        assert resp.status_code == status.HTTP_200_OK
+        for ntype in admin_only:
+            assert ntype not in resp.data, f"Employee should not see '{ntype}'"
+
+    def test_company_admin_can_see_all_relevant_types(self, admin_client):
+        resp = admin_client.get(PREFERENCES_URL)
+        assert resp.status_code == status.HTTP_200_OK
+        for ntype in ('leave_review', 'guest_validated', 'invitation'):
+            assert ntype in resp.data, f"company_admin should see '{ntype}'"
+
+    def test_guest_sees_only_guest_types(self, guest_client):
+        resp = guest_client.get(PREFERENCES_URL)
+        assert resp.status_code == status.HTTP_200_OK
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        returned_types = {k for k in resp.data if k not in skip_keys}
+        expected = get_allowed_types_for_role('guest')
+        assert returned_types == expected
+
+    def test_guest_does_not_see_employee_only_types(self, guest_client):
+        employee_only = {'booking_confirmed', 'task_assigned', 'leave_approved'}
+        resp = guest_client.get(PREFERENCES_URL)
+        for ntype in employee_only:
+            assert ntype not in resp.data, f"Guest should not see '{ntype}'"
+
+    def test_company_admin_sees_correct_type_count(self, admin_client):
+        resp = admin_client.get(PREFERENCES_URL)
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        returned_types = {k for k in resp.data if k not in skip_keys}
+        assert returned_types == COMPANY_ADMIN_PREF_TYPES
+
+
+# ---------------------------------------------------------------------------
+# AC6: Role-based validation on PATCH /preferences/
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestRoleBasedPatchValidation:
+    def test_employee_cannot_patch_restricted_type(self, auth_client):
+        # guest_validated is not in the employee allowed list.
+        payload = {'guest_validated': {'in_app': True}}
+        resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'guest_validated' in str(resp.data)
+
+    def test_employee_cannot_patch_leave_review(self, auth_client):
+        payload = {'leave_review': {'in_app': True}}
+        resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_employee_cannot_patch_invitation(self, auth_client):
+        payload = {'invitation': {'in_app': False}}
+        resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_company_admin_can_patch_allowed_type(self, admin_client):
+        payload = {'leave_review': {'in_app': True}}
+        resp = admin_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['leave_review']['in_app'] is True
+
+    def test_company_admin_can_patch_guest_validated(self, admin_client):
+        payload = {'guest_validated': {'email': False}}
+        resp = admin_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_guest_cannot_patch_booking_type(self, guest_client):
+        payload = {'booking_confirmed': {'in_app': True}}
+        resp = guest_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_guest_can_patch_allowed_type(self, guest_client):
+        payload = {'system': {'email': False}}
+        resp = guest_client.patch(PREFERENCES_URL, payload, format='json')
+        assert resp.status_code == status.HTTP_200_OK

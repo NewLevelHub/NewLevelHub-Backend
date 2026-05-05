@@ -105,6 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
 
       - name: Determine test scope
@@ -112,6 +113,8 @@ jobs:
         run: |
           if [[ "${{ github.event.action }}" == "synchronize" ]]; then
             CHANGED=$(git diff HEAD~1 HEAD --name-only)
+            echo "Changed files in last commit:"
+            echo "$CHANGED"
             PATHS=""
             while IFS= read -r file; do
               if [[ "$file" =~ ^apps/([^/]+)/ ]]; then

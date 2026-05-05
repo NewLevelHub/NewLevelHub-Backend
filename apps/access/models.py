@@ -58,7 +58,10 @@ class GuestPass(TimeStampedModel):
     def is_valid(self):
         if self.status != 'active':
             return False
-        if self.is_expired:
+        now = timezone.now()
+        if now < self.valid_from:
+            return False
+        if now > self.valid_until:
             return False
         if self.usage_type == 'single' and self.times_used > 0:
             return False

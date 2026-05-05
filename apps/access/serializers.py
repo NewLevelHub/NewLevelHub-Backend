@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class GuestPassCreateSerializer(serializers.ModelSerializer):
     purpose = serializers.CharField(source='visit_purpose')
     is_single_use = serializers.BooleanField(write_only=True)
+    valid_from = serializers.DateTimeField(required=False)
 
     class Meta:
         model = GuestPass
@@ -27,12 +28,17 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         request = self.context['request']
         user = request.user
-        valid_from = attrs['valid_from']
-        valid_until = attrs['valid_until']
         now = timezone.now()
 
-        if valid_from < now:
-            raise serializers.ValidationError({'valid_from': 'Cannot be in the past.'})
+        # Default valid_from to now if not provided
+        valid_from = attrs.get('valid_from', now)
+        attrs['valid_from'] = valid_from
+
+        valid_until = attrs['valid_until']
+
+        # Only reject if explicitly more than 60 seconds in the past (handles minor clock drift)
+        if valid_from < now - timedelta(seconds=60):
+            raise serializers.ValidationError({'valid_from': 'Cannot be more than 60 seconds in the past.'})
 
         if valid_until <= valid_from:
             raise serializers.ValidationError({'valid_until': 'Must be later than valid_from.'})

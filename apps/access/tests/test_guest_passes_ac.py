@@ -376,7 +376,6 @@ class TestGuestPassesValidateQrAC:
     @pytest.mark.parametrize(
         ('status_code', 'valid_until_delta', 'times_used', 'expected_reason'),
         [
-            ('active', timedelta(days=-1), 0, 'expired'),
             ('revoked', timedelta(days=1), 0, 'revoked'),
             ('used', timedelta(days=1), 1, 'already_used'),
         ],
@@ -416,6 +415,33 @@ class TestGuestPassesValidateQrAC:
         assert response.status_code == status.HTTP_200_OK
         assert response.data == {'valid': False, 'reason': expected_reason}
 
+    def test_validate_expired_pass_returns_403(self, api_client, company_admin):
+        superadmin = User.objects.create_user(
+            email='validate-expired@test.local',
+            password='pass',
+            first_name='Validate',
+            last_name='Expired',
+            role='superadmin',
+            is_email_verified=True,
+        )
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company_admin.company,
+            guest_name='Expired Guest',
+            guest_email='expired-pass@test.local',
+            visit_purpose='Expiry check',
+            status='active',
+            usage_type='single',
+            times_used=0,
+            valid_from=now - timedelta(hours=2),
+            valid_until=now - timedelta(hours=1),
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert 'Срок действия QR-кода истек' in response.data['detail']
+
     def test_validate_not_found_returns_reason_not_found(self, api_client):
         superadmin = User.objects.create_user(
             email='validate-not-found@test.local',
@@ -453,3 +479,139 @@ class TestGuestPassesValidateQrAC:
         assert access_log.checked_by == superadmin
         assert access_log.method == 'qr'
         mocked_notify_delay.assert_called_once_with(guest_pass.id)
+
+
+@pytest.mark.django_db
+class TestQrTimeValidation:
+    """Tests for time-based (valid_from / valid_until) QR validation."""
+
+    def _superadmin(self, suffix):
+        return User.objects.create_user(
+            email=f'time-superadmin-{suffix}@test.local',
+            password='pass',
+            first_name='Time',
+            last_name='Superadmin',
+            role='superadmin',
+            is_email_verified=True,
+        )
+
+    # --- validate_qr time checks ---
+
+    def test_validate_qr_before_valid_from_returns_403(self, api_client, company_admin):
+        superadmin = self._superadmin('before')
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company_admin.company,
+            guest_name='Future Guest',
+            guest_email='future@test.local',
+            visit_purpose='Future visit',
+            status='active',
+            usage_type='single',
+            times_used=0,
+            valid_from=now + timedelta(hours=2),
+            valid_until=now + timedelta(hours=4),
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert 'Доступ еще не разрешен' in response.data['detail']
+
+    def test_validate_qr_after_valid_until_returns_403(self, api_client, company_admin):
+        superadmin = self._superadmin('after')
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company_admin.company,
+            guest_name='Past Guest',
+            guest_email='past@test.local',
+            visit_purpose='Past visit',
+            status='active',
+            usage_type='single',
+            times_used=0,
+            valid_from=now - timedelta(hours=4),
+            valid_until=now - timedelta(hours=1),
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert 'Срок действия QR-кода истек' in response.data['detail']
+
+    @patch('apps.access.views.notify_pass_creator_on_entry.delay')
+    def test_validate_qr_within_window_succeeds(self, mocked_delay, api_client, company_admin):
+        superadmin = self._superadmin('within')
+        now = timezone.now()
+        guest_pass = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company_admin.company,
+            guest_name='Active Guest',
+            guest_email='active-time@test.local',
+            visit_purpose='Active visit',
+            status='active',
+            usage_type='single',
+            times_used=0,
+            valid_from=now - timedelta(hours=1),
+            valid_until=now + timedelta(hours=1),
+        )
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['valid'] is True
+
+    # --- GuestPassCreateSerializer valid_from optionality ---
+
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_create_guest_pass_without_valid_from_defaults_to_now(self, mocked_delay, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        now = timezone.now()
+        payload = {
+            'guest_name': 'No From Guest',
+            'guest_email': 'no-from@test.local',
+            'valid_until': (now + timedelta(days=2)).isoformat(),
+            'is_single_use': True,
+            'purpose': 'Default from test',
+        }
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+        from django.utils.dateparse import parse_datetime
+        returned_from = parse_datetime(response.data['valid_from'])
+        if returned_from is not None and returned_from.tzinfo is None:
+            from django.utils import timezone as tz
+            returned_from = tz.make_aware(returned_from)
+        assert abs((returned_from - now).total_seconds()) < 5
+
+    @patch('apps.access.tasks.send_guest_pass_email.delay')
+    def test_create_guest_pass_with_explicit_valid_from(self, mocked_delay, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        now = timezone.now()
+        explicit_from = now + timedelta(hours=1)
+        payload = {
+            'guest_name': 'Explicit From Guest',
+            'guest_email': 'explicit-from@test.local',
+            'valid_from': explicit_from.isoformat(),
+            'valid_until': (now + timedelta(days=2)).isoformat(),
+            'is_single_use': True,
+            'purpose': 'Explicit from test',
+        }
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+        from django.utils.dateparse import parse_datetime
+        returned_from = parse_datetime(response.data['valid_from'])
+        if returned_from is not None and returned_from.tzinfo is None:
+            from django.utils import timezone as tz
+            returned_from = tz.make_aware(returned_from)
+        assert abs((returned_from - explicit_from).total_seconds()) < 2
+
+    def test_create_guest_pass_with_past_valid_from_returns_400(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        now = timezone.now()
+        payload = {
+            'guest_name': 'Past From Guest',
+            'guest_email': 'past-from@test.local',
+            'valid_from': (now - timedelta(minutes=10)).isoformat(),
+            'valid_until': (now + timedelta(days=2)).isoformat(),
+            'is_single_use': True,
+            'purpose': 'Past from test',
+        }
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST

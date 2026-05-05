@@ -14,6 +14,7 @@ Authentication contract:
   - Authenticated-but-unauthorised requests get 403.
 """
 
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
@@ -65,14 +66,30 @@ class IsCompanyMember(_AuthenticatedPermission):
     Allows access to company_admin and employee users who are associated
     with a company, plus superadmin (who operates across all companies).
 
-    Guests and company-less users are denied with 403.
+    Guests are denied with a generic 403. company_admin / employee without
+    a company receive 403 with ``detail.code`` = ``company_not_assigned`` so
+    the client can show an onboarding / assignment screen instead of a blank error.
     """
 
-    def _has_role_permission(self, request, view):
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
         user = request.user
         if user.role == 'superadmin':
             return True
-        return user.role in ('company_admin', 'employee') and user.company_id is not None
+        if user.role in ('company_admin', 'employee'):
+            if user.company_id is None:
+                raise PermissionDenied(
+                    detail={
+                        'code': 'company_not_assigned',
+                        'message': (
+                            'Your account is not assigned to a company. '
+                            'Ask your administrator to add you to an organization.'
+                        ),
+                    }
+                )
+            return True
+        return False
 
 
 class IsCompanyAdminOrReadOnly(_AuthenticatedPermission):

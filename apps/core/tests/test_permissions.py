@@ -16,11 +16,13 @@ Each permission is exercised for:
   - Authenticated employee              → allowed / denied per class
   - Authenticated guest                 → denied (403)
   - company_admin / employee without
-    a company association               → denied where company required
+    a company association               → PermissionDenied (company_not_assigned)
 """
 
 from unittest.mock import MagicMock
 
+import pytest
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.test import APIRequestFactory
 
 from apps.core.permissions import (
@@ -156,14 +158,19 @@ class TestIsCompanyMember:
         request = _make_request(user=_make_user('employee', company_id=1))
         assert self.perm.has_permission(request, _view()) is True
 
-    def test_company_admin_without_company_denied(self):
-        """A company_admin with no company assignment must be denied."""
+    def test_company_admin_without_company_raises_company_not_assigned(self):
+        """A company_admin with no company gets an explicit API error code."""
         request = _make_request(user=_make_user('company_admin', company_id=None))
-        assert self.perm.has_permission(request, _view()) is False
+        with pytest.raises(PermissionDenied) as exc:
+            self.perm.has_permission(request, _view())
+        assert exc.value.detail['code'] == 'company_not_assigned'
+        assert 'message' in exc.value.detail
 
-    def test_employee_without_company_denied(self):
+    def test_employee_without_company_raises_company_not_assigned(self):
         request = _make_request(user=_make_user('employee', company_id=None))
-        assert self.perm.has_permission(request, _view()) is False
+        with pytest.raises(PermissionDenied) as exc:
+            self.perm.has_permission(request, _view())
+        assert exc.value.detail['code'] == 'company_not_assigned'
 
     def test_guest_denied(self):
         """Guest must NOT have access — core security requirement."""

@@ -449,3 +449,155 @@ class TestColumnDelete:
         url = _column_detail_url(board.pk, col.pk) + f'?move_to={other_col.pk}'
         response = api_client.delete(url)
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+# ---------------------------------------------------------------------------
+# PATCH /columns/{id}/ — WIP limit validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestColumnWipLimitValidation:
+    def _make_column(self, board, name='WIP Col', position=4):
+        return Column.objects.create(board=board, name=name, position=position)
+
+    def _make_tasks(self, column, admin, count):
+        return [
+            Task.objects.create(column=column, title=f'Task {i}', created_by=admin, position=i)
+            for i in range(1, count + 1)
+        ]
+
+    def test_reduce_wip_limit_below_active_tasks_returns_400(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 3)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_reduce_wip_limit_to_exact_active_count_succeeds(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 3)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 3}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_reduce_wip_limit_ignores_archived_tasks(self, api_client, board, admin):
+        col = self._make_column(board)
+        tasks = self._make_tasks(col, admin, 3)
+        tasks[2].is_archived = True
+        tasks[2].save()
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_reduce_wip_limit_ignores_deleted_tasks(self, api_client, board, admin):
+        col = self._make_column(board)
+        tasks = self._make_tasks(col, admin, 3)
+        tasks[2].soft_delete()
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 2}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_set_wip_limit_zero_always_succeeds(self, api_client, board, admin):
+        col = self._make_column(board)
+        self._make_tasks(col, admin, 5)
+        api_client.force_authenticate(user=admin)
+        response = api_client.patch(_column_detail_url(board.pk, col.pk), {'wip_limit': 0}, format='json')
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_create_column_with_wip_limit_no_tasks_succeeds(self, api_client, board, admin):
+        api_client.force_authenticate(user=admin)
+        response = api_client.post(_columns_url(board.pk), {'name': 'Fresh', 'wip_limit': 1}, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+
+
+# ---------------------------------------------------------------------------
+# DELETE /columns/{id}/?move_to=<id> — WIP limit on column deletion
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestColumnDeleteWipLimit:
+    def test_delete_wip_limit_exceeded_returns_400(self, api_client, board, admin):
+        """Source 3 active + target wip_limit=2 with 1 active → total 4 > 2 → 400."""
+        source = Column.objects.create(board=board, name='Source', position=4)
+        target = Column.objects.create(board=board, name='Target', position=5, wip_limit=2)
+
+        for i in range(1, 4):
+            Task.objects.create(column=source, title=f'Source Task {i}', created_by=admin, position=i)
+        Task.objects.create(column=target, title='Target Task 1', created_by=admin, position=1)
+
+        api_client.force_authenticate(user=admin)
+        url = _column_detail_url(board.pk, source.pk) + f'?move_to={target.pk}'
+        response = api_client.delete(url)
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        # Column was NOT deleted
+        assert Column.objects.filter(pk=source.pk).exists()
+        # Tasks were NOT moved
+        assert Task.objects.filter(column=source).count() == 3
+
+    def test_delete_wip_limit_exact_fit_succeeds(self, api_client, board, admin):
+        """Source 2 active + target wip_limit=3 with 1 active → total 3 == limit → 204."""
+        source = Column.objects.create(board=board, name='Source', position=4)
+        target = Column.objects.create(board=board, name='Target', position=5, wip_limit=3)
+
+        for i in range(1, 3):
+            Task.objects.create(column=source, title=f'Source Task {i}', created_by=admin, position=i)
+        Task.objects.create(column=target, title='Target Task 1', created_by=admin, position=1)
+
+        api_client.force_authenticate(user=admin)
+        url = _column_detail_url(board.pk, source.pk) + f'?move_to={target.pk}'
+        response = api_client.delete(url)
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_delete_wip_limit_zero_always_allows_transfer(self, api_client, board, admin):
+        """Target wip_limit=0 (no limit) → always allows even 10 tasks → 204."""
+        source = Column.objects.create(board=board, name='Source', position=4)
+        target = Column.objects.create(board=board, name='Target', position=5, wip_limit=0)
+
+        for i in range(1, 11):
+            Task.objects.create(column=source, title=f'Source Task {i}', created_by=admin, position=i)
+
+        api_client.force_authenticate(user=admin)
+        url = _column_detail_url(board.pk, source.pk) + f'?move_to={target.pk}'
+        response = api_client.delete(url)
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_delete_wip_limit_ignores_archived_tasks_in_source(self, api_client, board, admin):
+        """Source 1 active + 2 archived; target wip_limit=2 with 1 active → 1+1=2 == limit → 204."""
+        source = Column.objects.create(board=board, name='Source', position=4)
+        target = Column.objects.create(board=board, name='Target', position=5, wip_limit=2)
+
+        Task.objects.create(column=source, title='Source Active', created_by=admin, position=1)
+        t2 = Task.objects.create(column=source, title='Source Archived 1', created_by=admin, position=2)
+        t2.is_archived = True
+        t2.save()
+        t3 = Task.objects.create(column=source, title='Source Archived 2', created_by=admin, position=3)
+        t3.is_archived = True
+        t3.save()
+        Task.objects.create(column=target, title='Target Active', created_by=admin, position=1)
+
+        api_client.force_authenticate(user=admin)
+        url = _column_detail_url(board.pk, source.pk) + f'?move_to={target.pk}'
+        response = api_client.delete(url)
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    def test_delete_wip_limit_ignores_archived_tasks_in_target(self, api_client, board, admin):
+        """Source 2 active; target wip_limit=2 with 1 active + 1 archived → archived ignored → 1+2=3 > 2 → 400."""
+        source = Column.objects.create(board=board, name='Source', position=4)
+        target = Column.objects.create(board=board, name='Target', position=5, wip_limit=2)
+
+        for i in range(1, 3):
+            Task.objects.create(column=source, title=f'Source Task {i}', created_by=admin, position=i)
+        Task.objects.create(column=target, title='Target Active', created_by=admin, position=1)
+        t_arch = Task.objects.create(column=target, title='Target Archived', created_by=admin, position=2)
+        t_arch.is_archived = True
+        t_arch.save()
+
+        api_client.force_authenticate(user=admin)
+        url = _column_detail_url(board.pk, source.pk) + f'?move_to={target.pk}'
+        response = api_client.delete(url)
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST

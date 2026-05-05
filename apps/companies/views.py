@@ -200,7 +200,12 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
         responses={
             200: CompanySerializer(many=True),
             401: OpenApiResponse(description='Not authenticated'),
-            403: OpenApiResponse(description='Forbidden'),
+            403: OpenApiResponse(
+                description=(
+                    'Guest: forbidden. employee / company_admin without company_id: '
+                    'wrapped error detail includes code `company_not_assigned`.'
+                ),
+            ),
         },
     ),
     retrieve=extend_schema(

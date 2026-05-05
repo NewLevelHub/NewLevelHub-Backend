@@ -696,7 +696,7 @@ class TestTaskMove:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'WIP limit reached' in str(res.data)
+        assert 'wip_limit_exceeded' in res.data['detail']
 
     def test_move_wip_limit_not_exceeded_returns_200(self, api_client, admin_a, task_a, column_a2):
         """Moving to a column under WIP capacity succeeds."""
@@ -879,3 +879,103 @@ class TestTaskPositionNormalization:
             Task.objects.filter(column=column_a2).order_by('position').values_list('position', flat=True)
         )
         assert tgt_positions == [1, 2, 3], f"Expected [1, 2, 3], got {tgt_positions}"
+
+
+# ---------------------------------------------------------------------------
+# is_archived filter & PATCH
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTaskIsArchivedFilter:
+    def test_list_excludes_archived_by_default(self, api_client, admin_a, column_a, board_a):
+        Task.objects.create(column=column_a, title='Active 1', priority='low', position=1, created_by=admin_a)
+        Task.objects.create(column=column_a, title='Active 2', priority='low', position=2, created_by=admin_a)
+        Task.objects.create(
+            column=column_a, title='Archived', priority='low', position=3,
+            created_by=admin_a, is_archived=True,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(TASKS_URL, {'board_id': board_a.id})
+        assert res.status_code == status.HTTP_200_OK
+        titles = [t['title'] for t in res.data['results']]
+        assert 'Active 1' in titles
+        assert 'Active 2' in titles
+        assert 'Archived' not in titles
+        assert len(titles) == 2
+
+    def test_list_is_archived_true_returns_archived_only(self, api_client, admin_a, column_a, board_a):
+        Task.objects.create(column=column_a, title='Active 1', priority='low', position=1, created_by=admin_a)
+        Task.objects.create(column=column_a, title='Active 2', priority='low', position=2, created_by=admin_a)
+        Task.objects.create(
+            column=column_a, title='Archived', priority='low', position=3,
+            created_by=admin_a, is_archived=True,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(TASKS_URL, {'board_id': board_a.id, 'is_archived': 'true'})
+        assert res.status_code == status.HTTP_200_OK
+        titles = [t['title'] for t in res.data['results']]
+        assert titles == ['Archived']
+
+    def test_list_is_archived_false_explicit_returns_active_only(self, api_client, admin_a, column_a, board_a):
+        Task.objects.create(column=column_a, title='Active 1', priority='low', position=1, created_by=admin_a)
+        Task.objects.create(column=column_a, title='Active 2', priority='low', position=2, created_by=admin_a)
+        Task.objects.create(
+            column=column_a, title='Archived', priority='low', position=3,
+            created_by=admin_a, is_archived=True,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(TASKS_URL, {'board_id': board_a.id, 'is_archived': 'false'})
+        assert res.status_code == status.HTTP_200_OK
+        titles = [t['title'] for t in res.data['results']]
+        assert 'Active 1' in titles
+        assert 'Active 2' in titles
+        assert 'Archived' not in titles
+        assert len(titles) == 2
+
+    def test_patch_is_archived_true_archives_task(self, api_client, admin_a, column_a, board_a):
+        task = Task.objects.create(
+            column=column_a, title='To Archive', priority='low', position=1, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['is_archived'] is True
+        task.refresh_from_db()
+        assert task.is_archived is True
+
+    def test_patch_is_archived_preserves_column_and_position(self, api_client, admin_a, column_a, board_a):
+        task = Task.objects.create(
+            column=column_a, title='Preserve Col', priority='low', position=1, created_by=admin_a,
+        )
+        original_column_id = task.column_id
+        original_position = task.position
+        api_client.force_authenticate(admin_a)
+        res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        task.refresh_from_db()
+        assert task.column_id == original_column_id
+        assert task.position == original_position
+
+    def test_patch_is_archived_false_unarchives_task(self, api_client, admin_a, column_a, board_a):
+        task = Task.objects.create(
+            column=column_a, title='To Unarchive', priority='low', position=1,
+            created_by=admin_a, is_archived=True,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.patch(task_url(task.id), {'is_archived': False}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['is_archived'] is False
+        task.refresh_from_db()
+        assert task.is_archived is False
+
+    def test_archived_task_not_in_default_list_after_patch(self, api_client, admin_a, column_a, board_a):
+        task = Task.objects.create(
+            column=column_a, title='Will Archive', priority='low', position=1, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        patch_res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
+        assert patch_res.status_code == status.HTTP_200_OK
+        list_res = api_client.get(TASKS_URL, {'board_id': board_a.id})
+        assert list_res.status_code == status.HTTP_200_OK
+        ids = [t['id'] for t in list_res.data['results']]
+        assert task.id not in ids

@@ -8,6 +8,8 @@ database (MagicMock + APIRequestFactory pattern from test_permissions.py).
 
 from unittest.mock import MagicMock
 
+import pytest
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.test import APIRequestFactory
 
@@ -122,10 +124,12 @@ class TestIsCompanyMemberPermission:
             _make_request(user=_make_user('employee', company_id=1)), _view()
         ) is True
 
-    def test_employee_without_company_denied(self):
-        assert self.perm.has_permission(
-            _make_request(user=_make_user('employee', company_id=None)), _view()
-        ) is False
+    def test_employee_without_company_raises_company_not_assigned(self):
+        with pytest.raises(PermissionDenied) as exc:
+            self.perm.has_permission(
+                _make_request(user=_make_user('employee', company_id=None)), _view()
+            )
+        assert exc.value.detail['code'] == 'company_not_assigned'
 
     def test_guest_denied(self):
         assert self.perm.has_permission(

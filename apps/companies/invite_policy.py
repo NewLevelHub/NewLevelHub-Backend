@@ -47,4 +47,6 @@ def existing_user_cannot_accept_invite_error(user: User, invitation) -> Optional
         return 'A user with this email is already registered.'
     if user.company_id is not None and user.company_id != invitation.company_id and user.is_active:
         return 'This account belongs to another organization. Log out and use the correct account.'
+    if user.company_id is None and user.is_active:
+        return 'A user with this email is already registered.'
     return None

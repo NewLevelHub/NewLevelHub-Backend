@@ -13,7 +13,6 @@ class Board(TimeStampedModel):
 
     class Meta:
         db_table = 'crm_boards'
-        
 
     def __str__(self):
         return f'{self.name} ({self.company.name})'

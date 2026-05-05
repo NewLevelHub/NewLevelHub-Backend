@@ -92,7 +92,7 @@ class CompanySettings(TimeStampedModel):
 
     class Meta:
         db_table = 'company_settings'
-
+        verbose_name_plural = "Company Settings"
 
 class Invitation(TimeStampedModel):
     company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='invitations')

@@ -13,6 +13,7 @@ class Board(TimeStampedModel):
 
     class Meta:
         db_table = 'crm_boards'
+        
 
     def __str__(self):
         return f'{self.name} ({self.company.name})'
@@ -172,3 +173,5 @@ class TaskHistory(TimeStampedModel):
     class Meta:
         db_table = 'crm_task_history'
         ordering = ['-created_at']
+        verbose_name = "Task History"
+        verbose_name_plural = "Task Histories"

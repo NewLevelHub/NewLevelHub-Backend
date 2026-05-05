@@ -1,4 +1,4 @@
-from django.db.models import Sum
+from django.db.models import Q, Sum
 
 from apps.notifications.models import Notification
 from apps.notifications.utils import should_notify
@@ -31,8 +31,18 @@ def get_company_storage_used_bytes(company):
     """
     from apps.crm.models import TaskAttachment
 
+    from apps.storage.models import File
+
+    # All storage files belonging to the company:
+    # - company-scoped files (file.company = company)
+    # - personal files of company employees (file.company IS NULL, file.owner.company = company)
     storage_files_bytes = (
-        company.files.filter(is_deleted=False).aggregate(total=Sum('file_size'))['total'] or 0
+        File.objects.filter(is_deleted=False)
+        .filter(
+            Q(company=company)
+            | Q(company__isnull=True, owner__company=company)
+        )
+        .aggregate(total=Sum('file_size'))['total'] or 0
     )
 
     # Only count direct-upload attachments (storage_file is None).

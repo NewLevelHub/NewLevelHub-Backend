@@ -61,7 +61,7 @@ def employee(db, company):
 
 
 def _guest_pass_payload():
-    now = timezone.now() + timedelta(minutes=5)
+    now = timezone.now()
     return {
         'guest_name': 'Walk-in Guest',
         'guest_email': 'guest.walkin@test.local',

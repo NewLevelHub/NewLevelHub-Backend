@@ -400,9 +400,9 @@ class TestAccessLogExportAC:
         date_from = (now - timedelta(days=1)).date().isoformat()
         response = api_client.get(LOGS_EXPORT_URL, {'date_from': date_from})
         assert response.status_code == status.HTTP_200_OK
-        content = response.content.decode('utf-8')
-        assert str(new_log.id) in content
-        assert str(old_log.id) not in content
+        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
+        assert str(new_log.id) in ids
+        assert str(old_log.id) not in ids
 
     def test_export_filtered_by_date_to(self, api_client, superadmin, admin_a, reception_a, pass_a):
         now = timezone.now()
@@ -413,17 +413,17 @@ class TestAccessLogExportAC:
         date_to = (now - timedelta(days=2)).date().isoformat()
         response = api_client.get(LOGS_EXPORT_URL, {'date_to': date_to})
         assert response.status_code == status.HTTP_200_OK
-        content = response.content.decode('utf-8')
-        assert str(old_log.id) in content
-        assert str(new_log.id) not in content
+        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
+        assert str(old_log.id) in ids
+        assert str(new_log.id) not in ids
 
     def test_company_admin_export_only_own_company(self, api_client, admin_a, log_a, log_b):
         api_client.force_authenticate(user=admin_a)
         response = api_client.get(LOGS_EXPORT_URL)
         assert response.status_code == status.HTTP_200_OK
-        content = response.content.decode('utf-8')
-        assert str(log_a.id) in content
-        assert str(log_b.id) not in content
+        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
+        assert str(log_a.id) in ids
+        assert str(log_b.id) not in ids
 
     def test_employee_export_gets_403(self, api_client, employee_a):
         api_client.force_authenticate(user=employee_a)

@@ -41,6 +41,57 @@ NOTIFICATION_TYPE_FIELD_MAP = {
     'system': ('system_in_app', 'system_email'),
 }
 
+# Notification types that actually send email via send_notification_email.
+# Only these types expose an email preference toggle in the API response.
+# Derived from cross-referencing _PREF_FIELD_MAP in tasks.py with actual
+# call sites across the codebase (bookings, crm, hr, access, services).
+EMAIL_ENABLED_TYPES = {
+    'booking_confirmed',   # apps/bookings/serializers.py
+    'task_assigned',       # apps/crm/views.py, apps/crm/tasks.py
+    'task_deadline',       # apps/crm/tasks.py (also covers task_deadline_overdue via same pref field)
+    'leave_review',        # apps/hr/views.py
+    'guest_validated',     # apps/access/tasks.py
+    'announcement',        # apps/notifications/tasks.py send_bulk_email → announcement_company type
+                           # maps to announcement_email pref, which this key controls
+}
+
+# Notification types each role is allowed to see and configure.
+# '__all__' means all keys from NOTIFICATION_TYPE_FIELD_MAP.
+ROLE_NOTIFICATION_TYPES = {
+    'superadmin': '__all__',
+    'company_admin': [
+        'booking_confirmed', 'booking_reminder', 'booking_cancelled',
+        'task_assigned', 'task_moved', 'task_comment', 'task_deadline',
+        'guest_validated', 'guest_pass_expiring',
+        'service_request_update',
+        'announcement',
+        'invitation', 'leave_review',
+        'system',
+    ],
+    'employee': [
+        'booking_confirmed', 'booking_reminder', 'booking_cancelled',
+        'task_assigned', 'task_moved', 'task_comment', 'task_deadline',
+        'service_request_update',
+        'announcement',
+        'system',
+    ],
+    'guest': [
+        'guest_validated',
+        'guest_pass_expiring',
+        'announcement',
+        'system',
+    ],
+}
+
+
+def get_allowed_types_for_role(role):
+    """Return the set of notification type keys the given role may access."""
+    allowed = ROLE_NOTIFICATION_TYPES.get(role, '__all__')
+    if allowed == '__all__':
+        return set(NOTIFICATION_TYPE_FIELD_MAP.keys())
+    # Intersect with the actual map so stale role lists never cause KeyErrors.
+    return set(allowed) & set(NOTIFICATION_TYPE_FIELD_MAP.keys())
+
 
 class NotificationPreferenceDictSerializer(serializers.Serializer):
     """
@@ -60,15 +111,21 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
     """
 
     def to_representation(self, instance):
+        request = self.context.get('request')
+        role = request.user.role if request and hasattr(request, 'user') else None
+        allowed = get_allowed_types_for_role(role) if role else set(NOTIFICATION_TYPE_FIELD_MAP.keys())
+
         result = {
             'dnd_enabled': instance.dnd_enabled,
             'dnd_until': instance.dnd_until,
         }
         for ntype, (in_app_field, email_field) in NOTIFICATION_TYPE_FIELD_MAP.items():
-            result[ntype] = {
-                'in_app': getattr(instance, in_app_field),
-                'email': getattr(instance, email_field),
-            }
+            if ntype not in allowed:
+                continue
+            entry = {'in_app': getattr(instance, in_app_field)}
+            if ntype in EMAIL_ENABLED_TYPES:
+                entry['email'] = getattr(instance, email_field)
+            result[ntype] = entry
         return result
 
     def to_internal_value(self, data):
@@ -97,6 +154,13 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
                 ]}
             )
 
+        # Role-based access: silently skip types the user's role cannot configure.
+        request = self.context.get('request')
+        role = request.user.role if request and hasattr(request, 'user') else None
+        if role:
+            allowed = get_allowed_types_for_role(role)
+            data = {k: v for k, v in data.items() if k in allowed}
+
         errors = {}
         validated = {}
         for ntype, prefs in data.items():
@@ -112,6 +176,8 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
             entry = {}
             type_errors = {}
             for key in ('in_app', 'email'):
+                if key == 'email' and ntype not in EMAIL_ENABLED_TYPES:
+                    continue  # email preference has no effect for this type; skip silently
                 if key in prefs:
                     val = prefs[key]
                     if not isinstance(val, bool):

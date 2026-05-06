@@ -144,10 +144,10 @@ class TestStorageUsageEndpoint:
         assert response.data['company']['limit_bytes'] == expected_limit
 
     def test_personal_used_bytes_counts_only_own_files(self, api_client, company_admin, employee, company):
-        # Create a file owned by admin
-        _create_db_file(owner=company_admin, company=company, size=500)
-        # Create a file owned by employee — should NOT appear in admin's personal stats
-        _create_db_file(owner=employee, company=company, size=200)
+        # Personal file owned by admin (company=None → true personal)
+        _create_db_file(owner=company_admin, company=None, size=500)
+        # Personal file owned by employee — should NOT appear in admin's personal stats
+        _create_db_file(owner=employee, company=None, size=200)
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.get(USAGE_URL)
@@ -168,8 +168,9 @@ class TestStorageUsageEndpoint:
         assert response.data['company']['file_count'] == 2
 
     def test_soft_deleted_files_excluded_from_counts(self, api_client, company_admin, company):
-        _create_db_file(owner=company_admin, company=company, size=100)
-        _create_db_file(owner=company_admin, company=company, size=200, is_deleted=True)
+        # Use company=None so the active file also shows in personal stats
+        _create_db_file(owner=company_admin, company=None, size=100)
+        _create_db_file(owner=company_admin, company=None, size=200, is_deleted=True)
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.get(USAGE_URL)
@@ -195,6 +196,35 @@ class TestStorageUsageEndpoint:
         api_client.force_authenticate(user=employee)
         response = api_client.get(USAGE_URL)
         assert response.status_code == status.HTTP_200_OK
+
+    def test_company_used_bytes_includes_personal_files_of_employees(
+        self, api_client, company_admin, employee, company
+    ):
+        """Personal files of company employees must be counted in company total."""
+        _create_db_file(owner=company_admin, company=company, size=300)   # company-scoped
+        _create_db_file(owner=employee, company=None, size=400)            # personal by employee
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        # Both files count toward company total
+        assert response.data['company']['used_bytes'] == 700
+        assert response.data['company']['file_count'] == 2
+
+    def test_personal_used_bytes_excludes_company_scoped_files(
+        self, api_client, company_admin, company
+    ):
+        """Company-scoped files should not appear in personal.used_bytes."""
+        _create_db_file(owner=company_admin, company=company, size=1000)   # company-scoped
+        _create_db_file(owner=company_admin, company=None, size=250)        # true personal
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['used_bytes'] == 250
+        assert response.data['personal']['file_count'] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +262,22 @@ class TestStorageQuotaOnUpload:
         )
 
         assert response.status_code == status.HTTP_201_CREATED
+
+    def test_personal_upload_blocked_when_company_quota_filled_by_personal_files(
+        self, api_client, employee, company
+    ):
+        """Personal files of employees consume company quota — upload must be blocked."""
+        # Fill quota with employee's personal file
+        _create_db_file(owner=employee, company=None, size=1 * 1024 * 1024 * 1024)
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.post(
+            FILES_URL,
+            {'name': 'blocked.txt', 'file': _make_file(10)},
+            format='multipart',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 # ---------------------------------------------------------------------------

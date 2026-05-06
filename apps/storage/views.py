@@ -465,7 +465,7 @@ class FileShareViewSet(viewsets.ModelViewSet):
 def storage_usage(request):
     user = request.user
 
-    personal_qs = File.objects.filter(owner=user, is_deleted=False)
+    personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
     personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
     personal_count = personal_qs.count()
 
@@ -473,7 +473,14 @@ def storage_usage(request):
         company = user.company
         company_used = get_company_storage_used_bytes(company)
         company_limit = company.storage_limit_gb * 1024 * 1024 * 1024
-        company_count = File.objects.filter(company=company, is_deleted=False).count()
+        company_count = (
+            File.objects.filter(is_deleted=False)
+            .filter(
+                Q(company=company)
+                | Q(company__isnull=True, owner__company=company)
+            )
+            .count()
+        )
         company_data = {
             'used_bytes': company_used,
             'limit_bytes': company_limit,

@@ -226,8 +226,11 @@ def validate_qr(request):
 
     # Check not-yet-active (before start time) — must come before expiry check
     if now < guest_pass.valid_from:
+        formatted = guest_pass.valid_from.astimezone(
+            timezone.get_current_timezone()
+        ).strftime('%d.%m.%Y %H:%M')
         return Response(
-            {'detail': f'Доступ еще не разрешен. Время начала: {guest_pass.valid_from.isoformat()}'},
+            {'detail': f'Доступ ещё не разрешён. Начало доступа: {formatted}'},
             status=status.HTTP_403_FORBIDDEN,
         )
 

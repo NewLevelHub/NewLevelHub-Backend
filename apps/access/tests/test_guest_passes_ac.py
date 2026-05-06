@@ -515,7 +515,7 @@ class TestQrTimeValidation:
         api_client.force_authenticate(user=superadmin)
         response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert 'Доступ еще не разрешен' in response.data['detail']
+        assert 'Доступ ещё не разрешён' in response.data['detail']
 
     def test_validate_qr_after_valid_until_returns_403(self, api_client, company_admin):
         superadmin = self._superadmin('after')

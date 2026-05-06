@@ -77,6 +77,25 @@ services:
     networks:
       - nlh_network
 
+  celery_beat:
+    image: ${BACKEND_IMAGE}
+    container_name: nlh_celery_beat_prod
+    mem_limit: 128m
+    command: celery -A config.celery beat --loglevel=info
+    env_file:
+      - .env.production
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DEBUG=False
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    networks:
+      - nlh_network
+
   nginx:
     image: nginx:alpine
     container_name: nlh_nginx_prod

@@ -343,7 +343,12 @@ def build_company_analytics_data(user):
     storage_used = File.objects.filter(company=company).aggregate(total=Sum('file_size'))['total'] or 0
     storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
-    tasks_qs = Task.objects.filter(column__board__company=company, is_deleted=False, is_archived=False)
+    tasks_qs = Task.objects.filter(
+        column__board__company=company,
+        column__board__is_archived=False,
+        is_deleted=False,
+        is_archived=False,
+    )
     column_agg = list(
         tasks_qs.values(
             'column_id',

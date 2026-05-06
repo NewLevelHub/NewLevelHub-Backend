@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from apps.notifications.models import Notification, NotificationPreference
-from apps.notifications.serializers import get_allowed_types_for_role
+from apps.notifications.serializers import EMAIL_ENABLED_TYPES, get_allowed_types_for_role
 from apps.notifications.utils import create_notification
 
 PREFERENCES_URL = '/api/v1/notifications/preferences/'
@@ -116,16 +116,38 @@ class TestGetPreferences:
         returned_types = {k for k in data if k not in skip_keys}
         assert returned_types == EMPLOYEE_PREF_TYPES
 
-    def test_each_type_has_in_app_and_email(self, auth_client):
+    def test_each_type_has_in_app(self, auth_client):
+        """Every notification type must expose an in_app toggle."""
         resp = auth_client.get(PREFERENCES_URL)
         skip_keys = {'dnd_enabled', 'dnd_until'}
         for ntype, prefs in resp.data.items():
             if ntype in skip_keys:
                 continue
             assert 'in_app' in prefs, f"'{ntype}' missing 'in_app'"
-            assert 'email' in prefs, f"'{ntype}' missing 'email'"
             assert isinstance(prefs['in_app'], bool), f"'{ntype}.in_app' must be bool"
-            assert isinstance(prefs['email'], bool), f"'{ntype}.email' must be bool"
+
+    def test_email_enabled_types_have_email_field(self, auth_client):
+        """Types that actually send email must expose an email toggle."""
+        resp = auth_client.get(PREFERENCES_URL)
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        for ntype, prefs in resp.data.items():
+            if ntype in skip_keys:
+                continue
+            if ntype in EMAIL_ENABLED_TYPES:
+                assert 'email' in prefs, f"'{ntype}' should have 'email' field"
+                assert isinstance(prefs['email'], bool), f"'{ntype}.email' must be bool"
+
+    def test_non_email_type_has_no_email_field(self, auth_client):
+        """Types with no email implementation must not expose an email toggle."""
+        resp = auth_client.get(PREFERENCES_URL)
+        skip_keys = {'dnd_enabled', 'dnd_until'}
+        for ntype, prefs in resp.data.items():
+            if ntype in skip_keys:
+                continue
+            if ntype not in EMAIL_ENABLED_TYPES:
+                assert 'email' not in prefs, (
+                    f"'{ntype}' should not have 'email' field — no email implementation"
+                )
 
     def test_dnd_fields_present_in_response(self, auth_client):
         resp = auth_client.get(PREFERENCES_URL)
@@ -171,21 +193,23 @@ class TestGetPreferences:
 @pytest.mark.django_db
 class TestPatchPreferences:
     def test_partial_update_single_type(self, auth_client):
-        payload = {'booking_reminder': {'email': False}}
+        # booking_confirmed is email-enabled, so the email toggle is persisted and returned.
+        payload = {'booking_confirmed': {'email': False}}
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.data['booking_reminder']['email'] is False
+        assert resp.data['booking_confirmed']['email'] is False
 
     def test_partial_update_multiple_types(self, auth_client):
+        # task_assigned is email-enabled; system is not (email key silently ignored for system).
         payload = {
             'task_assigned': {'in_app': False, 'email': False},
-            'system': {'email': False},
+            'system': {'in_app': False},
         }
         resp = auth_client.patch(PREFERENCES_URL, payload, format='json')
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data['task_assigned']['in_app'] is False
         assert resp.data['task_assigned']['email'] is False
-        assert resp.data['system']['email'] is False
+        assert resp.data['system']['in_app'] is False
 
     def test_update_persists_to_db(self, auth_client, employee):
         payload = {'announcement': {'in_app': False}}

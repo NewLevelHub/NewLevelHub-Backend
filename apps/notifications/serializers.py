@@ -41,6 +41,20 @@ NOTIFICATION_TYPE_FIELD_MAP = {
     'system': ('system_in_app', 'system_email'),
 }
 
+# Notification types that actually send email via send_notification_email.
+# Only these types expose an email preference toggle in the API response.
+# Derived from cross-referencing _PREF_FIELD_MAP in tasks.py with actual
+# call sites across the codebase (bookings, crm, hr, access, services).
+EMAIL_ENABLED_TYPES = {
+    'booking_confirmed',   # apps/bookings/serializers.py
+    'task_assigned',       # apps/crm/views.py, apps/crm/tasks.py
+    'task_deadline',       # apps/crm/tasks.py (also covers task_deadline_overdue via same pref field)
+    'leave_review',        # apps/hr/views.py
+    'guest_validated',     # apps/access/tasks.py
+    'announcement',        # apps/notifications/tasks.py send_bulk_email → announcement_company type
+                           # maps to announcement_email pref, which this key controls
+}
+
 # Notification types each role is allowed to see and configure.
 # '__all__' means all keys from NOTIFICATION_TYPE_FIELD_MAP.
 ROLE_NOTIFICATION_TYPES = {
@@ -108,10 +122,10 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
         for ntype, (in_app_field, email_field) in NOTIFICATION_TYPE_FIELD_MAP.items():
             if ntype not in allowed:
                 continue
-            result[ntype] = {
-                'in_app': getattr(instance, in_app_field),
-                'email': getattr(instance, email_field),
-            }
+            entry = {'in_app': getattr(instance, in_app_field)}
+            if ntype in EMAIL_ENABLED_TYPES:
+                entry['email'] = getattr(instance, email_field)
+            result[ntype] = entry
         return result
 
     def to_internal_value(self, data):
@@ -162,6 +176,8 @@ class NotificationPreferenceDictSerializer(serializers.Serializer):
             entry = {}
             type_errors = {}
             for key in ('in_app', 'email'):
+                if key == 'email' and ntype not in EMAIL_ENABLED_TYPES:
+                    continue  # email preference has no effect for this type; skip silently
                 if key in prefs:
                     val = prefs[key]
                     if not isinstance(val, bool):

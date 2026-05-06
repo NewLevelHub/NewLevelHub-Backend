@@ -37,12 +37,12 @@ def send_verification_email(user_id, token=None):
     verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?{urlencode({'token': token_value})}"
 
     send_mail(
-        subject='Verify your email',
+        subject='Подтвердите ваш email для New Level Hub',
         message=(
-            f'Hi {user.full_name},\n\n'
-            'Please verify your email by opening this link:\n'
+            f'Здравствуйте, {user.full_name},\n\n'
+            'Пожалуйста, подтвердите ваш email, перейдя по следующей ссылке:\n'
             f'{verify_link}\n\n'
-            'This link expires in 24 hours.'
+            'Эта ссылка действительна в течение 24 часов.'
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email],
@@ -69,15 +69,15 @@ def send_password_reset_email(self, token_id):
         {'user': user, 'reset_url': reset_url},
     )
     plain_message = (
-        f"Hi {user.first_name},\n\n"
-        f"Reset your password by visiting the link below:\n{reset_url}\n\n"
-        "This link expires in 1 hour.\n\n"
-        "If you did not request a password reset, you can safely ignore this email."
+        f"Здравствуйте, {user.first_name},\n\n"
+        f"Сбросьте ваш пароль, перейдя по следующей ссылке:\n{reset_url}\n\n"
+        "Эта ссылка действительна в течение 1 часа.\n\n"
+        "Если вы не запрашивали сброс пароля, вы можете безопасно игнорировать это письмо."
     )
 
     try:
         send_mail(
-            subject='Reset your New Level Hub password',
+            subject='Сбросьте ваш пароль для New Level Hub',
             message=plain_message,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],

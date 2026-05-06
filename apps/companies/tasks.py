@@ -17,12 +17,12 @@ def send_invitation_email(invitation_id):
     company_name = invitation.company.name
 
     send_mail(
-        subject=f'Invitation to {company_name}',
+        subject=f'Вас пригласили в {company_name}',
         message=(
-            f'Hello,\n\n'
-            f'{inviter_name} invited you to join {company_name} as {invitation.role}.\n'
-            f'Use this link to accept invitation:\n{invite_url}\n\n'
-            'This invitation expires in 72 hours.'
+            f'Здравствуйте,\n\n'
+            f'{inviter_name} пригласил вас присоединиться к {company_name} в роли {invitation.role}.\n'
+            f'Используйте эту ссылку, чтобы принять приглашение:\n{invite_url}\n\n'
+            'Это приглашение действительно в течение 72 часов.'
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[invitation.email],

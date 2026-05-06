@@ -4,7 +4,6 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Set work directory
@@ -12,7 +11,7 @@ WORKDIR /app
 
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     gcc \
     python3-dev \
@@ -28,12 +27,8 @@ RUN pip install --upgrade pip && \
 # Copy project
 COPY . .
 
-# Create directory for static files
-RUN mkdir -p /app/staticfiles
-RUN mkdir -p /app/static
-
-# Collect static files (will run during build)
-RUN DJANGO_SETTINGS_MODULE=config.settings.production SECRET_KEY=collectstatic-build-key python manage.py collectstatic --noinput
+# Create directories for static and media files
+RUN mkdir -p /app/staticfiles /app/static
 
 # Expose port
 EXPOSE 8000

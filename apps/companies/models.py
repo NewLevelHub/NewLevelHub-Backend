@@ -92,6 +92,7 @@ class CompanySettings(TimeStampedModel):
 
     class Meta:
         db_table = 'company_settings'
+        verbose_name_plural = "Company Settings"
 
 
 class Invitation(TimeStampedModel):

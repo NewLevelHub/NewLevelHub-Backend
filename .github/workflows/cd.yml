@@ -120,10 +120,10 @@ jobs:
 
             docker pull "$BACKEND_IMAGE"
 
-            docker rm -f nlh_backend_prod nlh_nginx_prod nlh_celery_prod 2>/dev/null || true
-            # Recreate backend, nginx, and celery so all use the same freshly pulled BACKEND_IMAGE.
-            # `docker compose restart celery` is NOT enough: restart keeps the old container image.
-            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate --remove-orphans backend nginx celery
+            docker rm -f nlh_backend_prod nlh_nginx_prod nlh_celery_prod nlh_celery_beat_prod 2>/dev/null || true
+            # Recreate backend, nginx, celery and celery_beat so all use the same freshly pulled BACKEND_IMAGE.
+            # `docker compose restart` is NOT enough: restart keeps the old container image.
+            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --force-recreate --remove-orphans backend nginx celery celery_beat
 
             echo "Waiting for backend container to finish migrate + gunicorn startup..."
             for i in $(seq 1 60); do

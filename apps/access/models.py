@@ -46,6 +46,8 @@ class GuestPass(TimeStampedModel):
 
     class Meta:
         db_table = 'guest_passes'
+        verbose_name = "Guest Pass"
+        verbose_name_plural = "Guest passes"
 
     def __str__(self):
         return f'Pass for {self.guest_name} by {self.created_by.email}'

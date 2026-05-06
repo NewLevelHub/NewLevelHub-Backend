@@ -1,0 +1,63 @@
+# Version control
+.git/
+.github/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Secrets / environment files
+.env
+.env.*
+!.env.example
+!.env.staging.example
+!.env.production.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Testing artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime
+celerybeat-schedule
+media/
+staticfiles/
+
+# Docker files (not needed in image)
+docker-compose*.yml
+Dockerfile
+
+# Docs / IDE / OS
+docs/
+*.md
+.claude/
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Scripts (helper tools, not needed at runtime)
+scripts/
+
+# Nginx (mounted via volumes, not needed in Django image)
+nginx/
+
+# Temp / cache dirs
+.pycache_tmp/

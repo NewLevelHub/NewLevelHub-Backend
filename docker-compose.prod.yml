@@ -32,6 +32,7 @@ services:
   backend:
     image: ${BACKEND_IMAGE}
     container_name: nlh_backend_prod
+    mem_limit: 512m
     command: >
       sh -c "python manage.py collectstatic --noinput &&
              python manage.py migrate --noinput &&
@@ -60,7 +61,27 @@ services:
   celery:
     image: ${BACKEND_IMAGE}
     container_name: nlh_celery_prod
+    mem_limit: 256m
     command: celery -A config.celery worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.production
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.production
+      - DEBUG=False
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    networks:
+      - nlh_network
+
+  celery_beat:
+    image: ${BACKEND_IMAGE}
+    container_name: nlh_celery_beat_prod
+    mem_limit: 128m
+    command: celery -A config.celery beat --loglevel=info
     env_file:
       - .env.production
     environment:

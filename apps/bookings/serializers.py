@@ -591,6 +591,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        import logging
+        from apps.notifications.tasks import send_notification_email
         validated_data.pop('resource_id', None)
         participant_ids = validated_data.pop('participant_ids', [])
         user = self.context['request'].user
@@ -660,10 +662,19 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                             ),
                             link=f'/bookings/{booking.id}',
                         )
+                        send_notification_email.delay(
+                            participant_user.id,
+                            'booking_confirmed',
+                            {
+                                'subject': f'Вы добавлены на встречу: {resource.name}',
+                                'resource_name': resource.name,
+                                'start_time': timezone.localtime(start_time).strftime('%d.%m.%Y %H:%M'),
+                                'end_time': timezone.localtime(end_time).strftime('%d.%m.%Y %H:%M'),
+                                'action_url': f'/bookings/{booking.id}',
+                            },
+                        )
 
         # Send booking confirmation email to the booking owner
-        import logging
-        from apps.notifications.tasks import send_notification_email
         try:
             send_notification_email.delay(
                 user.id,
@@ -671,8 +682,8 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 {
                     'subject': 'Ваше бронирование подтверждено',
                     'resource_name': resource.name,
-                    'start_time': start_time.strftime('%Y-%m-%d %H:%M'),
-                    'end_time': end_time.strftime('%Y-%m-%d %H:%M'),
+                    'start_time': timezone.localtime(start_time).strftime('%d.%m.%Y %H:%M'),
+                    'end_time': timezone.localtime(end_time).strftime('%d.%m.%Y %H:%M'),
                     'action_url': f'/bookings/{booking.id}',
                 },
             )

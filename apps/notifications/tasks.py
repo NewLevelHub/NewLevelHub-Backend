@@ -231,6 +231,7 @@ def send_bulk_email(announcement_id):
     recipients = User.objects.filter(
         company=announcement.company,
         is_active=True,
+        is_email_verified=True,
     ).values_list('id', flat=True).iterator(chunk_size=50)
 
     for user_id in recipients:

@@ -1599,6 +1599,20 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 action=BookingChangeAudit.ACTION_PARTICIPANTS_ADDED,
                 payload={'user_ids': added_ids},
             )
+        from apps.notifications.tasks import send_notification_email
+        for user in users:
+            if user.id in added_ids:
+                send_notification_email.delay(
+                    user.id,
+                    'booking_confirmed',
+                    {
+                        'subject': f'Вы добавлены на встречу: {booking.resource.name}',
+                        'resource_name': booking.resource.name,
+                        'start_time': booking.start_time.strftime('%d.%m.%Y %H:%M'),
+                        'end_time': booking.end_time.strftime('%d.%m.%Y %H:%M'),
+                        'action_url': f'/bookings/{booking.id}',
+                    },
+                )
         booking.refresh_from_db()
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
@@ -1657,8 +1671,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             )
         qs = (
             Booking.objects
-            .filter(Q(user=request.user) | Q(participants__user=request.user))
-            .distinct()
+            .filter(user=request.user)
             .select_related('resource')
         )
 

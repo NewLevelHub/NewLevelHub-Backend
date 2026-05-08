@@ -4,9 +4,23 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 
+from django.conf import settings
 from django.utils import timezone
 
 from .models import Booking, ResourceBlock
+
+
+def is_soon_available(end_time, now) -> bool:
+    """Return True when end_time is in the future but within SOON_AVAILABLE_MINUTES."""
+    threshold = timedelta(minutes=settings.SOON_AVAILABLE_MINUTES)
+    return now < end_time <= now + threshold
+
+
+def get_schedule_status(booking, now) -> str:
+    """Return 'soon_available' or 'occupied' for a single booking slot."""
+    if is_soon_available(booking.end_time, now):
+        return 'soon_available'
+    return 'occupied'
 
 
 def local_today() -> date:

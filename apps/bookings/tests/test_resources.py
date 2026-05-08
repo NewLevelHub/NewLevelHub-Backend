@@ -608,7 +608,8 @@ class TestResourceCatalogStatus:
         rid = d.json()['id']
         resource = Resource.objects.get(pk=rid)
         fixed = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
-        end = fixed + timedelta(minutes=20)
+        # 5 minutes is within the SOON_AVAILABLE_MINUTES (15 min) threshold
+        end = fixed + timedelta(minutes=5)
         Booking.objects.create(
             resource=resource,
             user=employee,
@@ -715,7 +716,7 @@ class TestResourceAvailabilityIntervalFilter:
 
 @pytest.mark.django_db
 class TestResourceScheduleEndpoints:
-    def test_schedule_day_returns_booking_and_block(
+    def test_schedule_day_returns_booking(
         self, api_client, superadmin, employee, company
     ):
         api_client.force_authenticate(user=superadmin)
@@ -733,32 +734,26 @@ class TestResourceScheduleEndpoints:
             end_time=b_end,
             status='confirmed',
         )
-        bl_start = make_aware(datetime.combine(d, time(14, 0)))
-        bl_end = make_aware(datetime.combine(d, time(15, 0)))
-        ResourceBlock.objects.create(
-            resource=resource,
-            blocked_by=employee,
-            start_time=bl_start,
-            end_time=bl_end,
-            reason='event',
-        )
         api_client.force_authenticate(user=employee)
         url = f'{RESOURCES_URL}{rid}/schedule/'
         r = api_client.get(url, {'date': '2031-03-02'})
         assert r.status_code == status.HTTP_200_OK
         body = r.json()
-        assert len(body) == 2
-        booking_row = next(x for x in body if x['booking_id'] is not None)
-        block_row = next(x for x in body if x['booking_id'] is None)
-        assert booking_row['user_name'] == employee.full_name
-        assert block_row['user_name'] is None
+        # Only confirmed bookings are returned (not blocks)
+        assert len(body) == 1
+        slot = body[0]
+        assert set(slot.keys()) == {'booking_id', 'start', 'end', 'status'}
+        assert slot['booking_id'] is not None
+        assert slot['status'] in ('occupied', 'soon_available')
 
-    def test_schedule_week_requires_single_param(self, api_client, superadmin, employee, company):
+    def test_schedule_defaults_to_today_and_ignores_week_param(
+        self, api_client, superadmin, employee, company
+    ):
         api_client.force_authenticate(user=superadmin)
         cr = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'Week desk', 'floor': 1}, format='json')
         rid = cr.json()['id']
         resource = Resource.objects.get(pk=rid)
-        # Wednesday 2031-03-05; week starts Monday 2031-03-03
+        # Booking on 2031-03-05 — not today, so will not appear in default view
         Booking.objects.create(
             resource=resource,
             user=employee,
@@ -769,15 +764,19 @@ class TestResourceScheduleEndpoints:
         )
         api_client.force_authenticate(user=employee)
         url = f'{RESOURCES_URL}{rid}/schedule/'
-        r = api_client.get(url, {'week': '2031-03-05'})
+
+        # No params: defaults to today (returns 200, no bookings for today)
+        missing = api_client.get(url)
+        assert missing.status_code == status.HTTP_200_OK
+
+        # date param: returns slots for that date
+        r = api_client.get(url, {'date': '2031-03-05'})
         assert r.status_code == status.HTTP_200_OK
         assert len(r.json()) == 1
 
-        bad = api_client.get(url, {'date': '2031-03-05', 'week': '2031-03-05'})
+        # Invalid date: returns 400
+        bad = api_client.get(url, {'date': 'not-a-date'})
         assert bad.status_code == status.HTTP_400_BAD_REQUEST
-
-        missing = api_client.get(url)
-        assert missing.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_retrieve_includes_schedule_list(self, api_client, superadmin, employee, company):
         api_client.force_authenticate(user=superadmin)
@@ -966,3 +965,89 @@ class TestResourceBlockingAcceptanceCriteria:
         row = next(item for item in _list_results(catalog_response) if item['id'] == resource_id)
         assert row['status'] == 'blocked'
         assert row['reason'] == 'Ремонт покрытия'
+
+
+# ---------------------------------------------------------------------------
+# Tests: is_soon_available canonical rule (unit) and catalog integration
+# ---------------------------------------------------------------------------
+
+class TestIsSoonAvailable:
+    """Unit tests for the single source of truth: is_soon_available() in schedule.py."""
+
+    def test_returns_true_when_ending_within_threshold(self):
+        from datetime import timedelta, datetime, timezone as dt_tz
+        from apps.bookings.schedule import is_soon_available
+
+        now = datetime(2030, 1, 1, 12, 0, 0, tzinfo=dt_tz.utc)
+        end_time = now + timedelta(minutes=5)
+        assert is_soon_available(end_time, now) is True
+
+    def test_returns_false_when_ending_after_threshold(self):
+        from datetime import timedelta, datetime, timezone as dt_tz
+        from apps.bookings.schedule import is_soon_available
+
+        now = datetime(2030, 1, 1, 12, 0, 0, tzinfo=dt_tz.utc)
+        # 30 min is well beyond the default 15-min threshold
+        end_time = now + timedelta(minutes=30)
+        assert is_soon_available(end_time, now) is False
+
+    def test_returns_false_when_already_ended(self):
+        from datetime import timedelta, datetime, timezone as dt_tz
+        from apps.bookings.schedule import is_soon_available
+
+        now = datetime(2030, 1, 1, 12, 0, 0, tzinfo=dt_tz.utc)
+        end_time = now - timedelta(minutes=1)
+        assert is_soon_available(end_time, now) is False
+
+
+@pytest.mark.django_db
+class TestResourceCatalogSoonAvailableRule:
+    """Integration tests confirming catalog status uses is_soon_available as single source of truth."""
+
+    def test_resource_status_is_soon_available_when_ending_within_threshold(
+        self, api_client, superadmin, employee, company
+    ):
+        """Resource with a booking ending in 5 min shows status=soon_available and available_at set."""
+        api_client.force_authenticate(user=superadmin)
+        d = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'SoonDesk', 'floor': 1}, format='json')
+        rid = d.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        fixed = timezone.now().replace(microsecond=0)
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=fixed - timedelta(hours=1),
+            end_time=fixed + timedelta(minutes=5),
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed):
+            r = api_client.get(RESOURCES_URL)
+        row = next(x for x in _list_results(r) if x['id'] == rid)
+        assert row['status'] == 'soon_available'
+        assert row['available_at'] is not None
+
+    def test_resource_status_is_occupied_when_ending_after_threshold(
+        self, api_client, superadmin, employee, company
+    ):
+        """Resource with a booking ending in 30 min shows status=occupied and available_at=None."""
+        api_client.force_authenticate(user=superadmin)
+        d = api_client.post(RESOURCES_URL, {'type': 'desk', 'name': 'OccDesk', 'floor': 1}, format='json')
+        rid = d.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        fixed = timezone.now().replace(microsecond=0)
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=fixed - timedelta(hours=1),
+            end_time=fixed + timedelta(minutes=30),
+            status='confirmed',
+        )
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed):
+            r = api_client.get(RESOURCES_URL)
+        row = next(x for x in _list_results(r) if x['id'] == rid)
+        assert row['status'] == 'occupied'
+        assert row['available_at'] is None

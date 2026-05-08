@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.db.models import Prefetch, Q
 from django.http import Http404
@@ -42,7 +42,7 @@ from .serializers import (
     ResourceDetailSerializer,
     ResourceListSerializer,
     ResourceBulkCreateSerializer,
-    ResourceScheduleSlotSerializer,
+    ResourceDayScheduleSlotSerializer,
     BookingSerializer,
     BookingCreateSerializer,
     RecurringBookingSerializer,
@@ -51,7 +51,7 @@ from .serializers import (
     _EQUIPMENT_KEYS,
 )
 from .filters import ResourceFilter, BookingFilter
-from .schedule import busy_slots_for_resource, day_range_aware, week_range_for_date
+from .schedule import get_schedule_status
 from .tasks import create_bookings_for_recurring
 
 
@@ -828,14 +828,15 @@ class ResourceViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Resources'],
-        summary='Busy schedule for a resource (day or week view)',
+        summary='Resource booking schedule for a day',
         description=(
-            'Returns the list of busy time slots (confirmed bookings + admin blocks) '
-            'for the given resource.\n\n'
-            'Pass exactly one of:\n'
-            '- `date=YYYY-MM-DD` — returns slots for that single calendar day.\n'
-            '- `week=YYYY-MM-DD` — returns slots for the whole ISO week (Mon–Sun) '
-            'that contains the given date.\n\n'
+            'Returns the list of confirmed bookings for the given resource on a single calendar day.\n\n'
+            'If `date` is omitted, defaults to today (server local date, `Asia/Almaty`).\n\n'
+            'Each slot includes a `status` field:\n'
+            '- `"occupied"` — booking is ongoing or in the future with more than '
+            '`SOON_AVAILABLE_MINUTES` (15 min) until it ends.\n'
+            '- `"soon_available"` — booking is still ongoing but ends within 15 minutes.\n\n'
+            'Datetimes are returned with the `+05:00` timezone offset, not UTC `Z`.\n\n'
             '**Access:** `company_admin` or `employee` (company member) or `superadmin`. '
             'Guests are blocked.'
         ),
@@ -845,40 +846,20 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 type=OpenApiTypes.DATE,
                 location=OpenApiParameter.QUERY,
                 required=False,
-                description='YYYY-MM-DD — returns busy slots for this single calendar day.',
-            ),
-            OpenApiParameter(
-                name='week',
-                type=OpenApiTypes.DATE,
-                location=OpenApiParameter.QUERY,
-                required=False,
-                description=(
-                    'YYYY-MM-DD — any day within the desired week; '
-                    'returns busy slots for the full Mon–Sun range.'
-                ),
+                description='YYYY-MM-DD — returns slots for this single calendar day. Defaults to today.',
             ),
         ],
         responses={
-            200: ResourceScheduleSlotSerializer(many=True),
+            200: ResourceDayScheduleSlotSerializer(many=True),
             400: OpenApiResponse(
-                description='Missing or conflicting query parameters.',
+                description='Invalid date format.',
                 examples=[
                     OpenApiExample(
-                        name='Both params provided',
+                        name='Invalid date',
                         value={
                             'error': True,
                             'status_code': 400,
-                            'detail': {'detail': 'Укажите только один параметр: date или week.'},
-                        },
-                        response_only=True,
-                        status_codes=['400'],
-                    ),
-                    OpenApiExample(
-                        name='No params provided',
-                        value={
-                            'error': True,
-                            'status_code': 400,
-                            'detail': {'detail': 'Нужен query-параметр date=YYYY-MM-DD или week=YYYY-MM-DD.'},
+                            'detail': 'Invalid date format. Use YYYY-MM-DD.',
                         },
                         response_only=True,
                         status_codes=['400'],
@@ -893,32 +874,45 @@ class ResourceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='schedule')
     def schedule(self, request, pk=None):
         resource = self.get_object()
-        date_s = request.query_params.get('date')
-        week_s = request.query_params.get('week')
-        if date_s and week_s:
-            raise ValidationError({'detail': 'Укажите только один параметр: date или week.'})
-        if not date_s and not week_s:
-            raise ValidationError(
-                {'detail': 'Нужен query-параметр date=YYYY-MM-DD или week=YYYY-MM-DD.'}
-            )
+        date_param = request.query_params.get('date')
+        local_tz = timezone.get_current_timezone()
+        now = timezone.now()
 
-        def _parse_date(label, s):
+        if date_param:
             try:
-                return datetime.strptime(s, '%Y-%m-%d').date()
-            except (TypeError, ValueError):
-                raise ValidationError(
-                    {'detail': f'Неверный формат {label}; ожидается YYYY-MM-DD.'}
-                ) from None
-
-        if date_s:
-            d = _parse_date('date', date_s)
-            range_start, range_end = day_range_aware(d)
+                target_date = date.fromisoformat(date_param)
+            except ValueError:
+                return Response(
+                    {'detail': 'Invalid date format. Use YYYY-MM-DD.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
-            d = _parse_date('week', week_s)
-            range_start, range_end = week_range_for_date(d)
+            target_date = now.astimezone(local_tz).date()
 
-        slots = busy_slots_for_resource(resource.id, range_start, range_end)
-        return Response(ResourceScheduleSlotSerializer(slots, many=True).data)
+        # Filter by local-date range to avoid UTC-boundary mismatches for early-morning bookings.
+        local_start = timezone.make_aware(datetime.combine(target_date, time.min), local_tz)
+        local_end = timezone.make_aware(datetime.combine(target_date, time.max), local_tz) + timedelta(seconds=1)
+
+        bookings = Booking.objects.filter(
+            resource=resource,
+            status='confirmed',
+            start_time__gte=local_start,
+            start_time__lt=local_end,
+        ).order_by('start_time')
+
+        result = []
+        for booking in bookings:
+            start_local = booking.start_time.astimezone(local_tz)
+            end_local = booking.end_time.astimezone(local_tz)
+            status_val = get_schedule_status(booking, now)
+            result.append({
+                'booking_id': booking.pk,
+                'start': start_local.isoformat(),
+                'end': end_local.isoformat(),
+                'status': status_val,
+            })
+
+        return Response(result)
 
     @extend_schema(
         tags=['Resources'],

@@ -237,6 +237,7 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))
+SOON_AVAILABLE_MINUTES = int(os.getenv('SOON_AVAILABLE_MINUTES', 15))
 
 # File upload limits (defaults to 100 MB for preview/staging uploads).
 DEFAULT_UPLOAD_LIMIT_MB = int(os.getenv('UPLOAD_MAX_SIZE_MB', 100))

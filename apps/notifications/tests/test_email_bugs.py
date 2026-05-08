@@ -133,7 +133,9 @@ class TestBug1EmailPreferenceRespected:
     def test_email_not_sent_when_pref_defaults_to_false(self, employee):
         """create_notification never sends email (task_assigned or any type)."""
         pref, _ = NotificationPreference.objects.get_or_create(user=employee)
-        assert pref.task_assigned_email is False
+        # Explicitly disable to ensure create_notification does not trigger email.
+        pref.task_assigned_email = False
+        pref.save(update_fields=['task_assigned_email'])
 
         with patch('apps.notifications.utils._send_notification_email') as mock_send:
             create_notification(

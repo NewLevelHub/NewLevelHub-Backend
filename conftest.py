@@ -5,6 +5,13 @@ import pytest
 from django.conf import settings
 
 
+@pytest.fixture(autouse=True)
+def celery_eager(settings):
+    """Run Celery tasks synchronously in tests (no broker required)."""
+    settings.CELERY_TASK_ALWAYS_EAGER = True
+    settings.CELERY_TASK_EAGER_PROPAGATES = True
+
+
 @pytest.fixture(scope='session')
 def django_db_setup(worker_id):
     host = os.environ.get('POSTGRES_HOST', 'db')

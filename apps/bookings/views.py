@@ -1671,7 +1671,8 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             )
         qs = (
             Booking.objects
-            .filter(user=request.user)
+            .filter(Q(user=request.user) | Q(participants__user=request.user))
+            .distinct()
             .select_related('resource')
         )
 

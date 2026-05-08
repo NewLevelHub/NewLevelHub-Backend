@@ -41,13 +41,15 @@ def make_user(db, django_user_model):
                 'last_name': 'Testov',
                 'role': role,
                 'company': company,
+                'is_email_verified': True,
             },
         )
         # Update fields if user already exists (from a previous run)
         user.role = role
         user.company = company
         user.first_name = first_name
-        user.save(update_fields=['role', 'company', 'first_name'])
+        user.is_email_verified = True
+        user.save(update_fields=['role', 'company', 'first_name', 'is_email_verified'])
         return user
 
     return _make

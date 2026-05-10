@@ -96,3 +96,8 @@ celerybeat-schedule
 scripts/linear-tickets.json
 scripts/linear-config.local.js
 
+# ------------------------------
+# Audit artifacts (локальные результаты сверки тикетов)
+# ------------------------------
+audit/
+

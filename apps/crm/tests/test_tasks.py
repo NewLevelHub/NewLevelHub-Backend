@@ -696,7 +696,7 @@ class TestTaskMove:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'wip_limit_exceeded' in res.data['detail']
+        assert res.data['detail']['detail'] == 'WIP limit reached (max 1 tasks)'
 
     def test_move_wip_limit_not_exceeded_returns_200(self, api_client, admin_a, task_a, column_a2):
         """Moving to a column under WIP capacity succeeds."""
@@ -733,6 +733,53 @@ class TestTaskMove:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id, 'order': 1}, format='json')
         assert res.status_code == status.HTTP_200_OK
+
+    def test_position_field_silently_ignored_task_appended_to_end(
+        self, api_client, admin_a, task_a, column_a2
+    ):
+        """Sending 'position' instead of 'order' must be silently ignored.
+
+        The unknown field is dropped by DRF; order defaults to None, so the task
+        is appended to the end of the target column — NOT placed at position 1.
+        """
+        # Pre-populate column_a2 with two tasks so the end position is 2.
+        Task.objects.create(
+            column=column_a2, title='Existing 1', priority='low', position=1, created_by=admin_a,
+        )
+        Task.objects.create(
+            column=column_a2, title='Existing 2', priority='low', position=2, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        # Send 'position' (old/unknown field) — should NOT honour it as order=1.
+        res = api_client.post(
+            task_move_url(task_a.id),
+            {'column_id': column_a2.id, 'position': 1},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_200_OK
+        task_a.refresh_from_db()
+        # Task must be appended to the end (position 3), not placed at position 1.
+        assert task_a.position == 3
+
+    def test_order_field_correctly_positions_task_in_non_empty_column(
+        self, api_client, admin_a, task_a, column_a2
+    ):
+        """Sending 'order' places the task at the requested position."""
+        Task.objects.create(
+            column=column_a2, title='Existing 1', priority='low', position=1, created_by=admin_a,
+        )
+        Task.objects.create(
+            column=column_a2, title='Existing 2', priority='low', position=2, created_by=admin_a,
+        )
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(
+            task_move_url(task_a.id),
+            {'column_id': column_a2.id, 'order': 1},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_200_OK
+        task_a.refresh_from_db()
+        assert task_a.position == 1
 
 
 # ---------------------------------------------------------------------------

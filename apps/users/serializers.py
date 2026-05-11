@@ -30,12 +30,11 @@ AVATAR_SIZE = (400, 400)
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def _delete_file(field):
-    """Delete the physical file referenced by an ImageField / FileField."""
-    if field and hasattr(field, 'path'):
+    """Delete the file referenced by an ImageField / FileField via storage backend."""
+    if field and field.name:
         try:
-            if os.path.isfile(field.path):
-                os.remove(field.path)
-        except (OSError, ValueError):
+            field.storage.delete(field.name)
+        except Exception:
             pass
 
 

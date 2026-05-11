@@ -28,6 +28,11 @@ echo ""
 echo "Starting Docker containers..."
 docker compose -f docker-compose.local.yml up -d --build --wait
 
+# Create MinIO bucket (one-shot setup container)
+echo ""
+echo "Creating MinIO bucket..."
+docker compose -f docker-compose.local.yml run --rm createbuckets
+
 # Run migrations (apply existing migration files only)
 echo ""
 echo "Running database migrations..."
@@ -49,6 +54,7 @@ echo "   - Backend API:    http://localhost:8000/api/v1/"
 echo "   - Swagger Docs:   http://localhost:8000/api/docs/"
 echo "   - Admin Panel:    http://localhost:8000/admin/"
 echo "   - Health Check:   http://localhost:8000/api/v1/health/"
+echo "   - MinIO Console:  http://localhost:9001  (minioadmin / minioadmin)"
 echo ""
 echo "Useful commands:"
 echo "   - View logs:      docker compose -f docker-compose.local.yml logs -f"

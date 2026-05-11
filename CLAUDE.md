@@ -205,6 +205,12 @@ DEFAULT_FROM_EMAIL
 FRONTEND_URL         (used in email links, default: http://localhost:3000)
 ACCESS_TOKEN_LIFETIME_MINUTES  (default: 60)
 REFRESH_TOKEN_LIFETIME_DAYS    (default: 7)
+# MinIO / S3 object storage (set USE_MINIO=True to activate)
+USE_MINIO                (default: False)
+MINIO_ENDPOINT           (default: http://minio:9000; use http://localhost:9000 outside Docker)
+MINIO_ACCESS_KEY         (default: minioadmin)
+MINIO_SECRET_KEY         (default: minioadmin)
+MINIO_BUCKET_NAME        (default: nlh-media)
 ```
 
 ---

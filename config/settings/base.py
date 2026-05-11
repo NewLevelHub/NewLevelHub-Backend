@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # Third-party
+    'storages',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -101,9 +102,33 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 _STATIC_SRC = BASE_DIR / 'static'
 STATICFILES_DIRS = [_STATIC_SRC] if _STATIC_SRC.exists() else []
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Object Storage (MinIO / S3) ---
+USE_MINIO = os.getenv('USE_MINIO', 'False').lower() in ('1', 'true', 'yes')
+
+if USE_MINIO:
+    AWS_ACCESS_KEY_ID = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
+    AWS_SECRET_ACCESS_KEY = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
+    AWS_STORAGE_BUCKET_NAME = os.getenv('MINIO_BUCKET_NAME', 'nlh-media')
+    # Internal endpoint: used by boto3 to upload files — must be reachable by Django process.
+    # Inside Docker use http://minio:9000; outside Docker use http://localhost:9000.
+    AWS_S3_ENDPOINT_URL = os.getenv('MINIO_ENDPOINT', 'http://minio:9000')
+    AWS_S3_ADDRESSING_STYLE = 'path'
+    AWS_S3_SIGNATURE_VERSION = 's3v4'
+    AWS_DEFAULT_ACL = None
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_QUERYSTRING_AUTH = False
+    # Public endpoint: base URL returned to browsers in API responses.
+    MINIO_PUBLIC_URL = os.getenv('MINIO_PUBLIC_URL', 'http://localhost:9000')
+    MEDIA_URL = f'{MINIO_PUBLIC_URL}/{AWS_STORAGE_BUCKET_NAME}/'
+    STORAGES = {
+        'default': {'BACKEND': 'apps.core.storage.MinIOStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+else:
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = BASE_DIR / 'media'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [

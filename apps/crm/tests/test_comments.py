@@ -363,13 +363,13 @@ class TestCommentUpdate:
         )
         assert res.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_company_admin_can_edit_any_comment(self, api_client, admin_a, task_a, comment_a):
+    def test_company_admin_cannot_edit_others_comment(self, api_client, admin_a, task_a, comment_a):
+        # AC#3: PATCH is author-only; company_admin must be blocked
         api_client.force_authenticate(admin_a)
         res = api_client.patch(
             comment_detail_url(task_a.id, comment_a.id), {'text': 'Admin edit'}, format='json'
         )
-        assert res.status_code == status.HTTP_200_OK
-        assert res.data['text'] == 'Admin edit'
+        assert res.status_code == status.HTTP_403_FORBIDDEN
 
     def test_superadmin_can_edit_any_comment(self, api_client, superadmin, task_a, comment_a):
         api_client.force_authenticate(superadmin)
@@ -448,3 +448,41 @@ class TestCommentsCount:
         res = api_client.get(f'/api/v1/crm/tasks/{task_a.id}/')
         assert res.status_code == status.HTTP_200_OK
         assert res.data['comments_count'] == 2
+
+
+# ---------------------------------------------------------------------------
+# DEV-87 AC#3 — PATCH author-only, DELETE author or company_admin
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCommentPermissions:
+    def test_company_admin_cannot_edit_others_comment(self, api_client, admin_a, task_a, comment_a):
+        """PATCH: company_admin must NOT be able to edit another user's comment."""
+        api_client.force_authenticate(admin_a)
+        res = api_client.patch(
+            comment_detail_url(task_a.id, comment_a.id), {'text': 'Admin forced edit'}, format='json'
+        )
+        assert res.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_author_can_edit_own_comment(self, api_client, employee_a, task_a, comment_a):
+        """PATCH: the comment author must be able to edit their own comment."""
+        api_client.force_authenticate(employee_a)
+        res = api_client.patch(
+            comment_detail_url(task_a.id, comment_a.id), {'text': 'Self edit'}, format='json'
+        )
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['text'] == 'Self edit'
+
+    def test_company_admin_can_delete_others_comment(self, api_client, admin_a, task_a, comment_a):
+        """DELETE: company_admin must be able to delete another user's comment."""
+        api_client.force_authenticate(admin_a)
+        res = api_client.delete(comment_detail_url(task_a.id, comment_a.id))
+        assert res.status_code == status.HTTP_204_NO_CONTENT
+        assert not Comment.objects.filter(pk=comment_a.id).exists()
+
+    def test_author_can_delete_own_comment(self, api_client, employee_a, task_a, comment_a):
+        """DELETE: the comment author must be able to delete their own comment."""
+        api_client.force_authenticate(employee_a)
+        res = api_client.delete(comment_detail_url(task_a.id, comment_a.id))
+        assert res.status_code == status.HTTP_204_NO_CONTENT
+        assert not Comment.objects.filter(pk=comment_a.id).exists()

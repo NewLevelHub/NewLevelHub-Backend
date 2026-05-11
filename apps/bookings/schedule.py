@@ -46,7 +46,7 @@ def week_range_for_date(anchor: date) -> tuple[datetime, datetime]:
     """ISO-style week: Monday 00:00 .. next Monday 00:00 (local), containing anchor."""
     monday = anchor - timedelta(days=anchor.weekday())
     start, _ = day_range_aware(monday)
-    _, end = day_range_aware(monday + timedelta(days=7))
+    end, _ = day_range_aware(monday + timedelta(days=7))
     return start, end
 
 

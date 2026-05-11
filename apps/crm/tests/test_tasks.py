@@ -781,6 +781,30 @@ class TestTaskArchive:
         res = api_client.post(task_archive_url(task_b.id))
         assert res.status_code == status.HTTP_404_NOT_FOUND
 
+    def test_archive_sets_both_is_deleted_and_is_archived(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        task_a.refresh_from_db()
+        assert task_a.is_deleted is True
+        assert task_a.is_archived is True
+
+    def test_archive_task_not_in_board_list(self, api_client, admin_a, board_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(TASKS_URL, {'board_id': board_a.id})
+        assert res.status_code == status.HTTP_200_OK
+        ids = [t['id'] for t in res.data['results']]
+        assert task_a.id not in ids
+
+    def test_archive_creates_history_entry_with_correct_data(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        history = TaskHistory.objects.filter(task=task_a, action='archived').first()
+        assert history is not None
+        assert history.old_value == 'False'
+        assert history.new_value == 'True'
+        assert history.user == admin_a
+
 
 # ---------------------------------------------------------------------------
 # Position normalization
@@ -933,13 +957,13 @@ class TestTaskIsArchivedFilter:
         assert len(titles) == 2
 
     def test_patch_is_archived_true_archives_task(self, api_client, admin_a, column_a, board_a):
+        # is_archived is now read-only on PATCH; archiving must go via POST /archive/
         task = Task.objects.create(
             column=column_a, title='To Archive', priority='low', position=1, created_by=admin_a,
         )
         api_client.force_authenticate(admin_a)
-        res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
+        res = api_client.post(task_archive_url(task.id))
         assert res.status_code == status.HTTP_200_OK
-        assert res.data['is_archived'] is True
         task.refresh_from_db()
         assert task.is_archived is True
 
@@ -948,33 +972,32 @@ class TestTaskIsArchivedFilter:
             column=column_a, title='Preserve Col', priority='low', position=1, created_by=admin_a,
         )
         original_column_id = task.column_id
-        original_position = task.position
         api_client.force_authenticate(admin_a)
-        res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
+        res = api_client.post(task_archive_url(task.id))
         assert res.status_code == status.HTTP_200_OK
         task.refresh_from_db()
         assert task.column_id == original_column_id
-        assert task.position == original_position
 
     def test_patch_is_archived_false_unarchives_task(self, api_client, admin_a, column_a, board_a):
-        task = Task.objects.create(
+        # Unarchiving must go via POST /unarchive/
+        task = Task.all_objects.create(
             column=column_a, title='To Unarchive', priority='low', position=1,
-            created_by=admin_a, is_archived=True,
+            created_by=admin_a, is_archived=True, is_deleted=True,
         )
         api_client.force_authenticate(admin_a)
-        res = api_client.patch(task_url(task.id), {'is_archived': False}, format='json')
+        res = api_client.post(f'/api/v1/crm/tasks/{task.id}/unarchive/')
         assert res.status_code == status.HTTP_200_OK
-        assert res.data['is_archived'] is False
         task.refresh_from_db()
         assert task.is_archived is False
+        assert task.is_deleted is False
 
     def test_archived_task_not_in_default_list_after_patch(self, api_client, admin_a, column_a, board_a):
         task = Task.objects.create(
             column=column_a, title='Will Archive', priority='low', position=1, created_by=admin_a,
         )
         api_client.force_authenticate(admin_a)
-        patch_res = api_client.patch(task_url(task.id), {'is_archived': True}, format='json')
-        assert patch_res.status_code == status.HTTP_200_OK
+        archive_res = api_client.post(task_archive_url(task.id))
+        assert archive_res.status_code == status.HTTP_200_OK
         list_res = api_client.get(TASKS_URL, {'board_id': board_a.id})
         assert list_res.status_code == status.HTTP_200_OK
         ids = [t['id'] for t in list_res.data['results']]

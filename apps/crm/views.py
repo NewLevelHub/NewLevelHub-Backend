@@ -704,7 +704,14 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Task.objects.select_related(
+        # When listing archived tasks, use all_objects so that soft-deleted
+        # (archived) rows are not hidden by SoftDeleteManager.
+        want_archived = (
+            self.action == 'list'
+            and self.request.query_params.get('is_archived', '').lower() == 'true'
+        )
+        manager = Task.all_objects if want_archived else Task.objects
+        qs = manager.select_related(
             'column__board', 'assignee', 'created_by',
         ).prefetch_related('labels', 'checklists__items')
         if user.role == 'superadmin':
@@ -1074,7 +1081,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         tags=['CRM'],
         summary='Archive task',
         description=(
-            'Soft-deletes the task by calling task.soft_delete() (sets is_deleted=True). '
+            'Archives the task: sets is_deleted=True and is_archived=True. '
             'Archived tasks are excluded from all list queries. '
             'Permission: company members only (employee, company_admin, superadmin).'
         ),
@@ -1094,6 +1101,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         column = task.column
         task.soft_delete()
+        task.is_archived = True
+        task.save(update_fields=['is_archived'])
         _normalize_positions(column)
         TaskHistory.objects.create(
             task=task,
@@ -1103,6 +1112,57 @@ class TaskViewSet(viewsets.ModelViewSet):
             new_value='True',
         )
         return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Unarchive task',
+        description=(
+            'Restores an archived task: sets is_deleted=False and is_archived=False. '
+            'Returns 400 with wip_limit_exceeded if the column WIP limit would be breached. '
+            'Permission: company members only (employee, company_admin, superadmin).'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='TaskUnarchiveResponse',
+                fields={'detail': drf_serializers.CharField()},
+            ),
+            400: OpenApiResponse(description='WIP limit exceeded.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only.'),
+            404: OpenApiResponse(description='Task not found.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive(self, request, pk=None):
+        user = request.user
+        # Use all_objects to find soft-deleted (archived) tasks that SoftDeleteManager hides.
+        qs = Task.all_objects.select_related('column__board')
+        if user.role != 'superadmin':
+            qs = qs.filter(column__board__company_id=user.company_id)
+        try:
+            task = qs.get(pk=pk)
+        except Task.DoesNotExist:
+            raise NotFound('Task not found.')
+
+        if not task.is_archived:
+            return Response({'detail': 'Task is not archived'}, status=status.HTTP_400_BAD_REQUEST)
+
+        check_wip_limit(task.column, exclude_task_pk=task.pk)
+
+        task.is_deleted = False
+        task.deleted_at = None
+        task.is_archived = False
+        task.save(update_fields=['is_deleted', 'deleted_at', 'is_archived'])
+        _normalize_positions(task.column)
+        TaskHistory.objects.create(
+            task=task,
+            user=request.user,
+            action='unarchived',
+            old_value='True',
+            new_value='False',
+        )
+        return Response({'detail': 'Task unarchived'}, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(

@@ -458,9 +458,9 @@ class TestEmailNotificationTaskAC:
         )
         send_announcement_emails(announcement.id)
 
-        # All active users should receive an email
+        # All active verified users should receive an email
         all_user_emails = set(
-            User.objects.filter(is_active=True).values_list('email', flat=True)
+            User.objects.filter(is_active=True, is_email_verified=True).values_list('email', flat=True)
         )
         sent_to = {msg.to[0] for msg in mail.outbox}
         assert all_user_emails.issubset(sent_to)

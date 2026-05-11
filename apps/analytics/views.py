@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, time
 
 from django.http import HttpResponse
 from django.utils import timezone
-from django.db.models import Count, Avg, F, Sum, Q
+from django.db.models import Count, Avg, F, Sum, Q, ExpressionWrapper, DurationField
 from django.db.models.functions import TruncDate, ExtractHour
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
@@ -693,6 +693,11 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
 @extend_schema(
     tags=['Analytics'],
     summary='Resource usage stats (superadmin)',
+    parameters=[
+        OpenApiParameter(name='period', type=str, description='Period: 7d, 30d, 90d, custom (default: 30d)'),
+        OpenApiParameter(name='date_from', type=OpenApiTypes.DATE, description='Start date (period=custom)'),
+        OpenApiParameter(name='date_to', type=OpenApiTypes.DATE, description='End date (period=custom)'),
+    ],
     responses={
         200: ResourceUsageSerializer(many=True),
         401: OpenApiResponse(description='Not authenticated'),
@@ -702,16 +707,33 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
 @api_view(['GET'])
 @permission_classes([IsSuperAdmin])
 def resource_usage(request):
-    # TODO: фильтр по периоду через query params
+    period_meta = _resolve_period_metadata(request.query_params)
+    date_from = period_meta['date_from']
+    date_to = period_meta['date_to']
+
     stats = (
         Booking.objects
+        .filter(start_time__date__gte=date_from, start_time__date__lte=date_to)
         .values(resource_type=F('resource__resource_type'))
         .annotate(
             total_bookings=Count('id'),
-            avg_duration_minutes=Avg(
-                (F('end_time') - F('start_time')),
+            avg_duration=Avg(
+                ExpressionWrapper(F('end_time') - F('start_time'), output_field=DurationField())
             ),
         )
     )
-    # TODO: конвертировать avg_duration в минуты (сейчас timedelta)
-    return Response(list(stats))
+
+    result = []
+    for row in stats:
+        avg_td = row['avg_duration']
+        if avg_td is not None and hasattr(avg_td, 'total_seconds'):
+            avg_minutes = round(avg_td.total_seconds() / 60, 2)
+        else:
+            avg_minutes = None
+        result.append({
+            'resource_type': row['resource_type'],
+            'total_bookings': row['total_bookings'],
+            'avg_duration_minutes': avg_minutes,
+        })
+
+    return Response(result)

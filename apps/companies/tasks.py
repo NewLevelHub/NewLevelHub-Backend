@@ -1,6 +1,8 @@
 from celery import shared_task
+from datetime import timedelta
 from django.conf import settings
 from django.core.mail import send_mail
+from django.utils import timezone
 
 from .models import Invitation
 
@@ -32,6 +34,10 @@ def send_invitation_email(invitation_id):
 
 @shared_task
 def check_expired_invitations():
-    """Периодическая задача: пометить просроченные инвайты."""
-    # TODO: Invitation.objects.filter(expires_at__lt=now, is_used=False) — при необходимости обработать
-    pass
+    """Периодическая задача: удалить просроченные неиспользованные инвайты (старше 7 дней после истечения)."""
+    cutoff = timezone.now() - timedelta(days=7)
+    deleted_count, _ = Invitation.objects.filter(
+        expires_at__lt=cutoff,
+        is_used=False,
+    ).delete()
+    return {'deleted': deleted_count}

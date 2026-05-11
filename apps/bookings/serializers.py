@@ -11,7 +11,7 @@ from rest_framework.exceptions import APIException
 from apps.companies.models import Company
 from apps.notifications.utils import create_notification
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
-from .schedule import busy_slots_for_resource, seven_day_range_from_today
+from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
 User = get_user_model()
 
@@ -23,8 +23,6 @@ _PARKING_MAX_ADVANCE_DAYS = 7
 _CAPSULE_MIN_MINUTES = 60
 _CAPSULE_MAX_MINUTES = 480  # 8 hours
 
-# Минут до освобождения, после которых статус «soon_available» вместо «occupied».
-SOON_AVAILABLE_MINUTES = 30
 
 _EQUIPMENT_KEYS = {
     'projector': 'has_projector',
@@ -204,12 +202,21 @@ class ResourceSerializer(serializers.ModelSerializer):
 
 
 class ResourceScheduleSlotSerializer(serializers.Serializer):
-    """Занятый интервал в ответе schedule / поле schedule в карточке ресурса."""
+    """Занятый интервал в поле schedule карточки ресурса (retrieve)."""
 
     start = serializers.DateTimeField()
     end = serializers.DateTimeField()
     booking_id = serializers.IntegerField(allow_null=True)
     user_name = serializers.CharField(allow_null=True)
+
+
+class ResourceDayScheduleSlotSerializer(serializers.Serializer):
+    """Слот в ответе GET /resources/{id}/schedule/?date=YYYY-MM-DD."""
+
+    booking_id = serializers.IntegerField()
+    start = serializers.CharField()
+    end = serializers.CharField()
+    status = serializers.CharField()
 
 
 class ResourceDetailSerializer(ResourceSerializer):
@@ -312,8 +319,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
         window_end = self._availability_window(obj)
         if window_end is None:
             return 'free'
-        soon_before = window_end - timedelta(minutes=SOON_AVAILABLE_MINUTES)
-        if now >= soon_before:
+        if is_soon_available(window_end, now):
             return 'soon_available'
         return 'occupied'
 
@@ -330,8 +336,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
         window_end = self._availability_window(obj)
         if window_end is None:
             return None
-        soon_before = window_end - timedelta(minutes=SOON_AVAILABLE_MINUTES)
-        if not obj.is_active or now < soon_before:
+        if not obj.is_active or not is_soon_available(window_end, now):
             return None
         return window_end
 

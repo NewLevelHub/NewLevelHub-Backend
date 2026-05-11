@@ -928,7 +928,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
                 qs = qs.filter(expires_at__lte=timezone.now())
             else:
                 qs = qs.filter(expires_at__gt=timezone.now())
-        return qs
+        return qs.order_by('-created_at')
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -988,7 +988,8 @@ class InvitationViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             old_invitation.is_used = True
             old_invitation.used_at = timezone.now()
-            old_invitation.save(update_fields=['is_used', 'used_at'])
+            old_invitation.expires_at = timezone.now()
+            old_invitation.save(update_fields=['is_used', 'used_at', 'expires_at'])
 
             new_invitation = Invitation.objects.create(
                 company=old_invitation.company,

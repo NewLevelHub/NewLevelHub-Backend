@@ -34,7 +34,7 @@ from .serializers import (
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 from .filters import ServiceRequestFilter
-from .tasks import send_announcement_emails
+from .tasks import send_announcement_emails, notify_announcement_subscribers
 
 
 class FloorsListPagination(PageNumberPagination):
@@ -953,43 +953,9 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             # onto their own company; never let them post under another tenant.
             company = user.company
         announcement = serializer.save(author=user, company=company)
-        if announcement.is_pinned and announcement.notify_email:
+        if announcement.notify_email:
             send_announcement_emails.delay(announcement.id)
-        self._notify_announcement_subscribers(announcement)
-
-    def _notify_announcement_subscribers(self, announcement):
-        """In-app fan-out for company or building-wide announcements (excludes author)."""
-        from apps.users.models import User
-
-        author_id = announcement.author_id
-        headline = (announcement.title or '').strip()
-        preview = (announcement.body or '').strip()
-        if preview:
-            preview = preview[:500]
-        parts = []
-        if headline:
-            parts.append(headline)
-        if preview:
-            parts.append(preview)
-        body_text = '\n\n'.join(parts) if parts else 'Откройте раздел объявлений.'
-        if announcement.company_id:
-            qs = User.objects.filter(
-                company_id=announcement.company_id,
-                is_active=True,
-            ).exclude(pk=author_id)
-        else:
-            qs = User.objects.filter(
-                is_active=True,
-                role__in=['superadmin', 'company_admin', 'employee', 'reception'],
-            ).exclude(pk=author_id)
-        for recipient in qs.iterator(chunk_size=100):
-            create_notification(
-                user=recipient,
-                notification_type='announcement',
-                title='Новое объявление',
-                message=body_text,
-                link='/announcements/',
-            )
+        notify_announcement_subscribers.delay(announcement.id)
 
     @extend_schema(
         tags=['Services'],

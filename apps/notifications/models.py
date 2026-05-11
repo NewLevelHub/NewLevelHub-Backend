@@ -77,7 +77,7 @@ class NotificationPreference(TimeStampedModel):
     booking_cancelled_email = models.BooleanField(default=True)
     # Task
     task_assigned_in_app = models.BooleanField(default=True)
-    task_assigned_email = models.BooleanField(default=False)
+    task_assigned_email = models.BooleanField(default=True)
     task_moved_in_app = models.BooleanField(default=True)
     task_moved_email = models.BooleanField(default=False)
     task_comment_in_app = models.BooleanField(default=True)
@@ -94,7 +94,7 @@ class NotificationPreference(TimeStampedModel):
     service_request_update_email = models.BooleanField(default=False)
     # Announcement
     announcement_in_app = models.BooleanField(default=True)
-    announcement_email = models.BooleanField(default=False)
+    announcement_email = models.BooleanField(default=True)
     # HR
     invitation_in_app = models.BooleanField(default=True)
     invitation_email = models.BooleanField(default=True)

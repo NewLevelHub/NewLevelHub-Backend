@@ -17,7 +17,7 @@ from drf_spectacular.utils import (
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import (
-    IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOnly, IsOwnerOrAdmin,
+    IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
 )
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
@@ -1167,7 +1167,7 @@ class CommentViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'partial_update':
-            perm = IsOwnerOnly()
+            perm = IsOwnerOrSuperAdmin()
             perm.owner_field = 'author'
             return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin(), perm]
         if self.action == 'destroy':

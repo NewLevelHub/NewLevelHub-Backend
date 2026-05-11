@@ -781,6 +781,33 @@ class TestTaskMove:
         task_a.refresh_from_db()
         assert task_a.position == 1
 
+    def test_move_order_as_string_returns_400(self, api_client, admin_a, task_a, column_a2):
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(
+            task_move_url(task_a.id),
+            {'column_id': column_a2.id, 'order': 'first'},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_move_order_negative_returns_400(self, api_client, admin_a, task_a, column_a2):
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(
+            task_move_url(task_a.id),
+            {'column_id': column_a2.id, 'order': -1},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_move_order_zero_returns_400(self, api_client, admin_a, task_a, column_a2):
+        api_client.force_authenticate(admin_a)
+        res = api_client.post(
+            task_move_url(task_a.id),
+            {'column_id': column_a2.id, 'order': 0},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
 
 # ---------------------------------------------------------------------------
 # POST /api/v1/crm/tasks/<id>/archive/ — Archive action

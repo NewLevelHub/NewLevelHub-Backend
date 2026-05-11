@@ -1652,7 +1652,7 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
                 current_used = get_company_storage_used_bytes(company)
                 storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
                 if current_used + file_obj.size > storage_limit_bytes:
-                    raise ValidationError({'detail': 'Storage limit reached'})
+                    raise ValidationError({'detail': 'Storage limit exceeded'})
 
             attachment = TaskAttachment.objects.create(
                 task=task,

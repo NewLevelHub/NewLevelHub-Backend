@@ -288,7 +288,7 @@ class FileViewSet(viewsets.ModelViewSet):
             current_storage_used = get_company_storage_used_bytes(company)
             storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
             if current_storage_used + uploaded_size > storage_limit_bytes:
-                return Response({'detail': 'Storage limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'detail': 'Storage limit exceeded'}, status=status.HTTP_400_BAD_REQUEST)
         else:
             current_storage_used = 0
 

@@ -222,6 +222,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.storage.tasks.cleanup_deleted_files',
         'schedule': crontab(hour=3, minute=0),
     },
+    'generate-recurring-bookings': {
+        'task': 'apps.bookings.tasks.generate_recurring_bookings',
+        'schedule': crontab(hour=0, minute=30, day_of_week=1),
+    },
 }
 
 # Email

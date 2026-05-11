@@ -805,6 +805,62 @@ class TestTaskArchive:
         assert history.new_value == 'True'
         assert history.user == admin_a
 
+    def test_archived_task_detail_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, GET /tasks/{id}/ must return 200 with is_archived=True."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(task_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['is_archived'] is True
+
+    def test_archived_task_history_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, GET /tasks/{id}/history/ must return 200."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(task_history_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_archived_task_comments_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, GET /tasks/{id}/comments/ must return 200, not 404."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(f'/api/v1/crm/tasks/{task_a.id}/comments/')
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_archived_task_attachments_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, GET /tasks/{id}/attachments/ must return 200, not 404."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(f'/api/v1/crm/tasks/{task_a.id}/attachments/')
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_archived_task_checklists_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, GET /tasks/{id}/checklists/ must return 200, not 404."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.get(f'/api/v1/crm/tasks/{task_a.id}/checklists/')
+        assert res.status_code == status.HTTP_200_OK
+
+    def test_archived_task_patch_returns_200(self, api_client, admin_a, task_a):
+        """After archiving, PATCH /tasks/{id}/ must return 200, not 404."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.patch(task_url(task_a.id), {'title': 'Updated'}, format='json')
+        assert res.status_code == status.HTTP_200_OK
+        task_a.refresh_from_db()
+        assert task_a.title == 'Updated'
+
+    def test_archived_task_add_comment_returns_201(self, api_client, admin_a, task_a):
+        """After archiving, POST /tasks/{id}/comments/ must return 201, not 404."""
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        res = api_client.post(
+            f'/api/v1/crm/tasks/{task_a.id}/comments/',
+            {'text': 'hello'},
+            format='json',
+        )
+        assert res.status_code == status.HTTP_201_CREATED
+
 
 # ---------------------------------------------------------------------------
 # Position normalization

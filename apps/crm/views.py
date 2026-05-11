@@ -702,13 +702,20 @@ class TaskViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
     filterset_class = None  # TaskFilter applied manually in filter_queryset
 
+    # Actions that must be able to see soft-deleted (archived) tasks so that
+    # get_object() does not 404 on them.
+    ARCHIVED_VISIBLE_ACTIONS = {'retrieve', 'history', 'unarchive', 'partial_update', 'update'}
+
     def get_queryset(self):
         user = self.request.user
-        # When listing archived tasks, use all_objects so that soft-deleted
-        # (archived) rows are not hidden by SoftDeleteManager.
+        # Use all_objects (bypasses SoftDeleteManager) when:
+        #   • listing with ?is_archived=true, OR
+        #   • fetching a single task by PK (retrieve, history, unarchive) —
+        #     the caller knows the ID and must be able to open archived tasks.
         want_archived = (
-            self.action == 'list'
-            and self.request.query_params.get('is_archived', '').lower() == 'true'
+            (self.action == 'list'
+             and self.request.query_params.get('is_archived', '').lower() == 'true')
+            or self.action in self.ARCHIVED_VISIBLE_ACTIONS
         )
         manager = Task.all_objects if want_archived else Task.objects
         qs = manager.select_related(
@@ -782,7 +789,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
 
         # Prefetch relational fields needed for human-readable history values.
-        task_prefetched = Task.objects.select_related('assignee', 'column').prefetch_related('labels').get(
+        task_prefetched = Task.all_objects.select_related('assignee', 'column').prefetch_related('labels').get(
             pk=task.pk
         )
 
@@ -832,7 +839,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         old_assignee_id = task_prefetched.assignee_id
 
         instance = serializer.save()
-        new_instance = Task.objects.select_related('assignee', 'column').get(pk=instance.pk)
+        new_instance = Task.all_objects.select_related('assignee', 'column').get(pk=instance.pk)
 
         new_assignee_id = new_instance.assignee_id
         new_assignee = new_instance.assignee
@@ -909,7 +916,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                     new_value='',
                 )
 
-        deadline_task = Task.objects.select_related('assignee', 'created_by', 'column').get(
+        deadline_task = Task.all_objects.select_related('assignee', 'created_by', 'column').get(
             pk=new_instance.pk
         )
         new_deadline_str = _deadline_str(deadline_task.deadline)
@@ -1135,15 +1142,9 @@ class TaskViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='unarchive')
     def unarchive(self, request, pk=None):
-        user = request.user
-        # Use all_objects to find soft-deleted (archived) tasks that SoftDeleteManager hides.
-        qs = Task.all_objects.select_related('column__board')
-        if user.role != 'superadmin':
-            qs = qs.filter(column__board__company_id=user.company_id)
-        try:
-            task = qs.get(pk=pk)
-        except Task.DoesNotExist:
-            raise NotFound('Task not found.')
+        # get_queryset() already uses Task.all_objects for the 'unarchive' action,
+        # so get_object() correctly finds soft-deleted (archived) tasks.
+        task = self.get_object()
 
         if not task.is_archived:
             return Response({'detail': 'Task is not archived'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1235,10 +1236,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         Fetch the task identified by URL kwarg ``task_pk``.
         Raises NotFound if the task does not exist.
         Raises PermissionDenied if the task belongs to a different company (non-superadmin users only).
+        Uses all_objects so that archived (soft-deleted) tasks are still accessible.
         """
         task_pk = self.kwargs.get('task_pk')
         try:
-            task = Task.objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
+            task = Task.all_objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         user = self.request.user
@@ -1264,7 +1266,7 @@ class CommentViewSet(viewsets.ModelViewSet):
             author_id = self.request.user.pk
 
         # Re-load task so assignee/creator match persisted FKs (same pattern as task move).
-        fresh = Task.objects.select_related('assignee', 'created_by').get(pk=task.pk)
+        fresh = Task.all_objects.select_related('assignee', 'created_by').get(pk=task.pk)
 
         recipients = []
         if fresh.assignee_id and fresh.assignee_id != author_id and fresh.assignee:
@@ -1349,10 +1351,11 @@ class ChecklistViewSet(viewsets.ViewSet):
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def _get_task_or_403(self, task_id):
-        """Return the Task if it belongs to the request user's company; raise otherwise."""
+        """Return the Task if it belongs to the request user's company; raise otherwise.
+        Uses all_objects so that archived (soft-deleted) tasks are still accessible."""
         user = self.request.user
         try:
-            task = Task.objects.select_related('column__board').get(pk=task_id)
+            task = Task.all_objects.select_related('column__board').get(pk=task_id)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
@@ -1603,9 +1606,10 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def _get_task_or_403(self):
+        """Uses all_objects so that archived (soft-deleted) tasks are still accessible."""
         task_pk = self.kwargs.get('task_pk')
         try:
-            task = Task.objects.select_related('column__board').get(pk=task_pk)
+            task = Task.all_objects.select_related('column__board').get(pk=task_pk)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         user = self.request.user

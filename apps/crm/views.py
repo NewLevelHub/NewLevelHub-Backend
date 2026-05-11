@@ -16,7 +16,9 @@ from drf_spectacular.utils import (
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
+from apps.core.permissions import (
+    IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
+)
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
@@ -1225,10 +1227,14 @@ class CommentViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_permissions(self):
-        if self.action in ('partial_update', 'destroy'):
+        if self.action == 'partial_update':
+            perm = IsOwnerOrSuperAdmin()
+            perm.owner_field = 'author'
+            return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin(), perm]
+        if self.action == 'destroy':
             perm = IsOwnerOrAdmin()
             perm.owner_field = 'author'
-            return [perm, IsEmailVerifiedOrSuperAdmin()]
+            return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin(), perm]
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
 
     def _get_task_or_403(self):

@@ -51,7 +51,7 @@ from .serializers import (
     _EQUIPMENT_KEYS,
 )
 from .filters import ResourceFilter, BookingFilter
-from .schedule import get_schedule_status
+from .schedule import get_schedule_status, week_range_for_date
 from .tasks import create_bookings_for_recurring
 
 
@@ -828,10 +828,13 @@ class ResourceViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Resources'],
-        summary='Resource booking schedule for a day',
+        summary='Resource booking schedule for a day or week',
         description=(
-            'Returns the list of confirmed bookings for the given resource on a single calendar day.\n\n'
-            'If `date` is omitted, defaults to today (server local date, `Asia/Almaty`).\n\n'
+            'Returns confirmed bookings for the given resource.\n\n'
+            '- `?week=YYYY-MM-DD` — returns all slots for the ISO week (Mon–Sun) that contains the given date. '
+            'Takes priority over `?date=` when both are supplied.\n'
+            '- `?date=YYYY-MM-DD` — returns slots for that single calendar day.\n'
+            '- No params — defaults to today (server local date, `Asia/Almaty`).\n\n'
             'Each slot includes a `status` field:\n'
             '- `"occupied"` — booking is ongoing or in the future with more than '
             '`SOON_AVAILABLE_MINUTES` (15 min) until it ends.\n'
@@ -841,6 +844,14 @@ class ResourceViewSet(viewsets.ModelViewSet):
             'Guests are blocked.'
         ),
         parameters=[
+            OpenApiParameter(
+                name='week',
+                type=OpenApiTypes.DATE,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='YYYY-MM-DD — returns slots for the full ISO week (Mon–Sun) containing this date. '
+                            'Takes priority over ?date= when both are provided.',
+            ),
             OpenApiParameter(
                 name='date',
                 type=OpenApiTypes.DATE,
@@ -852,7 +863,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         responses={
             200: ResourceDayScheduleSlotSerializer(many=True),
             400: OpenApiResponse(
-                description='Invalid date format.',
+                description='Invalid date or week format.',
                 examples=[
                     OpenApiExample(
                         name='Invalid date',
@@ -860,6 +871,16 @@ class ResourceViewSet(viewsets.ModelViewSet):
                             'error': True,
                             'status_code': 400,
                             'detail': 'Invalid date format. Use YYYY-MM-DD.',
+                        },
+                        response_only=True,
+                        status_codes=['400'],
+                    ),
+                    OpenApiExample(
+                        name='Invalid week',
+                        value={
+                            'error': True,
+                            'status_code': 400,
+                            'detail': 'Invalid week format. Use YYYY-MM-DD.',
                         },
                         response_only=True,
                         status_codes=['400'],
@@ -874,31 +895,47 @@ class ResourceViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='schedule')
     def schedule(self, request, pk=None):
         resource = self.get_object()
+        week_param = request.query_params.get('week')
         date_param = request.query_params.get('date')
         local_tz = timezone.get_current_timezone()
         now = timezone.now()
 
-        if date_param:
+        if week_param:
             try:
-                target_date = date.fromisoformat(date_param)
+                anchor = date.fromisoformat(week_param)
             except ValueError:
                 return Response(
-                    {'detail': 'Invalid date format. Use YYYY-MM-DD.'},
+                    {'detail': 'Invalid week format. Use YYYY-MM-DD.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            range_start, range_end = week_range_for_date(anchor)
+            bookings = Booking.objects.filter(
+                resource=resource,
+                status='confirmed',
+                start_time__gte=range_start,
+                start_time__lt=range_end,
+            ).order_by('start_time')
         else:
-            target_date = now.astimezone(local_tz).date()
+            if date_param:
+                try:
+                    target_date = date.fromisoformat(date_param)
+                except ValueError:
+                    return Response(
+                        {'detail': 'Invalid date format. Use YYYY-MM-DD.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                target_date = now.astimezone(local_tz).date()
 
-        # Filter by local-date range to avoid UTC-boundary mismatches for early-morning bookings.
-        local_start = timezone.make_aware(datetime.combine(target_date, time.min), local_tz)
-        local_end = timezone.make_aware(datetime.combine(target_date, time.max), local_tz) + timedelta(seconds=1)
-
-        bookings = Booking.objects.filter(
-            resource=resource,
-            status='confirmed',
-            start_time__gte=local_start,
-            start_time__lt=local_end,
-        ).order_by('start_time')
+            # Filter by local-date range to avoid UTC-boundary mismatches for early-morning bookings.
+            local_start = timezone.make_aware(datetime.combine(target_date, time.min), local_tz)
+            local_end = timezone.make_aware(datetime.combine(target_date, time.max), local_tz) + timedelta(seconds=1)
+            bookings = Booking.objects.filter(
+                resource=resource,
+                status='confirmed',
+                start_time__gte=local_start,
+                start_time__lt=local_end,
+            ).order_by('start_time')
 
         result = []
         for booking in bookings:

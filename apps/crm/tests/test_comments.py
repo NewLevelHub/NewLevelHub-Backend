@@ -371,12 +371,13 @@ class TestCommentUpdate:
         )
         assert res.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_superadmin_can_edit_any_comment(self, api_client, superadmin, task_a, comment_a):
+    def test_superadmin_cannot_edit_others_comment(self, api_client, superadmin, task_a, comment_a):
+        # AC#3: PATCH is strictly author-only — superadmin must also be blocked
         api_client.force_authenticate(superadmin)
         res = api_client.patch(
             comment_detail_url(task_a.id, comment_a.id), {'text': 'Superadmin edit'}, format='json'
         )
-        assert res.status_code == status.HTTP_200_OK
+        assert res.status_code == status.HTTP_403_FORBIDDEN
 
     def test_guest_returns_403(self, api_client, guest_user, task_a, comment_a):
         api_client.force_authenticate(guest_user)
@@ -486,3 +487,11 @@ class TestCommentPermissions:
         res = api_client.delete(comment_detail_url(task_a.id, comment_a.id))
         assert res.status_code == status.HTTP_204_NO_CONTENT
         assert not Comment.objects.filter(pk=comment_a.id).exists()
+
+    def test_superadmin_cannot_edit_others_comment(self, api_client, superadmin, task_a, comment_a):
+        """PATCH: superadmin must NOT be able to edit another user's comment (AC#3: author-only)."""
+        api_client.force_authenticate(superadmin)
+        res = api_client.patch(
+            comment_detail_url(task_a.id, comment_a.id), {'text': 'hacked'}, format='json'
+        )
+        assert res.status_code == status.HTTP_403_FORBIDDEN

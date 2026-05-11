@@ -192,3 +192,20 @@ class IsOwnerOrSuperAdmin(_AuthenticatedPermission):
             return True
         owner = getattr(obj, self.owner_field, None)
         return owner == user
+
+
+class IsOwnerOnly(_AuthenticatedPermission):
+    """
+    Strictly owner-only. No admin override — even superadmin is blocked
+    unless they are the object owner. Use for actions where authorship
+    must not be bypassed (e.g. editing one's own comment).
+    """
+
+    owner_field = 'user'
+
+    def _has_role_permission(self, request, view):
+        return True
+
+    def has_object_permission(self, request, view, obj):
+        owner = getattr(obj, self.owner_field, None)
+        return owner == request.user

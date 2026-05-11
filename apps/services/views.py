@@ -953,7 +953,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
             # onto their own company; never let them post under another tenant.
             company = user.company
         announcement = serializer.save(author=user, company=company)
-        if announcement.notify_email:
+        if announcement.is_pinned and announcement.notify_email:
             send_announcement_emails.delay(announcement.id)
         notify_announcement_subscribers.delay(announcement.id)
 

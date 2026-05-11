@@ -17,6 +17,10 @@ def task_move_url(pk):
     return f'/api/v1/crm/tasks/{pk}/move/'
 
 
+def task_unarchive_url(pk):
+    return f'/api/v1/crm/tasks/{pk}/unarchive/'
+
+
 def column_url(board_pk, col_pk):
     return f'/api/v1/crm/boards/{board_pk}/columns/{col_pk}/'
 
@@ -69,13 +73,16 @@ def col_limit_2(db, board):
 
 
 def _make_task(column, admin, title='Task', is_archived=False):
-    return Task.objects.create(
+    # Archived tasks must also have is_deleted=True to match the invariant enforced by
+    # the archive action (both flags are set together).
+    return Task.all_objects.create(
         column=column,
         title=title,
         priority='medium',
         position=1,
         created_by=admin,
         is_archived=is_archived,
+        is_deleted=is_archived,
     )
 
 
@@ -142,10 +149,7 @@ class TestWipLimitCentralized:
         _make_task(col_limit_1, admin, title='Active')
         archived_task = _make_task(col_limit_1, admin, title='Archived', is_archived=True)
         api_client.force_authenticate(admin)
-        res = api_client.patch(task_url(archived_task.pk), {
-            'board_id': board.id,
-            'is_archived': False,
-        }, format='json')
+        res = api_client.post(task_unarchive_url(archived_task.pk))
         assert res.status_code == status.HTTP_400_BAD_REQUEST
         assert 'wip_limit_exceeded' in res.data['detail']
 
@@ -155,10 +159,7 @@ class TestWipLimitCentralized:
         _make_task(col_limit_2, admin, title='Active')
         archived_task = _make_task(col_limit_2, admin, title='Archived', is_archived=True)
         api_client.force_authenticate(admin)
-        res = api_client.patch(task_url(archived_task.pk), {
-            'board_id': board.id,
-            'is_archived': False,
-        }, format='json')
+        res = api_client.post(task_unarchive_url(archived_task.pk))
         assert res.status_code == status.HTTP_200_OK
 
     def test_column_delete_wip_exceeded_returns_wip_limit_exceeded_code(

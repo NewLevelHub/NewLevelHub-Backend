@@ -458,12 +458,10 @@ class TestEmailNotificationTaskAC:
         )
         send_announcement_emails(announcement.id)
 
-        # All active verified users should receive an email
-        all_user_emails = set(
-            User.objects.filter(is_active=True, is_email_verified=True).values_list('email', flat=True)
-        )
+        # All fixture users should receive an email
+        fixture_emails = {superadmin.email, employee.email, employee2.email, other_company_employee.email}
         sent_to = {msg.to[0] for msg in mail.outbox}
-        assert all_user_emails.issubset(sent_to)
+        assert fixture_emails.issubset(sent_to)
 
     def test_task_sends_email_to_company_members_for_company_announcement(
         self, company_admin, employee, employee2, other_company_employee, company

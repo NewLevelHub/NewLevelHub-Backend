@@ -16,7 +16,9 @@ from drf_spectacular.utils import (
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
 from apps.core.pagination import StandardPagination
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin
+from apps.core.permissions import (
+    IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
+)
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
@@ -702,9 +704,23 @@ class TaskViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
     filterset_class = None  # TaskFilter applied manually in filter_queryset
 
+    # Actions that must be able to see soft-deleted (archived) tasks so that
+    # get_object() does not 404 on them.
+    ARCHIVED_VISIBLE_ACTIONS = {'retrieve', 'history', 'unarchive', 'partial_update', 'update'}
+
     def get_queryset(self):
         user = self.request.user
-        qs = Task.objects.select_related(
+        # Use all_objects (bypasses SoftDeleteManager) when:
+        #   • listing with ?is_archived=true, OR
+        #   • fetching a single task by PK (retrieve, history, unarchive) —
+        #     the caller knows the ID and must be able to open archived tasks.
+        want_archived = (
+            (self.action == 'list'
+             and self.request.query_params.get('is_archived', '').lower() == 'true')
+            or self.action in self.ARCHIVED_VISIBLE_ACTIONS
+        )
+        manager = Task.all_objects if want_archived else Task.objects
+        qs = manager.select_related(
             'column__board', 'assignee', 'created_by',
         ).prefetch_related('labels', 'checklists__items')
         if user.role == 'superadmin':
@@ -775,7 +791,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
 
         # Prefetch relational fields needed for human-readable history values.
-        task_prefetched = Task.objects.select_related('assignee', 'column').prefetch_related('labels').get(
+        task_prefetched = Task.all_objects.select_related('assignee', 'column').prefetch_related('labels').get(
             pk=task.pk
         )
 
@@ -825,7 +841,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         old_assignee_id = task_prefetched.assignee_id
 
         instance = serializer.save()
-        new_instance = Task.objects.select_related('assignee', 'column').get(pk=instance.pk)
+        new_instance = Task.all_objects.select_related('assignee', 'column').get(pk=instance.pk)
 
         new_assignee_id = new_instance.assignee_id
         new_assignee = new_instance.assignee
@@ -902,7 +918,7 @@ class TaskViewSet(viewsets.ModelViewSet):
                     new_value='',
                 )
 
-        deadline_task = Task.objects.select_related('assignee', 'created_by', 'column').get(
+        deadline_task = Task.all_objects.select_related('assignee', 'created_by', 'column').get(
             pk=new_instance.pk
         )
         new_deadline_str = _deadline_str(deadline_task.deadline)
@@ -1074,7 +1090,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         tags=['CRM'],
         summary='Archive task',
         description=(
-            'Soft-deletes the task by calling task.soft_delete() (sets is_deleted=True). '
+            'Archives the task: sets is_deleted=True and is_archived=True. '
             'Archived tasks are excluded from all list queries. '
             'Permission: company members only (employee, company_admin, superadmin).'
         ),
@@ -1094,6 +1110,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         column = task.column
         task.soft_delete()
+        task.is_archived = True
+        task.save(update_fields=['is_archived'])
         _normalize_positions(column)
         TaskHistory.objects.create(
             task=task,
@@ -1103,6 +1121,51 @@ class TaskViewSet(viewsets.ModelViewSet):
             new_value='True',
         )
         return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=['CRM'],
+        summary='Unarchive task',
+        description=(
+            'Restores an archived task: sets is_deleted=False and is_archived=False. '
+            'Returns 400 with wip_limit_exceeded if the column WIP limit would be breached. '
+            'Permission: company members only (employee, company_admin, superadmin).'
+        ),
+        request=None,
+        responses={
+            200: inline_serializer(
+                name='TaskUnarchiveResponse',
+                fields={'detail': drf_serializers.CharField()},
+            ),
+            400: OpenApiResponse(description='WIP limit exceeded.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only.'),
+            404: OpenApiResponse(description='Task not found.'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive(self, request, pk=None):
+        # get_queryset() already uses Task.all_objects for the 'unarchive' action,
+        # so get_object() correctly finds soft-deleted (archived) tasks.
+        task = self.get_object()
+
+        if not task.is_archived:
+            return Response({'detail': 'Task is not archived'}, status=status.HTTP_400_BAD_REQUEST)
+
+        check_wip_limit(task.column, exclude_task_pk=task.pk)
+
+        task.is_deleted = False
+        task.deleted_at = None
+        task.is_archived = False
+        task.save(update_fields=['is_deleted', 'deleted_at', 'is_archived'])
+        _normalize_positions(task.column)
+        TaskHistory.objects.create(
+            task=task,
+            user=request.user,
+            action='unarchived',
+            old_value='True',
+            new_value='False',
+        )
+        return Response({'detail': 'Task unarchived'}, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(
@@ -1164,10 +1227,14 @@ class CommentViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
     def get_permissions(self):
-        if self.action in ('partial_update', 'destroy'):
+        if self.action == 'partial_update':
+            perm = IsOwnerOrSuperAdmin()
+            perm.owner_field = 'author'
+            return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin(), perm]
+        if self.action == 'destroy':
             perm = IsOwnerOrAdmin()
             perm.owner_field = 'author'
-            return [perm, IsEmailVerifiedOrSuperAdmin()]
+            return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin(), perm]
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
 
     def _get_task_or_403(self):
@@ -1175,10 +1242,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         Fetch the task identified by URL kwarg ``task_pk``.
         Raises NotFound if the task does not exist.
         Raises PermissionDenied if the task belongs to a different company (non-superadmin users only).
+        Uses all_objects so that archived (soft-deleted) tasks are still accessible.
         """
         task_pk = self.kwargs.get('task_pk')
         try:
-            task = Task.objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
+            task = Task.all_objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         user = self.request.user
@@ -1204,7 +1272,7 @@ class CommentViewSet(viewsets.ModelViewSet):
             author_id = self.request.user.pk
 
         # Re-load task so assignee/creator match persisted FKs (same pattern as task move).
-        fresh = Task.objects.select_related('assignee', 'created_by').get(pk=task.pk)
+        fresh = Task.all_objects.select_related('assignee', 'created_by').get(pk=task.pk)
 
         recipients = []
         if fresh.assignee_id and fresh.assignee_id != author_id and fresh.assignee:
@@ -1289,10 +1357,11 @@ class ChecklistViewSet(viewsets.ViewSet):
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def _get_task_or_403(self, task_id):
-        """Return the Task if it belongs to the request user's company; raise otherwise."""
+        """Return the Task if it belongs to the request user's company; raise otherwise.
+        Uses all_objects so that archived (soft-deleted) tasks are still accessible."""
         user = self.request.user
         try:
-            task = Task.objects.select_related('column__board').get(pk=task_id)
+            task = Task.all_objects.select_related('column__board').get(pk=task_id)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
@@ -1543,9 +1612,10 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
     def _get_task_or_403(self):
+        """Uses all_objects so that archived (soft-deleted) tasks are still accessible."""
         task_pk = self.kwargs.get('task_pk')
         try:
-            task = Task.objects.select_related('column__board').get(pk=task_pk)
+            task = Task.all_objects.select_related('column__board').get(pk=task_pk)
         except Task.DoesNotExist:
             raise NotFound('Task not found.')
         user = self.request.user

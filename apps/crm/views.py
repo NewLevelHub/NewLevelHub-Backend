@@ -1027,50 +1027,84 @@ class TaskViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['CRM'],
-        summary='My tasks across all boards',
+        summary='My tasks grouped by board',
         description=(
-            'Returns all tasks assigned to the current user scoped to their company. '
-            'Supports all task filters: `board_id`, `column_id`, `priority`, `label_ids`, '
-            '`deadline` (overdue/today/this_week), `deadline_from`, `deadline_to`, `search`. '
-            'Ordering: `ordering=priority`, `ordering=deadline`, `ordering=-created_at`, etc. '
-            'Response is a flat paginated list; each task includes `board_id` and a nested `board` object.'
+            'Returns all non-archived tasks assigned to the current user, grouped by board. '
+            'Each group contains up to 50 tasks ordered by `-created_at`, a `total` count, '
+            'and a `has_more` flag that is `true` when the board has more than 50 assigned tasks. '
+            'Boards are ordered alphabetically by name. '
+            'Superadmin sees tasks across all companies; other roles see only their own company.'
         ),
-        parameters=[
-            OpenApiParameter(name='board_id', type=int, location=OpenApiParameter.QUERY,
-                             required=False, description='Filter by board.'),
-            OpenApiParameter(name='column_id', type=int, location=OpenApiParameter.QUERY,
-                             required=False, description='Filter by column.'),
-            OpenApiParameter(name='priority', type=str, location=OpenApiParameter.QUERY,
-                             required=False, description='Filter by priority (low/medium/high/urgent).'),
-            OpenApiParameter(name='label_ids', type=str, location=OpenApiParameter.QUERY,
-                             required=False, description='Comma-separated label IDs.'),
-            OpenApiParameter(
-                name='deadline', type=str, location=OpenApiParameter.QUERY,
-                required=False, enum=['overdue', 'today', 'this_week'],
-                description='Deadline shortcut filter.',
+        responses={
+            200: inline_serializer(
+                name='MyTasksGroupedResponse',
+                fields={
+                    'groups': drf_serializers.ListField(
+                        child=inline_serializer(
+                            name='MyTasksBoardGroup',
+                            fields={
+                                'board_id': drf_serializers.IntegerField(),
+                                'board_name': drf_serializers.CharField(),
+                                'tasks': TaskSerializer(many=True),
+                                'total': drf_serializers.IntegerField(),
+                                'has_more': drf_serializers.BooleanField(),
+                            },
+                        ),
+                    ),
+                },
             ),
-            OpenApiParameter(name='deadline_from', type=str, location=OpenApiParameter.QUERY,
-                             required=False, description='Deadline >= this date (YYYY-MM-DD).'),
-            OpenApiParameter(name='deadline_to', type=str, location=OpenApiParameter.QUERY,
-                             required=False, description='Deadline <= this date (YYYY-MM-DD).'),
-            OpenApiParameter(name='search', type=str, location=OpenApiParameter.QUERY,
-                             required=False, description='Search by task title (case-insensitive).'),
-            OpenApiParameter(name='ordering', type=str, location=OpenApiParameter.QUERY,
-                             required=False,
-                             description='Order results. Options: priority, deadline, created_at (prefix - for desc).'),
-        ],
-        responses={200: TaskSerializer(many=True)},
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Company members only.'),
+        },
     )
     @action(detail=False, methods=['get'], url_path='my')
     def my_tasks(self, request):
-        base_qs = self.get_queryset().filter(assignee=request.user, is_archived=False)
-        queryset = self.filter_queryset(base_qs)
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-        serializer = self.get_serializer(queryset, many=True)
-        return Response(serializer.data)
+        from collections import defaultdict
+
+        user = request.user
+        TASK_LIMIT = 50
+
+        # Base queryset — assigned to me, not archived.
+        qs = Task.objects.select_related(
+            'column__board', 'assignee', 'created_by',
+        ).prefetch_related('labels', 'checklists__items').filter(
+            assignee=user,
+            is_archived=False,
+        )
+
+        if user.role != 'superadmin':
+            if not user.company_id:
+                return Response({'groups': []})
+            qs = qs.filter(column__board__company_id=user.company_id)
+
+        # Apply all registered filters (priority, deadline, search, ordering …)
+        # from query params.  filter_queryset() applies TaskFilter + OrderingFilter;
+        # its `is_archived` guard only fires for action=='list', so it is a safe
+        # no-op here (our base queryset already excludes archived tasks).
+        qs = self.filter_queryset(qs)
+
+        # Group by board AFTER filtering + ordering.
+        groups = defaultdict(list)
+        board_meta = {}
+        for task in qs:
+            board = task.column.board
+            board_meta[board.id] = board.name
+            groups[board.id].append(task)
+
+        result = []
+        for board_id, tasks in sorted(groups.items(), key=lambda x: board_meta[x[0]]):
+            total = len(tasks)
+            sliced = tasks[:TASK_LIMIT]
+            serialized = TaskSerializer(sliced, many=True, context={'request': request})
+            result.append({
+                'board_id': board_id,
+                'board_name': board_meta[board_id],
+                'tasks': serialized.data,
+                'total': total,
+                'has_more': total > TASK_LIMIT,
+            })
+
+        return Response({'groups': result})
 
     @extend_schema(
         tags=['CRM'],

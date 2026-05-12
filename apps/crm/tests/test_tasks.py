@@ -937,6 +937,164 @@ class TestTaskArchive:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/v1/crm/tasks/my/ — grouped-by-board response (DEV-90 AC#2)
+# ---------------------------------------------------------------------------
+
+MY_TASKS_URL = '/api/v1/crm/tasks/my/'
+
+
+@pytest.fixture
+def board_a2(db, company_a, admin_a):
+    return Board.objects.create(company=company_a, name='Alpha Board', created_by=admin_a)
+
+
+@pytest.fixture
+def column_a3(db, board_a2):
+    return Column.objects.create(board=board_a2, name='To Do', position=1)
+
+
+@pytest.mark.django_db
+class TestMyTasksGrouped:
+    def test_unauthenticated_returns_401(self, api_client):
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_guest_returns_403(self, api_client, guest_user):
+        api_client.force_authenticate(guest_user)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_groups_by_board(self, api_client, employee_a, board_a, column_a, board_a2, column_a3):
+        t1 = Task.objects.create(
+            column=column_a, title='Board A task', priority='low', position=1, assignee=employee_a,
+        )
+        t2 = Task.objects.create(
+            column=column_a3, title='Board A2 task', priority='low', position=1, assignee=employee_a,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        assert 'groups' in res.data
+        board_ids = [g['board_id'] for g in res.data['groups']]
+        assert board_a.id in board_ids
+        assert board_a2.id in board_ids
+        # Each group has required keys
+        for group in res.data['groups']:
+            assert 'board_id' in group
+            assert 'board_name' in group
+            assert 'tasks' in group
+            assert 'total' in group
+            assert 'has_more' in group
+        task_ids_flat = [t['id'] for g in res.data['groups'] for t in g['tasks']]
+        assert t1.id in task_ids_flat
+        assert t2.id in task_ids_flat
+
+    def test_only_assigned_tasks_returned(self, api_client, employee_a, admin_a, column_a):
+        assigned = Task.objects.create(
+            column=column_a, title='Assigned', priority='low', position=1, assignee=employee_a,
+        )
+        unassigned = Task.objects.create(
+            column=column_a, title='Not Assigned', priority='low', position=2,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        task_ids_flat = [t['id'] for g in res.data['groups'] for t in g['tasks']]
+        assert assigned.id in task_ids_flat
+        assert unassigned.id not in task_ids_flat
+
+    def test_archived_tasks_excluded(self, api_client, employee_a, column_a):
+        active = Task.objects.create(
+            column=column_a, title='Active', priority='low', position=1, assignee=employee_a,
+        )
+        archived = Task.objects.create(
+            column=column_a, title='Archived', priority='low', position=2,
+            assignee=employee_a, is_archived=True,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        task_ids_flat = [t['id'] for g in res.data['groups'] for t in g['tasks']]
+        assert active.id in task_ids_flat
+        assert archived.id not in task_ids_flat
+
+    def test_has_more_flag_when_over_50_tasks(self, api_client, employee_a, board_a, column_a):
+        for i in range(51):
+            Task.objects.create(
+                column=column_a, title=f'Task {i}', priority='low', position=i + 1,
+                assignee=employee_a,
+            )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        assert group['has_more'] is True
+        assert len(group['tasks']) == 50
+        assert group['total'] == 51
+
+    def test_has_more_false_when_50_or_fewer(self, api_client, employee_a, board_a, column_a):
+        for i in range(3):
+            Task.objects.create(
+                column=column_a, title=f'Task {i}', priority='low', position=i + 1,
+                assignee=employee_a,
+            )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        assert group['has_more'] is False
+        assert group['total'] == 3
+
+    def test_boards_ordered_alphabetically(self, api_client, employee_a, board_a, column_a, board_a2, column_a3):
+        Task.objects.create(
+            column=column_a, title='A task', priority='low', position=1, assignee=employee_a,
+        )
+        Task.objects.create(
+            column=column_a3, title='A2 task', priority='low', position=1, assignee=employee_a,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        names = [g['board_name'] for g in res.data['groups']]
+        assert names == sorted(names)
+
+    def test_cross_company_tasks_excluded(self, api_client, employee_a, column_b):
+        other_task = Task.objects.create(
+            column=column_b, title='Other company', priority='low', position=1,
+            assignee=employee_a,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        task_ids_flat = [t['id'] for g in res.data['groups'] for t in g['tasks']]
+        assert other_task.id not in task_ids_flat
+
+    def test_empty_groups_when_no_tasks(self, api_client, employee_a):
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data == {'groups': []}
+
+    def test_superadmin_sees_tasks_from_all_companies(
+        self, api_client, superadmin, column_a, column_b
+    ):
+        t_a = Task.objects.create(
+            column=column_a, title='Company A task', priority='low', position=1,
+            assignee=superadmin,
+        )
+        t_b = Task.objects.create(
+            column=column_b, title='Company B task', priority='low', position=1,
+            assignee=superadmin,
+        )
+        api_client.force_authenticate(superadmin)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        task_ids_flat = [t['id'] for g in res.data['groups'] for t in g['tasks']]
+        assert t_a.id in task_ids_flat
+        assert t_b.id in task_ids_flat
+
+
+# ---------------------------------------------------------------------------
 # Position normalization
 # ---------------------------------------------------------------------------
 

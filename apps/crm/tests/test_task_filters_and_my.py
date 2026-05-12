@@ -352,6 +352,12 @@ class TestTaskOrdering:
 
 @pytest.mark.django_db
 class TestMyTasks:
+    """Tests for GET /api/v1/crm/tasks/my/ — grouped-by-board response."""
+
+    def _flat_ids(self, data):
+        """Extract all task IDs from the groups list."""
+        return [t['id'] for g in data['groups'] for t in g['tasks']]
+
     def test_unauthenticated_returns_401(self, api_client):
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_401_UNAUTHORIZED
@@ -369,7 +375,8 @@ class TestMyTasks:
         api_client.force_authenticate(employee_a)
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
+        assert 'groups' in res.data
+        ids = self._flat_ids(res.data)
         assert task_medium.id in ids
         assert task_high.id not in ids
 
@@ -380,7 +387,7 @@ class TestMyTasks:
         api_client.force_authenticate(employee_a)
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
+        ids = self._flat_ids(res.data)
         assert task_b.id not in ids
 
     def test_does_not_include_archived_tasks(self, api_client, employee_a, column_a):
@@ -391,10 +398,10 @@ class TestMyTasks:
         api_client.force_authenticate(employee_a)
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
+        ids = self._flat_ids(res.data)
         assert archived_task.id not in ids
 
-    def test_response_is_paginated(self, api_client, employee_a, column_a):
+    def test_response_has_groups_key(self, api_client, employee_a, column_a):
         for i in range(5):
             Task.objects.create(
                 column=column_a, title=f'My Task {i}', priority='low', position=i + 1,
@@ -403,95 +410,20 @@ class TestMyTasks:
         api_client.force_authenticate(employee_a)
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        assert 'count' in res.data
-        assert 'results' in res.data
+        assert 'groups' in res.data
+        assert isinstance(res.data['groups'], list)
 
-    def test_response_includes_board(self, api_client, employee_a, column_a, board_a):
-        task = Task.objects.create(
+    def test_response_includes_board_name(self, api_client, employee_a, column_a, board_a):
+        Task.objects.create(
             column=column_a, title='Board Title Task', priority='low', position=1, assignee=employee_a,
         )
         api_client.force_authenticate(employee_a)
         res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        result = next(t for t in res.data['results'] if t['id'] == task.id)
-        assert 'board' in result
-        assert result['board']['id'] == board_a.id
-        assert result['board']['name'] == board_a.name
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        assert group['board_name'] == board_a.name
 
-    def test_filter_by_priority_applied(self, api_client, employee_a, column_a):
-        high_task = Task.objects.create(
-            column=column_a, title='High', priority='high', position=1, assignee=employee_a,
-        )
-        low_task = Task.objects.create(
-            column=column_a, title='Low', priority='low', position=2, assignee=employee_a,
-        )
-        api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL, {'priority': 'high'})
-        assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
-        assert high_task.id in ids
-        assert low_task.id not in ids
-
-    def test_deadline_filter_applied(self, api_client, employee_a, column_a):
-        now = timezone.now()
-        overdue = Task.objects.create(
-            column=column_a, title='Overdue', priority='low', position=1,
-            assignee=employee_a, deadline=now - timedelta(days=1),
-        )
-        future = Task.objects.create(
-            column=column_a, title='Future', priority='low', position=2,
-            assignee=employee_a, deadline=now + timedelta(days=10),
-        )
-        api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL, {'deadline': 'overdue'})
-        assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
-        assert overdue.id in ids
-        assert future.id not in ids
-
-    def test_search_filter_applied(self, api_client, employee_a, column_a):
-        match = Task.objects.create(
-            column=column_a, title='Login feature', priority='low', position=1, assignee=employee_a,
-        )
-        no_match = Task.objects.create(
-            column=column_a, title='Unrelated task', priority='low', position=2, assignee=employee_a,
-        )
-        api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL, {'search': 'login'})
-        assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
-        assert match.id in ids
-        assert no_match.id not in ids
-
-    def test_ordering_applied(self, api_client, employee_a, column_a):
-        t1 = Task.objects.create(
-            column=column_a, title='T1', priority='high', position=1, assignee=employee_a,
-        )
-        t2 = Task.objects.create(
-            column=column_a, title='T2', priority='urgent', position=2, assignee=employee_a,
-        )
-        api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL, {'ordering': 'priority'})
-        assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
-        # 'high' < 'urgent' alphabetically, so t1 comes before t2
-        assert ids.index(t1.id) < ids.index(t2.id)
-
-    def test_tasks_from_multiple_boards(self, api_client, employee_a, column_a, column_a2, board_a, board_a2):
-        t1 = Task.objects.create(
-            column=column_a, title='Board 1 Task', priority='low', position=1, assignee=employee_a,
-        )
-        t2 = Task.objects.create(
-            column=column_a2, title='Board 2 Task', priority='low', position=1, assignee=employee_a,
-        )
-        api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL)
-        assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
-        assert t1.id in ids
-        assert t2.id in ids
-
-    def test_board_id_filter_scopes_to_one_board(
+    def test_tasks_from_multiple_boards_appear_in_separate_groups(
         self, api_client, employee_a, column_a, column_a2, board_a, board_a2
     ):
         t1 = Task.objects.create(
@@ -501,11 +433,66 @@ class TestMyTasks:
             column=column_a2, title='Board 2 Task', priority='low', position=1, assignee=employee_a,
         )
         api_client.force_authenticate(employee_a)
-        res = api_client.get(MY_TASKS_URL, {'board_id': board_a.id})
+        res = api_client.get(MY_TASKS_URL)
         assert res.status_code == status.HTTP_200_OK
-        ids = [t['id'] for t in res.data['results']]
+        board_ids = [g['board_id'] for g in res.data['groups']]
+        assert board_a.id in board_ids
+        assert board_a2.id in board_ids
+        ids = self._flat_ids(res.data)
         assert t1.id in ids
-        assert t2.id not in ids
+        assert t2.id in ids
+
+    def test_group_contains_total_and_has_more(self, api_client, employee_a, column_a, board_a):
+        for i in range(3):
+            Task.objects.create(
+                column=column_a, title=f'Task {i}', priority='low', position=i + 1,
+                assignee=employee_a,
+            )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL)
+        assert res.status_code == status.HTTP_200_OK
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        assert group['total'] == 3
+        assert group['has_more'] is False
+
+    def test_my_tasks_filtered_by_priority(self, api_client, employee_a, column_a, board_a):
+        """?priority=high must exclude tasks with other priorities."""
+        low_task = Task.objects.create(
+            column=column_a, title='Low Task', priority='low', position=1, assignee=employee_a,
+        )
+        high_task = Task.objects.create(
+            column=column_a, title='High Task', priority='high', position=2, assignee=employee_a,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL, {'priority': 'high'})
+        assert res.status_code == status.HTTP_200_OK
+        ids = self._flat_ids(res.data)
+        assert high_task.id in ids
+        assert low_task.id not in ids
+
+    def test_my_tasks_ordering_applied(self, api_client, employee_a, column_a, board_a):
+        """?ordering=-created_at must return tasks newest-first within each group."""
+        from django.utils import timezone
+        from datetime import timedelta
+
+        now = timezone.now()
+        older = Task.objects.create(
+            column=column_a, title='Older Task', priority='low', position=1, assignee=employee_a,
+        )
+        # Bump created_at so 'newer' is definitely more recent than 'older'.
+        newer = Task.objects.create(
+            column=column_a, title='Newer Task', priority='low', position=2, assignee=employee_a,
+        )
+        # Force a distinct timestamp difference via update to avoid same-second collisions.
+        Task.objects.filter(pk=older.pk).update(created_at=now - timedelta(seconds=10))
+        Task.objects.filter(pk=newer.pk).update(created_at=now)
+
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL, {'ordering': '-created_at'})
+        assert res.status_code == status.HTTP_200_OK
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        task_ids = [t['id'] for t in group['tasks']]
+        assert task_ids.index(newer.id) < task_ids.index(older.id)
 
 
 # ---------------------------------------------------------------------------

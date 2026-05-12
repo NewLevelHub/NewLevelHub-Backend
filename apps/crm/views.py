@@ -945,8 +945,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             'Moves a task to a target column. The target column must belong to the same board '
             'and the same company. If the column has a WIP limit set (wip_limit > 0), the move '
             'is rejected when adding the task would exceed the limit. '
-            'Returns `wip_limit_exceeded` error code in the 400 response when the WIP limit is hit. '
-            'If `position` is omitted, the task is appended to the end of the target column.'
+            'Returns `{"detail": "WIP limit reached (max N tasks)"}` with 400 when the WIP limit is hit. '
+            'If `order` is omitted, the task is appended to the end of the target column.'
         ),
         request=TaskMoveSerializer,
         responses={
@@ -978,8 +978,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         old_column = task.column
         old_column_name = old_column.name
 
-        # Determine position: use provided position or append to end.
-        order = serializer.validated_data.get('position')
+        # Determine position: use provided order or append to end.
+        order = serializer.validated_data.get('order')
         if order is not None:
             new_position = order
         else:

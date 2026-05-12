@@ -19,10 +19,5 @@ def check_wip_limit(column, count=1, exclude_task_pk=None):
     current = qs.count()
     if current + count > column.wip_limit:
         raise ValidationError(
-            {
-                'wip_limit_exceeded': (
-                    f'WIP limit exceeded: adding {count} task(s) would result in '
-                    f'{current + count} active tasks, but the limit is {column.wip_limit}.'
-                )
-            }
+            {'detail': f'WIP limit reached (max {column.wip_limit} tasks)'}
         )

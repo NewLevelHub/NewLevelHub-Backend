@@ -889,7 +889,8 @@ class TaskViewSet(viewsets.ModelViewSet):
                 TaskHistory.objects.create(
                     task=new_instance,
                     user=self.request.user,
-                    action=f'updated_{field_key}',
+                    action='updated',
+                    field_name=field_key,
                     old_value=old_val,
                     new_value=new_val,
                 )
@@ -1079,12 +1080,11 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='history')
     def history(self, request, pk=None):
         task = self.get_object()
-        # Limit to the 50 most recent entries for consistent, bounded responses.
-        entries = task.history.all()[:50]
-        page = self.paginate_queryset(entries)
-        if page is not None:
-            return self.get_paginated_response(TaskHistorySerializer(page, many=True).data)
-        return Response(TaskHistorySerializer(entries, many=True).data)
+        qs = TaskHistory.objects.filter(task=task).order_by('-created_at')
+        paginator = StandardPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = TaskHistorySerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     @extend_schema(
         tags=['CRM'],

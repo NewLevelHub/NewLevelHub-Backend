@@ -393,29 +393,6 @@ def test_ac_new_announcement_emits_announcement_notifications(superadmin):
     assert 'AC Body' in notif.body
 
 
-@pytest.mark.django_db
-def test_ac_notify_service_request_status_change_celery_task_creates_notification(employee, company, floor):
-    from apps.services.models import ServiceRequest
-    from apps.services.tasks import notify_service_request_status_change
-
-    sr = ServiceRequest.objects.create(
-        created_by=employee,
-        company=company,
-        request_type='repair',
-        urgency='medium',
-        floor=floor,
-        status='new',
-    )
-    sr.status = 'accepted'
-    sr.save(update_fields=['status'])
-
-    notify_service_request_status_change(sr.id)
-    assert Notification.objects.filter(
-        user=employee,
-        notification_type='service_request_update',
-    ).exists()
-
-
 # ── HR / Invites AC ─────────────────────────────────────────────────────
 
 

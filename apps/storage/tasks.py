@@ -3,7 +3,7 @@ from datetime import timedelta
 from celery import shared_task
 from django.utils import timezone
 
-from .models import File
+from .models import File, Folder
 
 
 @shared_task
@@ -17,5 +17,9 @@ def cleanup_deleted_files():
             file_obj.file.delete(save=False)
         file_obj.delete()
         deleted_count += 1
+
+    # Delete soft-deleted folders after files to avoid FK constraint issues.
+    folder_count, _ = Folder.all_objects.filter(is_deleted=True, deleted_at__lte=cutoff).delete()
+    deleted_count += folder_count
 
     return deleted_count

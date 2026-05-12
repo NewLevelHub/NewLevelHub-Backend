@@ -1,5 +1,6 @@
 from django.db.models import F, Q, Sum
 from django.http import FileResponse
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
@@ -13,6 +14,18 @@ from apps.core.permissions import IsCompanyMember
 from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
+
+
+def _soft_delete_folder_recursive(folder):
+    now = timezone.now()
+    File.all_objects.filter(folder=folder, is_deleted=False).update(
+        is_deleted=True, deleted_at=now
+    )
+    for child in Folder.all_objects.filter(parent=folder, is_deleted=False):
+        _soft_delete_folder_recursive(child)
+    folder.is_deleted = True
+    folder.deleted_at = now
+    folder.save(update_fields=['is_deleted', 'deleted_at'])
 
 
 @extend_schema_view(
@@ -117,6 +130,9 @@ class FolderViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user, company=self.request.user.company)
+
+    def perform_destroy(self, instance):
+        _soft_delete_folder_recursive(instance)
 
     def retrieve(self, request, *args, **kwargs):
         folder = self.get_object()

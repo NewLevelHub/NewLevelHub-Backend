@@ -214,6 +214,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.crm.tasks.notify_deadline_overdue',
         'schedule': crontab(hour=8, minute=10),
     },
+    'expire-guest-passes': {
+        'task': 'apps.access.tasks.expire_guest_passes',
+        'schedule': crontab(minute='*/30'),
+    },
     'notify-guest-passes-expiring': {
         'task': 'apps.access.tasks.notify_guest_passes_expiring_soon',
         'schedule': crontab(hour=9, minute=0),

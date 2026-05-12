@@ -132,37 +132,37 @@ class TestPatchHistoryScalarFields:
         api_client.force_authenticate(admin_a)
         res = api_client.patch(task_url(task_a.id), {'title': 'Updated Title'}, format='json')
         assert res.status_code == status.HTTP_200_OK
-        assert TaskHistory.objects.filter(task=task_a, action='updated_title').exists()
+        assert TaskHistory.objects.filter(task=task_a, action='updated', field_name='title').exists()
 
     def test_patch_title_records_correct_old_and_new_values(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)
         old_title = task_a.title
         api_client.patch(task_url(task_a.id), {'title': 'New Title'}, format='json')
-        entry = TaskHistory.objects.get(task=task_a, action='updated_title')
+        entry = TaskHistory.objects.get(task=task_a, action='updated', field_name='title')
         assert entry.old_value == old_title
         assert entry.new_value == 'New Title'
 
     def test_patch_description_creates_history_entry(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'description': 'New desc'}, format='json')
-        assert TaskHistory.objects.filter(task=task_a, action='updated_description').exists()
+        assert TaskHistory.objects.filter(task=task_a, action='updated', field_name='description').exists()
 
     def test_patch_priority_creates_history_entry(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'priority': 'urgent'}, format='json')
-        entry = TaskHistory.objects.get(task=task_a, action='updated_priority')
+        entry = TaskHistory.objects.get(task=task_a, action='updated', field_name='priority')
         assert entry.old_value == 'medium'
         assert entry.new_value == 'urgent'
 
     def test_patch_assignee_creates_history_entry(self, api_client, admin_a, employee_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'assignee_id': employee_a.id}, format='json')
-        assert TaskHistory.objects.filter(task=task_a, action='updated_assignee').exists()
+        assert TaskHistory.objects.filter(task=task_a, action='updated', field_name='assignee').exists()
 
     def test_patch_assignee_history_records_full_names(self, api_client, admin_a, employee_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'assignee_id': employee_a.id}, format='json')
-        entry = TaskHistory.objects.get(task=task_a, action='updated_assignee')
+        entry = TaskHistory.objects.get(task=task_a, action='updated', field_name='assignee')
         assert entry.old_value == ''
         assert entry.new_value == employee_a.full_name
 
@@ -185,7 +185,7 @@ class TestPatchHistoryScalarFields:
     def test_patch_user_is_recorded_on_history(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)
         api_client.patch(task_url(task_a.id), {'priority': 'low'}, format='json')
-        entry = TaskHistory.objects.get(task=task_a, action='updated_priority')
+        entry = TaskHistory.objects.get(task=task_a, action='updated', field_name='priority')
         assert entry.user_id == admin_a.id
 
 
@@ -288,13 +288,13 @@ class TestMoveHistory:
         assert entry.new_value == column_a2.name
 
     def test_patch_column_also_logs_updated_column(self, api_client, admin_a, task_a, column_a2, board_a):
-        """PATCH with column_id in body (not via move action) should log updated_column."""
+        """PATCH with column_id in body (not via move action) should log updated column."""
         api_client.force_authenticate(admin_a)
         res = api_client.patch(task_url(task_a.id), {
             'column_id': column_a2.id,
         }, format='json')
         assert res.status_code == status.HTTP_200_OK
-        assert TaskHistory.objects.filter(task=task_a, action='updated_column').exists()
+        assert TaskHistory.objects.filter(task=task_a, action='updated', field_name='column').exists()
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +322,8 @@ class TestHistoryEndpoint:
 
     def test_history_response_shape(self, api_client, admin_a, task_a):
         TaskHistory.objects.create(
-            task=task_a, user=admin_a, action='updated_title', old_value='Old', new_value='New'
+            task=task_a, user=admin_a, action='updated', field_name='title',
+            old_value='Old', new_value='New',
         )
         api_client.force_authenticate(admin_a)
         res = api_client.get(task_history_url(task_a.id))
@@ -331,6 +332,7 @@ class TestHistoryEndpoint:
         entry = results[0]
         assert 'id' in entry
         assert 'action' in entry
+        assert 'field_name' in entry
         assert 'old_value' in entry
         assert 'new_value' in entry
         assert 'created_at' in entry
@@ -341,7 +343,8 @@ class TestHistoryEndpoint:
 
     def test_history_user_full_name_populated(self, api_client, admin_a, task_a):
         TaskHistory.objects.create(
-            task=task_a, user=admin_a, action='archived', old_value='False', new_value='True'
+            task=task_a, user=admin_a, action='archived', field_name=None,
+            old_value='False', new_value='True',
         )
         api_client.force_authenticate(admin_a)
         res = api_client.get(task_history_url(task_a.id))
@@ -351,10 +354,12 @@ class TestHistoryEndpoint:
 
     def test_history_ordered_by_newest_first(self, api_client, admin_a, task_a):
         h1 = TaskHistory.objects.create(
-            task=task_a, user=admin_a, action='updated_title', old_value='A', new_value='B'
+            task=task_a, user=admin_a, action='updated', field_name='title',
+            old_value='A', new_value='B',
         )
         h2 = TaskHistory.objects.create(
-            task=task_a, user=admin_a, action='updated_priority', old_value='low', new_value='high'
+            task=task_a, user=admin_a, action='updated', field_name='priority',
+            old_value='low', new_value='high',
         )
         api_client.force_authenticate(admin_a)
         res = api_client.get(task_history_url(task_a.id))
@@ -366,8 +371,8 @@ class TestHistoryEndpoint:
     def test_history_is_paginated(self, api_client, admin_a, task_a):
         for i in range(60):
             TaskHistory.objects.create(
-                task=task_a, user=admin_a, action='updated_title',
-                old_value=str(i), new_value=str(i + 1)
+                task=task_a, user=admin_a, action='updated', field_name='title',
+                old_value=str(i), new_value=str(i + 1),
             )
         api_client.force_authenticate(admin_a)
         res = api_client.get(task_history_url(task_a.id))
@@ -380,3 +385,75 @@ class TestHistoryEndpoint:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_history_url(task_a.id), {'action': 'fake'}, format='json')
         assert res.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+
+# ---------------------------------------------------------------------------
+# DEV-89 AC#1 — field_name present in history after PATCH
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTaskHistoryFieldName:
+    def test_patch_writes_field_name_to_history(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.patch(task_url(task_a.id), {'title': 'New Title'}, format='json')
+        history = TaskHistory.objects.filter(task=task_a, action='updated').first()
+        assert history is not None
+        assert history.field_name == 'title'
+
+    def test_field_name_present_in_api_response(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.patch(task_url(task_a.id), {'title': 'New Title'}, format='json')
+        res = api_client.get(task_history_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+        entry = res.data['results'][0]
+        assert 'field_name' in entry
+        assert entry['field_name'] == 'title'
+
+    def test_non_updated_actions_have_null_field_name(self, api_client, admin_a, task_a):
+        api_client.force_authenticate(admin_a)
+        api_client.post(task_archive_url(task_a.id))
+        entry = TaskHistory.objects.get(task=task_a, action='archived')
+        assert entry.field_name is None
+
+
+# ---------------------------------------------------------------------------
+# DEV-89 AC#4 — history pagination returns all records, not sliced at 50
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestTaskHistoryPagination:
+    def test_history_paginates_at_20(self, api_client, admin_a, task_a):
+        for i in range(60):
+            TaskHistory.objects.create(
+                task=task_a, user=admin_a, action='updated',
+                field_name='title', old_value=str(i), new_value=str(i + 1),
+            )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(task_history_url(task_a.id))
+        assert res.status_code == status.HTTP_200_OK
+        assert len(res.data['results']) == 20
+        assert res.data['next'] is not None
+        assert res.data['count'] == 60
+
+    def test_history_second_page_accessible(self, api_client, admin_a, task_a):
+        for i in range(60):
+            TaskHistory.objects.create(
+                task=task_a, user=admin_a, action='updated',
+                field_name='title', old_value=str(i), new_value=str(i + 1),
+            )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(task_history_url(task_a.id) + '?page=2')
+        assert res.status_code == status.HTTP_200_OK
+        assert len(res.data['results']) == 20
+
+    def test_history_third_page_has_remaining_records(self, api_client, admin_a, task_a):
+        for i in range(60):
+            TaskHistory.objects.create(
+                task=task_a, user=admin_a, action='updated',
+                field_name='title', old_value=str(i), new_value=str(i + 1),
+            )
+        api_client.force_authenticate(admin_a)
+        res = api_client.get(task_history_url(task_a.id) + '?page=3')
+        assert res.status_code == status.HTTP_200_OK
+        assert len(res.data['results']) == 20
+        assert res.data['next'] is None

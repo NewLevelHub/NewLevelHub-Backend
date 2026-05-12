@@ -166,6 +166,7 @@ class TaskHistory(TimeStampedModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='history')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
     action = models.CharField(max_length=50)
+    field_name = models.CharField(max_length=100, blank=True, null=True)
     old_value = models.CharField(max_length=255, blank=True, default='')
     new_value = models.CharField(max_length=255, blank=True, default='')
 

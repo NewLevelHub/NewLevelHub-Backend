@@ -455,6 +455,45 @@ class TestMyTasks:
         assert group['total'] == 3
         assert group['has_more'] is False
 
+    def test_my_tasks_filtered_by_priority(self, api_client, employee_a, column_a, board_a):
+        """?priority=high must exclude tasks with other priorities."""
+        low_task = Task.objects.create(
+            column=column_a, title='Low Task', priority='low', position=1, assignee=employee_a,
+        )
+        high_task = Task.objects.create(
+            column=column_a, title='High Task', priority='high', position=2, assignee=employee_a,
+        )
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL, {'priority': 'high'})
+        assert res.status_code == status.HTTP_200_OK
+        ids = self._flat_ids(res.data)
+        assert high_task.id in ids
+        assert low_task.id not in ids
+
+    def test_my_tasks_ordering_applied(self, api_client, employee_a, column_a, board_a):
+        """?ordering=-created_at must return tasks newest-first within each group."""
+        from django.utils import timezone
+        from datetime import timedelta
+
+        now = timezone.now()
+        older = Task.objects.create(
+            column=column_a, title='Older Task', priority='low', position=1, assignee=employee_a,
+        )
+        # Bump created_at so 'newer' is definitely more recent than 'older'.
+        newer = Task.objects.create(
+            column=column_a, title='Newer Task', priority='low', position=2, assignee=employee_a,
+        )
+        # Force a distinct timestamp difference via update to avoid same-second collisions.
+        Task.objects.filter(pk=older.pk).update(created_at=now - timedelta(seconds=10))
+        Task.objects.filter(pk=newer.pk).update(created_at=now)
+
+        api_client.force_authenticate(employee_a)
+        res = api_client.get(MY_TASKS_URL, {'ordering': '-created_at'})
+        assert res.status_code == status.HTTP_200_OK
+        group = next(g for g in res.data['groups'] if g['board_id'] == board_a.id)
+        task_ids = [t['id'] for t in group['tasks']]
+        assert task_ids.index(newer.id) < task_ids.index(older.id)
+
 
 # ---------------------------------------------------------------------------
 # AC4: GET /api/v1/crm/boards/<id>/?view=list

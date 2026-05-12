@@ -1063,18 +1063,26 @@ class TaskViewSet(viewsets.ModelViewSet):
         user = request.user
         TASK_LIMIT = 50
 
+        # Base queryset — assigned to me, not archived.
         qs = Task.objects.select_related(
             'column__board', 'assignee', 'created_by',
-        ).prefetch_related('labels').filter(
+        ).prefetch_related('labels', 'checklists__items').filter(
             assignee=user,
             is_archived=False,
-        ).order_by('column__board__name', '-created_at')
+        )
 
-        if user.role != 'superadmin' and user.company_id:
+        if user.role != 'superadmin':
+            if not user.company_id:
+                return Response({'groups': []})
             qs = qs.filter(column__board__company_id=user.company_id)
-        elif user.role != 'superadmin':
-            return Response({'groups': []})
 
+        # Apply all registered filters (priority, deadline, search, ordering …)
+        # from query params.  filter_queryset() applies TaskFilter + OrderingFilter;
+        # its `is_archived` guard only fires for action=='list', so it is a safe
+        # no-op here (our base queryset already excludes archived tasks).
+        qs = self.filter_queryset(qs)
+
+        # Group by board AFTER filtering + ordering.
         groups = defaultdict(list)
         board_meta = {}
         for task in qs:

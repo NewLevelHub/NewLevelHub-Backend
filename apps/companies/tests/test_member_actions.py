@@ -308,7 +308,7 @@ class TestRemoveMember:
         )
         auth(api_client, company_admin)
         resp = api_client.delete(remove_url(company.id, target_admin.id), format='json')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
         assert resp.data['detail'] == 'Only superadmin can remove a company admin'
 
     def test_superadmin_can_remove_company_admin(

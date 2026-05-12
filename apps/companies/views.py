@@ -667,10 +667,13 @@ class CompanyViewSet(viewsets.ModelViewSet):
         responses={
             200: OpenApiResponse(description='User removed from company'),
             400: OpenApiResponse(
-                description='Cannot remove yourself / reassign_to is invalid'
+                description=(
+                    'Cannot remove yourself / only superadmin can remove a company admin '
+                    '/ reassign_to is invalid'
+                )
             ),
             401: OpenApiResponse(description='Not authenticated'),
-            403: OpenApiResponse(description='Only superadmin can remove a company admin'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
             404: OpenApiResponse(description='Company or user not found'),
         },
         parameters=[
@@ -709,7 +712,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if target.role == 'company_admin' and request.user.role != 'superadmin':
             return Response(
                 {'detail': 'Only superadmin can remove a company admin'},
-                status=status.HTTP_403_FORBIDDEN,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Validate optional reassign_to parameter.

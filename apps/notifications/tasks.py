@@ -8,6 +8,7 @@ from django.template.loader import render_to_string, TemplateDoesNotExist
 from apps.notifications.utils import (
     _build_unsubscribe_url,
     _email_dedup_key,
+    _is_dnd_active,
     EMAIL_DEDUP_TTL,
 )
 
@@ -111,13 +112,15 @@ def _check_preference(user, notification_type):
     return bool(getattr(prefs, pref_field, True))
 
 
-def _check_dnd(user, notification_type):
+def _check_dnd(user, notification_type=None):
     """
     Return True if DND is NOT active (i.e. notification should proceed).
+    Checks both the simple do_not_disturb toggle and the time-based dnd_enabled/dnd_until fields.
     """
+    from apps.notifications.models import NotificationPreference
     try:
-        prefs = user.notification_preferences
-        return not prefs.do_not_disturb
+        pref, _ = NotificationPreference.objects.get_or_create(user=user)
+        return not _is_dnd_active(pref)
     except Exception:
         return True
 
@@ -149,6 +152,13 @@ def send_notification_email(user_id, notification_type, context):
     try:
         user = User.objects.get(pk=user_id)
     except User.DoesNotExist:
+        return
+
+    if not _check_dnd(user, notification_type):
+        logger.debug(
+            'Notification email skipped due to DND for user=%s type=%s',
+            user_id, notification_type,
+        )
         return
 
     if not _check_preference(user, notification_type):

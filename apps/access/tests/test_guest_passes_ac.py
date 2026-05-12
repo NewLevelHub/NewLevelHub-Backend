@@ -615,3 +615,93 @@ class TestQrTimeValidation:
         }
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestExpireGuestPassesTask:
+    """Unit tests for the expire_guest_passes periodic task (DEV-174)."""
+
+    def _make_pass(self, company, creator, **kwargs):
+        return GuestPass.objects.create(
+            company=company,
+            created_by=creator,
+            guest_name='Task Guest',
+            guest_email='task-guest@test.local',
+            visit_purpose='test',
+            usage_type='single',
+            **kwargs,
+        )
+
+    def test_active_expired_pass_becomes_expired(self, company_admin):
+        now = timezone.now()
+        gp = self._make_pass(
+            company_admin.company,
+            company_admin,
+            status='active',
+            valid_from=now - timedelta(hours=2),
+            valid_until=now - timedelta(minutes=1),
+        )
+        from apps.access.tasks import expire_guest_passes
+        expire_guest_passes()
+        gp.refresh_from_db()
+        assert gp.status == 'expired'
+
+    def test_still_valid_pass_is_not_changed(self, company_admin):
+        now = timezone.now()
+        gp = self._make_pass(
+            company_admin.company,
+            company_admin,
+            status='active',
+            valid_from=now - timedelta(hours=1),
+            valid_until=now + timedelta(hours=1),
+        )
+        from apps.access.tasks import expire_guest_passes
+        expire_guest_passes()
+        gp.refresh_from_db()
+        assert gp.status == 'active'
+
+    def test_already_expired_pass_is_not_touched(self, company_admin):
+        now = timezone.now()
+        gp = self._make_pass(
+            company_admin.company,
+            company_admin,
+            status='expired',
+            valid_from=now - timedelta(hours=3),
+            valid_until=now - timedelta(hours=2),
+        )
+        from apps.access.tasks import expire_guest_passes
+        expire_guest_passes()
+        gp.refresh_from_db()
+        assert gp.status == 'expired'
+
+    def test_idempotent_second_run(self, company_admin):
+        now = timezone.now()
+        gp = self._make_pass(
+            company_admin.company,
+            company_admin,
+            status='active',
+            valid_from=now - timedelta(hours=2),
+            valid_until=now - timedelta(minutes=1),
+        )
+        from apps.access.tasks import expire_guest_passes
+        expire_guest_passes()
+        expire_guest_passes()
+        gp.refresh_from_db()
+        assert gp.status == 'expired'
+
+    def test_filter_status_expired_returns_expired_passes(self, api_client, company_admin):
+        now = timezone.now()
+        from apps.access.tasks import expire_guest_passes
+        self._make_pass(
+            company_admin.company,
+            company_admin,
+            status='active',
+            valid_from=now - timedelta(hours=2),
+            valid_until=now - timedelta(minutes=1),
+        )
+        expire_guest_passes()
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(PASSES_URL, {'status': 'expired'})
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['count'] >= 1
+        assert all(p['status'] == 'expired' for p in response.data['results'])

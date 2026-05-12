@@ -479,7 +479,7 @@ class TestAttachmentStorageQuota:
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         body = resp.json()
-        assert 'Storage limit reached' in str(body)
+        assert 'Storage limit exceeded' in str(body)
 
     def test_direct_upload_counts_in_limits_helper(
         self, company_a, admin_a, task_a,

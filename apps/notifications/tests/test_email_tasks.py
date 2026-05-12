@@ -183,6 +183,20 @@ class TestCheckDnd:
         make_preference(user, do_not_disturb=True)
         assert _check_dnd(user, 'booking_confirmed') is False
 
+    def test_returns_false_when_time_based_dnd_active(self, user, make_preference):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        make_preference(user, dnd_enabled=True, dnd_until=timezone.now() + timedelta(hours=1))
+        assert _check_dnd(user, 'task_assigned') is False
+
+    def test_returns_true_when_time_based_dnd_expired(self, user, make_preference):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        make_preference(user, dnd_enabled=True, dnd_until=timezone.now() - timedelta(minutes=1))
+        assert _check_dnd(user, 'task_assigned') is True
+
 
 # ---------------------------------------------------------------------------
 # Integration tests for send_notification_email task
@@ -230,19 +244,40 @@ class TestSendNotificationEmail:
         mock_mail.assert_not_called()
 
     @pytest.mark.django_db
-    def test_sends_when_dnd_active_but_email_pref_enabled(self, user, make_preference):
-        """DND must NOT suppress email delivery — only in-app notifications are affected."""
+    def test_skips_when_dnd_active_boolean(self, user, make_preference):
+        """DND (do_not_disturb=True) suppresses email delivery."""
         make_preference(user, booking_confirmed_email=True, do_not_disturb=True)
 
-        with patch('apps.notifications.tasks.send_mail') as mock_mail, \
-             patch('apps.notifications.tasks.render_to_string', return_value='<html/>'):
+        with patch('apps.notifications.tasks.send_mail') as mock_mail:
             send_notification_email(
                 user.id,
                 'booking_confirmed',
-                {'subject': 'Should still send'},
+                {'subject': 'Should be suppressed'},
             )
 
-        mock_mail.assert_called_once()
+        mock_mail.assert_not_called()
+
+    @pytest.mark.django_db
+    def test_skips_when_time_based_dnd_active(self, user, make_preference):
+        """DND with dnd_enabled=True and dnd_until in the future suppresses email (DEV-175)."""
+        from django.utils import timezone
+        from datetime import timedelta
+
+        make_preference(
+            user,
+            task_assigned_email=True,
+            dnd_enabled=True,
+            dnd_until=timezone.now() + timedelta(hours=1),
+        )
+
+        with patch('apps.notifications.tasks.send_mail') as mock_mail:
+            send_notification_email(
+                user.id,
+                'task_assigned',
+                {'subject': 'Assigned task'},
+            )
+
+        mock_mail.assert_not_called()
 
     @pytest.mark.django_db
     def test_skips_when_email_pref_disabled_regardless_of_dnd(self, user, make_preference):

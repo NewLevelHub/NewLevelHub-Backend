@@ -341,14 +341,17 @@ class TestReadCountFieldAC:
         assert response.data.get('read_count') == 1
 
     def test_read_count_visible_to_non_author(self, api_client, employee, superadmin, company_admin, company):
-        """read_count is visible to all authenticated users, not just the author."""
+        """
+        DEV-110 AC#2: read_count field is always present in the response but its
+        value is null for a non-author employee (field present, value hidden).
+        """
         announcement = _make_announcement(author=company_admin, company=company)
         AnnouncementRead.objects.create(announcement=announcement, user=employee)
 
         api_client.force_authenticate(user=employee)
         response = api_client.get(detail_url(announcement.id))
         assert 'read_count' in response.data
-        assert response.data['read_count'] == 1
+        assert response.data['read_count'] is None
 
 
 # ---------------------------------------------------------------------------

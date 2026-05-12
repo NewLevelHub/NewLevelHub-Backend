@@ -638,3 +638,69 @@ class TestAnnouncementDeleteAC:
             status.HTTP_404_NOT_FOUND,
         )
         assert Announcement.objects.filter(pk=announcement.id).exists()
+
+
+# ---------------------------------------------------------------------------
+# AC #2 (DEV-110) — read_count visibility
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestReadCountVisibilityAC:
+    """
+    AC DEV-110 #2: read_count is an integer only for the announcement author,
+    company_admin, and superadmin.  A plain employee who is NOT the author
+    receives null instead.
+    """
+
+    def _mark_read(self, announcement, user):
+        from apps.services.models import AnnouncementRead
+        AnnouncementRead.objects.get_or_create(announcement=announcement, user=user)
+
+    def test_read_count_visible_to_author(self, api_client, employee, company):
+        """Employee who IS the author sees read_count as an integer."""
+        announcement = _make_announcement(author=employee, company=company)
+        self._mark_read(announcement, employee)
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(announcement_detail_url(announcement.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert isinstance(response.data['read_count'], int)
+        assert response.data['read_count'] == 1
+
+    def test_read_count_null_for_non_author_employee(
+        self, api_client, company_admin, employee, company
+    ):
+        """Employee who is NOT the author sees read_count as null."""
+        announcement = _make_announcement(author=company_admin, company=company)
+        self._mark_read(announcement, employee)
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(announcement_detail_url(announcement.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['read_count'] is None
+
+    def test_read_count_visible_to_company_admin(
+        self, api_client, company_admin, employee, company
+    ):
+        """company_admin sees read_count as an integer regardless of authorship."""
+        announcement = _make_announcement(author=employee, company=company)
+        self._mark_read(announcement, employee)
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(announcement_detail_url(announcement.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert isinstance(response.data['read_count'], int)
+        assert response.data['read_count'] == 1
+
+    def test_read_count_visible_to_superadmin(
+        self, api_client, superadmin, company_admin, company
+    ):
+        """superadmin sees read_count as an integer."""
+        announcement = _make_announcement(author=company_admin, company=company)
+        self._mark_read(announcement, company_admin)
+
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(announcement_detail_url(announcement.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert isinstance(response.data['read_count'], int)
+        assert response.data['read_count'] == 1

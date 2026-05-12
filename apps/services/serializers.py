@@ -327,4 +327,10 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         return obj.reads.filter(user=request.user).exists()
 
     def get_read_count(self, obj):
-        return obj.reads.count()
+        request = self.context.get('request')
+        if request is None:
+            return None
+        user = request.user
+        if user.role in ('superadmin', 'company_admin') or obj.author == user:
+            return obj.reads.count()
+        return None

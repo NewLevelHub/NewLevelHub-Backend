@@ -415,7 +415,7 @@ class TestGuestPassesValidateQrAC:
         assert response.status_code == status.HTTP_200_OK
         assert response.data == {'valid': False, 'reason': expected_reason}
 
-    def test_validate_expired_pass_returns_403(self, api_client, company_admin):
+    def test_validate_expired_pass_returns_reason_expired(self, api_client, company_admin):
         superadmin = User.objects.create_user(
             email='validate-expired@test.local',
             password='pass',
@@ -439,8 +439,8 @@ class TestGuestPassesValidateQrAC:
         )
         api_client.force_authenticate(user=superadmin)
         response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert 'Срок действия QR-кода истек' in response.data['detail']
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'valid': False, 'reason': 'expired'}
 
     def test_validate_not_found_returns_reason_not_found(self, api_client):
         superadmin = User.objects.create_user(
@@ -497,7 +497,7 @@ class TestQrTimeValidation:
 
     # --- validate_qr time checks ---
 
-    def test_validate_qr_before_valid_from_returns_403(self, api_client, company_admin):
+    def test_validate_qr_before_valid_from_returns_reason_expired(self, api_client, company_admin):
         superadmin = self._superadmin('before')
         now = timezone.now()
         guest_pass = GuestPass.objects.create(
@@ -514,10 +514,10 @@ class TestQrTimeValidation:
         )
         api_client.force_authenticate(user=superadmin)
         response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert 'Доступ ещё не разрешён' in response.data['detail']
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'valid': False, 'reason': 'expired'}
 
-    def test_validate_qr_after_valid_until_returns_403(self, api_client, company_admin):
+    def test_validate_qr_after_valid_until_returns_reason_expired(self, api_client, company_admin):
         superadmin = self._superadmin('after')
         now = timezone.now()
         guest_pass = GuestPass.objects.create(
@@ -534,8 +534,8 @@ class TestQrTimeValidation:
         )
         api_client.force_authenticate(user=superadmin)
         response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert 'Срок действия QR-кода истек' in response.data['detail']
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'valid': False, 'reason': 'expired'}
 
     @patch('apps.access.views.notify_pass_creator_on_entry.delay')
     def test_validate_qr_within_window_succeeds(self, mocked_delay, api_client, company_admin):

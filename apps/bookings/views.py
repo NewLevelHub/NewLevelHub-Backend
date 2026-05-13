@@ -1556,10 +1556,17 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         if not reason:
             raise ValidationError({'reason': 'This field is required.'})
 
+        now = timezone.now()
         booking.status = 'cancelled'
         booking.cancelled_by = user
         booking.cancel_reason = reason
-        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason'])
+        booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+        BookingCancellationAudit.objects.create(
+            booking=booking,
+            cancelled_by=user,
+            cancel_reason=reason,
+            cancelled_at=now,
+        )
 
         create_notification(
             user=booking.user,

@@ -191,6 +191,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                         password=validated_data['password'],
                         company=invitation.company,
                         role=invitation.role,
+                        is_email_verified=False,
                     )
                 except IntegrityError as exc:
                     raise serializers.ValidationError(

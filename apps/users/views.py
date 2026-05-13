@@ -179,13 +179,18 @@ def register_by_invite(request):
     serializer = InviteRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    tokens = _get_tokens(user, remember_me=False)
-    response = Response(
-        {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},
+    token = create_email_verification_token(user)
+    try:
+        send_verification_email.delay(user.id, str(token.token))
+    except Exception:
+        logger.warning(
+            'register_by_invite: failed to enqueue send_verification_email for user_id=%s — broker may be unreachable',
+            user.id,
+        )
+    return Response(
+        {'detail': 'Registration successful. Please verify your email before logging in.'},
         status=status.HTTP_201_CREATED,
     )
-    set_refresh_cookie(response, tokens['refresh'], remember_me=False)
-    return response
 
 
 @extend_schema(

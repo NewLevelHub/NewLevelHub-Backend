@@ -15,10 +15,9 @@ from drf_spectacular.utils import (
 import rest_framework.fields as fields
 from rest_framework import renderers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsSuperAdminOrReception
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
 from .filters import AccessLogFilter, GuestPassFilter
@@ -178,14 +177,6 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
 
         tasks.send_guest_pass_email.delay(guest_pass.id)
         return Response({'detail': 'QR code resent'})
-
-
-class IsSuperAdminOrReception(BasePermission):
-    def has_permission(self, request, view):
-        user = request.user
-        return bool(
-            user and user.is_authenticated and user.role in ('superadmin', 'reception')
-        )
 
 
 @extend_schema(

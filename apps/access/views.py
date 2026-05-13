@@ -223,7 +223,14 @@ def validate_qr(request):
 
     now = timezone.now()
 
-    if now < guest_pass.valid_from or guest_pass.valid_until < now:
+    if now < guest_pass.valid_from:
+        return Response({
+            'valid': False,
+            'reason': 'not_yet_active',
+            'available_from': guest_pass.valid_from.isoformat(),
+        })
+
+    if guest_pass.valid_until < now:
         return Response({'valid': False, 'reason': 'expired'})
 
     if guest_pass.status == 'revoked':

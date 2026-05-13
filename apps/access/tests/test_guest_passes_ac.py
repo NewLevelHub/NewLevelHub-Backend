@@ -497,9 +497,10 @@ class TestQrTimeValidation:
 
     # --- validate_qr time checks ---
 
-    def test_validate_qr_before_valid_from_returns_reason_expired(self, api_client, company_admin):
+    def test_validate_qr_before_valid_from_returns_reason_not_yet_active(self, api_client, company_admin):
         superadmin = self._superadmin('before')
         now = timezone.now()
+        valid_from = now + timedelta(hours=2)
         guest_pass = GuestPass.objects.create(
             created_by=company_admin,
             company=company_admin.company,
@@ -509,13 +510,15 @@ class TestQrTimeValidation:
             status='active',
             usage_type='single',
             times_used=0,
-            valid_from=now + timedelta(hours=2),
+            valid_from=valid_from,
             valid_until=now + timedelta(hours=4),
         )
         api_client.force_authenticate(user=superadmin)
         response = api_client.post(VALIDATE_URL, {'qr_code': str(guest_pass.qr_code)}, format='json')
         assert response.status_code == status.HTTP_200_OK
-        assert response.data == {'valid': False, 'reason': 'expired'}
+        assert response.data['valid'] is False
+        assert response.data['reason'] == 'not_yet_active'
+        assert response.data['available_from'] == valid_from.isoformat()
 
     def test_validate_qr_after_valid_until_returns_reason_expired(self, api_client, company_admin):
         superadmin = self._superadmin('after')

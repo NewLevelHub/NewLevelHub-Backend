@@ -146,9 +146,16 @@ class MyViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, ModelViewSet):
     queryset = MyModel.objects.all()
 ```
 
-- **`CompanyIsolationMixin`** — scopes `get_queryset()` to `request.user.company_id`; superadmin sees all; users without a company get `qs.none()`. Override `company_field = 'company'` if the FK has a different name.
+- **`CompanyIsolationMixin`** — scopes `get_queryset()` to `request.user.company_id`; superadmin sees all; users without a company get `qs.none()`. Override `company_field = 'company'` if the FK has a different name. For models without a direct company FK, set `company_lookup = 'parent__company'` (ORM traversal — Django appends `_id` automatically). When `company_lookup` is set it takes priority over `company_field`.
 - **`SetCompanyOnCreateMixin`** — calls `serializer.save(company=request.user.company)` in `perform_create`.
 - **`CompanyQuerySetMixin`** — backward-compat alias for `CompanyIsolationMixin`; do not use in new code.
+
+**Company isolation decision tree for new ViewSets:**
+1. Direct company FK → `CompanyIsolationMixin` (default, `company_field = 'company'`)
+2. FK chain to company, no manager switching → `CompanyIsolationMixin` + `company_lookup = 'a__b__company'`
+3. FK chain + manager switching (soft-delete) → manual `get_queryset` + `company_lookup_filter` class attribute
+4. Nullable/dual-scope company → manual `get_queryset` + comment explaining why
+5. Nested parent resource (scoped by URL kwarg) → `_get_parent_or_403()` guard method + `company_lookup_filter` attribute
 
 ---
 

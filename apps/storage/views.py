@@ -61,6 +61,11 @@ class FolderViewSet(viewsets.ModelViewSet):
     permission_classes = [IsCompanyMember]
 
     def get_queryset(self):
+        # CompanyIsolationMixin not used: Folder has a direct company FK but access
+        # is split across two independent scopes — personal folders (owned by user,
+        # company-agnostic) and company folders (scoped by company FK). A simple
+        # company filter would hide all personal folders. Isolation is implemented
+        # manually via the union queryset below.
         user = self.request.user
         if user.role == 'superadmin':
             queryset = Folder.objects.all()
@@ -185,6 +190,10 @@ class FileViewSet(viewsets.ModelViewSet):
     _PERMISSION_LEVELS = {'view': 1, 'download': 2, 'full': 3}
 
     def get_queryset(self):
+        # CompanyIsolationMixin not used: File.company is nullable — personal files
+        # have company=None. Access spans personal-owned, company-shared, explicitly
+        # shared, and legacy (no-folder) rows. A single company filter cannot express
+        # this multi-scope union; isolation is implemented manually below.
         user = self.request.user
         if user.role == 'superadmin':
             queryset = File.objects.all()
@@ -443,6 +452,9 @@ class FileShareViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'delete']
 
     def get_queryset(self):
+        # CompanyIsolationMixin not used: FileShare has no company FK at all.
+        # Isolation is user-centric: a share record is visible to the user who
+        # created it (shared_by) or the user it was shared with (shared_with).
         user = self.request.user
         shared_with_me = str(self.request.query_params.get('shared_with_me', '')).lower() in ('1', 'true', 'yes', 'on')
 

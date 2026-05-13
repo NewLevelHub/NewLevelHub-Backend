@@ -481,6 +481,93 @@ class TestCompanyIsolationMixin:
 
 
 # ---------------------------------------------------------------------------
+# CompanyIsolationMixin — company_lookup (traversal FK chain)
+# ---------------------------------------------------------------------------
+
+class TestCompanyIsolationMixinLookup:
+    """
+    Tests for the ``company_lookup`` attribute that allows filtering via an ORM
+    traversal path when the model has no direct ``company`` FK.
+    """
+
+    def _item_with_traversal(self, company_id):
+        """Mock object whose traversal path ends in a company_id."""
+        obj = MagicMock()
+        # e.g. obj.board__company_id is not how Django works, but our _FakeQS
+        # matches on the key passed to filter() — so we fake it via a flat attr
+        # that the _FakeQS.filter helper can introspect.
+        obj.board__company_id = company_id
+        return obj
+
+    def _qs_traversal(self, *company_ids):
+        """Return a _FakeQS whose items carry a flat 'board__company_id' attr."""
+        items = []
+        for cid in company_ids:
+            obj = MagicMock()
+            # _FakeQS.filter uses getattr(item, k, None) so set the exact key
+            # that will be passed: 'board__company_id'
+            setattr(obj, 'board__company_id', cid)
+            items.append(obj)
+        return _FakeQS(items)
+
+    def _make_lookup_view(self, user, base_qs, lookup='board__company'):
+        class _LookupView(CompanyIsolationMixin, _BaseView):
+            company_lookup = lookup
+
+            def __init__(self, usr, qs):
+                _BaseView.__init__(self, qs)
+                self.request = MagicMock()
+                self.request.user = usr
+
+        return _LookupView(user, base_qs)
+
+    def test_company_lookup_filters_by_traversal_path(self):
+        """company_lookup causes filter(**{'<lookup>_id': company_id}) to be applied."""
+        user = _make_user('employee', company_id=5)
+        base_qs = self._qs_traversal(5, 5, 99)
+        view = self._make_lookup_view(user, base_qs, lookup='board__company')
+        result = view.get_queryset()
+        # The filter kwargs must use the traversal path + '_id'
+        assert result._filter_kwargs == {'board__company_id': 5}
+
+    def test_company_lookup_takes_priority_over_company_field(self):
+        """When company_lookup is set, company_field is ignored."""
+        user = _make_user('employee', company_id=7)
+        base_qs = self._qs_traversal(7)
+
+        class _BothView(CompanyIsolationMixin, _BaseView):
+            company_field = 'organisation'   # must be ignored
+            company_lookup = 'board__company'
+
+            def __init__(self, usr, qs):
+                _BaseView.__init__(self, qs)
+                self.request = MagicMock()
+                self.request.user = usr
+
+        view = _BothView(user, base_qs)
+        result = view.get_queryset()
+        assert result._filter_kwargs == {'board__company_id': 7}
+        # company_field key must NOT appear in filter kwargs
+        assert 'organisation' not in result._filter_kwargs
+
+    def test_superadmin_sees_all_with_company_lookup(self):
+        """Superadmin bypasses the lookup filter and gets the full queryset."""
+        user = _make_user('superadmin', company_id=None)
+        base_qs = self._qs_traversal(1, 2, 3)
+        view = self._make_lookup_view(user, base_qs)
+        result = view.get_queryset()
+        assert result is base_qs
+
+    def test_user_without_company_gets_empty_queryset_with_lookup(self):
+        """Users with no company get qs.none() regardless of company_lookup."""
+        user = _make_user('employee', company_id=None)
+        base_qs = self._qs_traversal(1, 2)
+        view = self._make_lookup_view(user, base_qs)
+        result = view.get_queryset()
+        assert hasattr(result, '_is_none') or len(result) == 0
+
+
+# ---------------------------------------------------------------------------
 # Guest role — explicit CRM / HR / internal access denial
 # ---------------------------------------------------------------------------
 

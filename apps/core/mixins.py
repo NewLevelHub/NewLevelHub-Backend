@@ -19,20 +19,32 @@ class CompanyIsolationMixin:
         class MyView(CompanyIsolationMixin, ListAPIView):
             company_field = 'organisation'   # FK name on the model
 
+    For models without a direct company FK, use ``company_lookup`` to specify
+    an ORM traversal path to the company.  Django appends ``_id`` automatically
+    so the filter becomes ``<lookup>_id=user.company_id``::
+
+        class MyView(CompanyIsolationMixin, ModelViewSet):
+            company_lookup = 'parent__company'  # e.g. Task → Column → Board → Company
+
+    When ``company_lookup`` is set it takes priority over ``company_field``.
+
     Works with Django's ``get_queryset()`` pattern via ``super()`` chaining,
     so it composes correctly with other mixins and DRF's generic views.
     """
 
     company_field = 'company'
+    company_lookup = None  # ORM traversal, e.g. 'column__board__company'
 
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
         if user.role == 'superadmin':
             return qs
-        if user.company_id:
-            return qs.filter(**{self.company_field: user.company_id})
-        return qs.none()
+        if not user.company_id:
+            return qs.none()
+        if self.company_lookup:
+            return qs.filter(**{f'{self.company_lookup}_id': user.company_id})
+        return qs.filter(**{self.company_field: user.company_id})
 
 
 class SetCompanyOnCreateMixin:

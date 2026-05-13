@@ -377,6 +377,14 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
 class ColumnViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
 
+    # CompanyIsolationMixin not used: Column has no direct company FK, and the
+    # queryset must also be scoped to a specific board (nested resource via
+    # board_pk URL kwarg).  Both concerns are handled together in get_queryset()
+    # via _get_board_or_403(), which validates company ownership of the board
+    # and supplies the board filter in a single DB lookup.
+    # Traversal path documented here for auditability:
+    company_lookup_filter = 'board__company_id'
+
     def get_permissions(self):
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
 
@@ -400,6 +408,9 @@ class ColumnViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return Column.objects.none()
+        # CompanyIsolationMixin not used: Column has no direct company FK.
+        # Isolation is enforced via _get_board_or_403() which validates that
+        # the parent board belongs to the request user's company.
         board = self._get_board_or_403()
         return Column.objects.filter(board=board).prefetch_related('tasks').order_by('position')
 
@@ -704,11 +715,21 @@ class TaskViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
     filterset_class = None  # TaskFilter applied manually in filter_queryset
 
+    # CompanyIsolationMixin not used: get_queryset switches between Task.objects
+    # and Task.all_objects depending on action (archived task visibility).
+    # Traversal path documented here for auditability:
+    company_lookup_filter = 'column__board__company_id'
+
     # Actions that must be able to see soft-deleted (archived) tasks so that
     # get_object() does not 404 on them.
     ARCHIVED_VISIBLE_ACTIONS = {'retrieve', 'history', 'unarchive', 'partial_update', 'update'}
 
     def get_queryset(self):
+        # CompanyIsolationMixin not used: Task has no direct company FK.
+        # Isolation is via column__board__company_id. Additionally, this
+        # queryset switches between Task.objects (SoftDeleteManager) and
+        # Task.all_objects depending on the action, which the mixin cannot
+        # accommodate without being overridden entirely.
         user = self.request.user
         # Use all_objects (bypasses SoftDeleteManager) when:
         #   • listing with ?is_archived=true, OR
@@ -726,7 +747,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin':
             return qs
         if user.company_id:
-            return qs.filter(column__board__company_id=user.company_id)
+            return qs.filter(**{self.company_lookup_filter: user.company_id})
         return qs.none()
 
     def get_serializer_class(self):
@@ -1291,6 +1312,9 @@ class CommentViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return Comment.objects.none()
+        # CompanyIsolationMixin not used: Comment has no direct company FK.
+        # Isolation is enforced via _get_task_or_403() which traverses
+        # task -> column -> board -> company.
         self._get_task_or_403()
         return Comment.objects.filter(task_id=self.kwargs.get('task_pk')).select_related('author')
 
@@ -1387,6 +1411,10 @@ class ChecklistViewSet(viewsets.ViewSet):
       POST   /crm/tasks/<task_id>/checklists/   — create checklist
       GET    /crm/tasks/<task_id>/checklists/   — list checklists
       DELETE /crm/checklists/<id>/              — delete checklist
+
+    CompanyIsolationMixin not used: Checklist has no direct company FK.
+    Isolation is enforced per-action via _get_task_or_403() / inline checks
+    that traverse checklist -> task -> column -> board -> company.
     """
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
@@ -1497,6 +1525,10 @@ class ChecklistItemViewSet(viewsets.ViewSet):
       POST   /crm/checklists/<id>/items/   — add item to checklist
       PATCH  /crm/items/<id>/              — update item
       DELETE /crm/items/<id>/              — delete item, re-normalise order
+
+    CompanyIsolationMixin not used: ChecklistItem has no direct company FK.
+    Isolation is enforced per-action via _get_checklist_or_403() / _get_item_or_403()
+    which traverse item -> checklist -> task -> column -> board -> company.
     """
     permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
 
@@ -1660,6 +1692,9 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
             return TaskAttachment.objects.none()
+        # CompanyIsolationMixin not used: TaskAttachment has no direct company FK.
+        # Isolation is enforced via _get_task_or_403() which traverses
+        # task -> column -> board -> company.
         task = self._get_task_or_403()
         return TaskAttachment.objects.filter(task=task).select_related('uploaded_by', 'storage_file')
 

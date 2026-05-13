@@ -161,6 +161,18 @@ class IsOwnerOrAdmin(_AuthenticatedPermission):
         return False
 
 
+class IsSuperAdminOrReception(_AuthenticatedPermission):
+    """
+    Allows access only to superadmin and users with role='reception'.
+
+    Used for endpoints operated at a physical reception desk (e.g. QR validation).
+    Returns 401 for unauthenticated requests and 403 for all other roles.
+    """
+
+    def _has_role_permission(self, request, view):
+        return request.user.role in ('superadmin', 'reception')
+
+
 class IsOwnerOrSuperAdmin(_AuthenticatedPermission):
     """
     Object-level permission for actions that require physical presence or

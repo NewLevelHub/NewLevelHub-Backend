@@ -31,6 +31,7 @@ from apps.core.permissions import (
     IsCompanyMember,
     IsCompanyAdminOrReadOnly,
     IsOwnerOrAdmin,
+    IsSuperAdminOrReception,
 )
 from apps.core.mixins import CompanyIsolationMixin, CompanyQuerySetMixin
 
@@ -359,6 +360,44 @@ class TestIsOwnerOrAdmin:
 
 
 # ---------------------------------------------------------------------------
+# IsSuperAdminOrReception
+# ---------------------------------------------------------------------------
+
+class TestIsSuperAdminOrReception:
+    perm = IsSuperAdminOrReception()
+
+    def test_unauthenticated_returns_false(self):
+        user = _make_user('reception', authenticated=False)
+        request = _make_request(user=user)
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_superadmin_allowed(self):
+        request = _make_request(user=_make_user('superadmin'))
+        assert self.perm.has_permission(request, _view()) is True
+
+    def test_reception_allowed(self):
+        request = _make_request(user=_make_user('reception', company_id=1))
+        assert self.perm.has_permission(request, _view()) is True
+
+    def test_employee_denied(self):
+        request = _make_request(user=_make_user('employee', company_id=1))
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_company_admin_denied(self):
+        request = _make_request(user=_make_user('company_admin', company_id=1))
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_guest_denied(self):
+        request = _make_request(user=_make_user('guest'))
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_anonymous_user_none_denied(self):
+        request = _make_request()
+        request.user = None
+        assert self.perm.has_permission(request, _view()) is False
+
+
+# ---------------------------------------------------------------------------
 # CompanyIsolationMixin
 # ---------------------------------------------------------------------------
 
@@ -626,6 +665,7 @@ class TestUnauthenticatedReturns401:
         IsCompanyMember(),
         IsCompanyAdminOrReadOnly(),
         IsOwnerOrAdmin(),
+        IsSuperAdminOrReception(),
     ]
 
     def _unauthenticated_request(self, method='GET'):

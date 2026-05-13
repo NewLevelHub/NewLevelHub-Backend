@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.bookings.models import Booking, Resource
+from apps.bookings.models import Booking, BookingCancellationAudit, Resource
 from apps.companies.models import Company
 from apps.notifications.models import Notification
 from apps.users.models import User
@@ -311,3 +311,21 @@ class TestAdminCancelReservation:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_admin_cancel_creates_cancellation_audit(
+        self, api_client, company_admin_a, bookings_dataset
+    ):
+        booking = bookings_dataset['booking_a_confirmed']
+        api_client.force_authenticate(user=company_admin_a)
+
+        response = api_client.post(
+            f'{RESERVATIONS_URL}{booking.id}/admin-cancel/',
+            {'reason': 'Policy violation'},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        audit = BookingCancellationAudit.objects.filter(booking=booking).first()
+        assert audit is not None
+        assert audit.cancelled_by_id == company_admin_a.id
+        assert audit.cancel_reason == 'Policy violation'

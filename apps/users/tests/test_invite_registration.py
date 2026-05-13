@@ -100,12 +100,12 @@ class TestInviteRegistration:
         user = User.objects.get(email=invitation.email)
         assert user.company_id == invitation.company_id
         assert user.role == invitation.role
-        assert user.is_email_verified is False
+        assert user.is_email_verified is True
 
         invitation.refresh_from_db()
         assert invitation.is_used is True
         assert invitation.used_at is not None
-        mock_send_email.assert_called_once()
+        mock_send_email.assert_not_called()
 
     @patch('apps.users.views.send_verification_email.delay')
     def test_post_register_by_invite_rejoins_removed_user(
@@ -135,11 +135,10 @@ class TestInviteRegistration:
         user = User.objects.get(email=invitation.email)
         assert user.company_id == invitation.company_id
         assert user.is_active is True
-        assert user.is_email_verified is False
         assert user.check_password('StrongPass123!')
         invitation.refresh_from_db()
         assert invitation.is_used is True
-        mock_send_email.assert_called_once()
+        mock_send_email.assert_not_called()
 
     def test_post_register_by_invite_used_token_returns_400(self, api_client, invitation):
         invitation.is_used = True

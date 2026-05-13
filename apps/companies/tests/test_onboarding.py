@@ -309,7 +309,7 @@ class TestInvitedCompanyAdminBoardOnboarding:
         )
         assert reg.status_code == status.HTTP_201_CREATED
         new_user = User.objects.get(email='invited.admin@onboarding-board.test')
-        assert new_user.is_email_verified is False
+        assert new_user.is_email_verified is True
 
         auth(api_client, new_user)
         board_resp = api_client.post(BOARDS_URL, {'name': 'Onboarding Board'}, format='json')

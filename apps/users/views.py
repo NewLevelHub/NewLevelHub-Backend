@@ -179,9 +179,6 @@ def register_by_invite(request):
     serializer = InviteRegistrationSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     user = serializer.save()
-    if not user.is_email_verified:
-        token = create_email_verification_token(user)
-        send_verification_email.delay(user.id, str(token.token))
     tokens = _get_tokens(user, remember_me=False)
     response = Response(
         {'user': UserProfileSerializer(user, context={'request': request}).data, 'tokens': tokens},

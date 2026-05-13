@@ -206,8 +206,7 @@ class IsSuperAdminOrReception(BasePermission):
         ),
         400: OpenApiResponse(description='Invalid or missing QR code in payload'),
         401: OpenApiResponse(description='Not authenticated'),
-        403: OpenApiResponse(description='Pass not yet active or expired (time-based check), '
-                             'or only superadmin and reception can validate'),
+        403: OpenApiResponse(description='Only superadmin and reception can validate'),
     },
 )
 @api_view(['POST'])
@@ -224,22 +223,15 @@ def validate_qr(request):
 
     now = timezone.now()
 
-    # Check not-yet-active (before start time) — must come before expiry check
     if now < guest_pass.valid_from:
-        formatted = guest_pass.valid_from.astimezone(
-            timezone.get_current_timezone()
-        ).strftime('%d.%m.%Y %H:%M')
-        return Response(
-            {'detail': f'Доступ ещё не разрешён. Начало доступа: {formatted}'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+        return Response({
+            'valid': False,
+            'reason': 'not_yet_active',
+            'available_from': guest_pass.valid_from.isoformat(),
+        })
 
-    # Check expired (after end time) — 403, not 200
     if guest_pass.valid_until < now:
-        return Response(
-            {'detail': 'Срок действия QR-кода истек'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
+        return Response({'valid': False, 'reason': 'expired'})
 
     if guest_pass.status == 'revoked':
         return Response({'valid': False, 'reason': 'revoked'})

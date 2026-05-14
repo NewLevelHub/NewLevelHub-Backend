@@ -166,7 +166,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                 existing.company = invitation.company
                 existing.role = invitation.role
                 existing.is_active = True
-                existing.is_email_verified = True
+                existing.is_email_verified = False
                 existing.save(
                     update_fields=[
                         'first_name',
@@ -191,8 +191,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                         password=validated_data['password'],
                         company=invitation.company,
                         role=invitation.role,
-                        # Invite token proves control of this inbox — same assurance as link verification.
-                        is_email_verified=True,
+                        is_email_verified=False,
                     )
                 except IntegrityError as exc:
                     raise serializers.ValidationError(
@@ -223,6 +222,8 @@ class LoginSerializer(serializers.Serializer):
         user = authenticate(email=email, password=password)
         if not user:
             raise serializers.ValidationError('Invalid credentials')
+        if not user.is_email_verified:
+            raise PermissionDenied('Email not verified. Please check your inbox.')
         attrs['user'] = user
         return attrs
 

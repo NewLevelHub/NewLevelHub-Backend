@@ -79,7 +79,7 @@ class TestInviteRegistration:
         assert 'email' in response.data['detail']
 
     @patch('apps.users.views.send_verification_email.delay')
-    def test_post_register_by_invite_creates_user_marks_invite_used_and_returns_tokens(
+    def test_post_register_by_invite_creates_user_marks_invite_used_and_sends_verification(
         self, mock_send_email, api_client, invitation
     ):
         payload = {
@@ -92,20 +92,18 @@ class TestInviteRegistration:
         response = api_client.post(REGISTER_INVITE_URL, payload, format='json')
 
         assert response.status_code == status.HTTP_201_CREATED
-        assert 'tokens' in response.data
-        assert response.data['user']['email'] == invitation.email
-        assert response.data['user']['company']['id'] == invitation.company_id
-        assert response.data['user']['role'] == invitation.role
+        assert 'tokens' not in response.data
+        assert 'detail' in response.data
 
         user = User.objects.get(email=invitation.email)
         assert user.company_id == invitation.company_id
         assert user.role == invitation.role
-        assert user.is_email_verified is True
+        assert user.is_email_verified is False
 
         invitation.refresh_from_db()
         assert invitation.is_used is True
         assert invitation.used_at is not None
-        mock_send_email.assert_not_called()
+        mock_send_email.assert_called_once()
 
     @patch('apps.users.views.send_verification_email.delay')
     def test_post_register_by_invite_rejoins_removed_user(
@@ -131,14 +129,15 @@ class TestInviteRegistration:
             format='json',
         )
         assert response.status_code == status.HTTP_201_CREATED
-        assert response.data['user']['company']['id'] == invitation.company_id
+        assert 'tokens' not in response.data
         user = User.objects.get(email=invitation.email)
         assert user.company_id == invitation.company_id
         assert user.is_active is True
+        assert user.is_email_verified is False
         assert user.check_password('StrongPass123!')
         invitation.refresh_from_db()
         assert invitation.is_used is True
-        mock_send_email.assert_not_called()
+        mock_send_email.assert_called_once()
 
     def test_post_register_by_invite_used_token_returns_400(self, api_client, invitation):
         invitation.is_used = True

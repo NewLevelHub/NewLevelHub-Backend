@@ -28,6 +28,7 @@ def user(db):
         password='StrongPass123!',
         first_name='JWT',
         last_name='User',
+        is_email_verified=True,
     )
 
 

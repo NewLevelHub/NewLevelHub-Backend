@@ -67,6 +67,7 @@ def employee(db, company):
         last_name='Loyee',
         role='employee',
         company=company,
+        is_email_verified=True,
     )
 
 

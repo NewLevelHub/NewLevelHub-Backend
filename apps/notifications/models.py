@@ -62,6 +62,31 @@ class Notification(TimeStampedModel):
 
 
 class NotificationPreference(TimeStampedModel):
+    """
+    Per-user notification preference toggles.
+
+    Design: opt-out vs opt-in defaults for email fields
+    ---------------------------------------------------
+    Opt-out by default (email default=True) — core transactional notifications
+    users always expect to receive and rarely want to miss:
+      - booking_confirmed_email   : booking creation confirmation
+      - task_assigned_email       : assigned to a CRM task
+      - invitation_email          : company invitation received
+      - guest_validated_email     : guest pass approved (company_admin)
+      - leave_review_email        : leave request pending review (company_admin)
+
+    Opt-in by default (email default=False) — informational or potentially
+    noisy notifications where email delivery would be excessive by default:
+      - task_moved_email           : task column changed
+      - task_comment_email         : comment added to a task
+      - task_deadline_email        : task deadline approaching
+      - service_request_update_email : service request status update
+      - announcement_email         : company/building announcements
+
+    All in_app toggles default to True so users always receive in-app
+    notifications regardless of their email preference.
+    """
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
         related_name='notification_preferences',

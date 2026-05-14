@@ -16,10 +16,8 @@ from .schedule import busy_slots_for_resource, is_soon_available, seven_day_rang
 User = get_user_model()
 
 # Type-specific validation constants
-_DESK_MAX_ADVANCE_DAYS = 14
 _MEETING_ROOM_MIN_MINUTES = 30
 _MEETING_ROOM_MAX_MINUTES = 240  # 4 hours
-_PARKING_MAX_ADVANCE_DAYS = 7
 _CAPSULE_MIN_MINUTES = 60
 _CAPSULE_MAX_MINUTES = 480  # 8 hours
 
@@ -440,16 +438,19 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         local_start = timezone.localtime(start_time)
         local_end = timezone.localtime(end_time)
 
-        if rtype == 'desk':
-            advance_days = resource.advance_booking_days \
-                if resource.advance_booking_days is not None else _DESK_MAX_ADVANCE_DAYS
-            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=advance_days)).date()
+        # advance_booking_days applies uniformly to ALL resource types.
+        # If the field is null (not possible with the current non-nullable model field,
+        # but handled defensively) → no advance limit is enforced.
+        if resource.advance_booking_days is not None:
+            max_start_date = (
+                timezone.localtime(timezone.now()) + timedelta(days=resource.advance_booking_days)
+            ).date()
             if timezone.localtime(start_time).date() > max_start_date:
                 raise serializers.ValidationError(
-                    {'detail': f'Desk booking must start within {advance_days} days from now.'}
+                    {'detail': f'Booking must start within {resource.advance_booking_days} days from now.'}
                 )
 
-        elif rtype == 'meeting_room':
+        if rtype == 'meeting_room':
             if duration_minutes < _MEETING_ROOM_MIN_MINUTES:
                 raise serializers.ValidationError(
                     {'detail': 'Meeting room booking minimum duration is 30 minutes.'}
@@ -473,13 +474,6 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'detail': 'Parking booking must be whole-day only '
                                '(start 00:00, end 23:59 or next day 00:00).'}
-                )
-            advance_days = resource.advance_booking_days \
-                if resource.advance_booking_days is not None else _PARKING_MAX_ADVANCE_DAYS
-            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=advance_days)).date()
-            if timezone.localtime(start_time).date() > max_start_date:
-                raise serializers.ValidationError(
-                    {'detail': f'Parking booking must start within {advance_days} days from now.'}
                 )
 
         elif rtype == 'capsule':
@@ -599,6 +593,11 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'start_time': 'Booking start time must be in the future.'}
             )
+        self._validate_type_specific_rules(
+            resource=attrs['resource'],
+            start_time=attrs['start_time'],
+            end_time=attrs['end_time'],
+        )
         return attrs
 
     def create(self, validated_data):
@@ -620,11 +619,6 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 end_time=end_time,
             )
             self._validate_availability_window(
-                resource=resource,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            self._validate_type_specific_rules(
                 resource=resource,
                 start_time=start_time,
                 end_time=end_time,

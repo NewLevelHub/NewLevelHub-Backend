@@ -305,7 +305,9 @@ class TestParkingValidation:
         assert 'whole day' in str(resp.json()).lower() or 'whole-day' in str(resp.json()).lower()
 
     def test_parking_beyond_7_days_returns_400(self, api_client, employee):
-        resource = _make_resource('parking')
+        # Explicitly set advance_booking_days=7 to test the 7-day enforcement.
+        # The model default is 14 (shared across types); each resource controls its own window.
+        resource = _make_resource('parking', advance_booking_days=7)
         api_client.force_authenticate(user=employee)
         day = _next_weekday(8)
         start = day.replace(hour=0, minute=0, second=0, microsecond=0)

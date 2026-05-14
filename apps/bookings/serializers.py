@@ -98,6 +98,8 @@ class ResourceSerializer(serializers.ModelSerializer):
             'assigned_company',
             'min_duration_minutes',
             'max_duration_minutes',
+            'advance_booking_days',
+            'min_cancel_minutes',
             'availability_start',
             'availability_end',
             'availability_days',
@@ -439,10 +441,12 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         local_end = timezone.localtime(end_time)
 
         if rtype == 'desk':
-            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_DESK_MAX_ADVANCE_DAYS)).date()
+            advance_days = resource.advance_booking_days \
+                if resource.advance_booking_days is not None else _DESK_MAX_ADVANCE_DAYS
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=advance_days)).date()
             if timezone.localtime(start_time).date() > max_start_date:
                 raise serializers.ValidationError(
-                    {'detail': 'Desk booking must start within 14 days from now.'}
+                    {'detail': f'Desk booking must start within {advance_days} days from now.'}
                 )
 
         elif rtype == 'meeting_room':
@@ -470,10 +474,12 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                     {'detail': 'Parking booking must be whole-day only '
                                '(start 00:00, end 23:59 or next day 00:00).'}
                 )
-            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=_PARKING_MAX_ADVANCE_DAYS)).date()
+            advance_days = resource.advance_booking_days \
+                if resource.advance_booking_days is not None else _PARKING_MAX_ADVANCE_DAYS
+            max_start_date = (timezone.localtime(timezone.now()) + timedelta(days=advance_days)).date()
             if timezone.localtime(start_time).date() > max_start_date:
                 raise serializers.ValidationError(
-                    {'detail': 'Parking booking must start within 7 days from now.'}
+                    {'detail': f'Parking booking must start within {advance_days} days from now.'}
                 )
 
         elif rtype == 'capsule':

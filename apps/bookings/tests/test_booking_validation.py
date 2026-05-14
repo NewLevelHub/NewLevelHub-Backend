@@ -3,9 +3,9 @@ Tests for type-specific booking validation rules and resource-level
 min/max_duration validation.
 
 Rules:
-  - Desk: start_time must be within 14 days from now
+  - Desk: start_time must be within advance_booking_days from now (set on resource; default 14)
   - Meeting room: min 30 min, max 4 hours duration
-  - Parking: whole-day only (00:00–23:59 or next day 00:00), max 7 days ahead
+  - Parking: whole-day only (00:00–23:59 or next day 00:00); advance limit set on resource
   - Capsule: min 1h, max 8h duration
   - Resource-level min_duration / max_duration override
 """
@@ -72,10 +72,10 @@ def _make_resource(resource_type, **kwargs):
 
 @pytest.mark.django_db
 class TestDeskValidation:
-    """Desk: start_time must be within 14 days from now."""
+    """Desk: start_time must be within advance_booking_days from now (explicit on resource)."""
 
     def test_desk_booking_within_14_days_succeeds(self, api_client, employee):
-        resource = _make_resource('desk')
+        resource = _make_resource('desk', advance_booking_days=14)
         api_client.force_authenticate(user=employee)
         day = _next_weekday(1)
         start = day.replace(hour=10, minute=0, second=0, microsecond=0)
@@ -90,7 +90,7 @@ class TestDeskValidation:
         assert resp.status_code == status.HTTP_201_CREATED
 
     def test_desk_booking_beyond_14_days_returns_400(self, api_client, employee):
-        resource = _make_resource('desk')
+        resource = _make_resource('desk', advance_booking_days=14)
         api_client.force_authenticate(user=employee)
         day = _next_weekday(15)
         start = day.replace(hour=10, minute=0, second=0, microsecond=0)
@@ -107,8 +107,9 @@ class TestDeskValidation:
 
     def test_desk_booking_exactly_14_days_ahead_succeeds(self, api_client, employee):
         """D-02: boundary is inclusive — exactly now + 14 days must return 201."""
-        # Allow all 7 days so weekend boundary dates are not rejected
-        resource = _make_resource('desk', available_days=list(range(7)))
+        # Allow all 7 days so weekend boundary dates are not rejected.
+        # advance_booking_days=14 is set explicitly on the resource.
+        resource = _make_resource('desk', available_days=list(range(7)), advance_booking_days=14)
         api_client.force_authenticate(user=employee)
         now = timezone.now()
         # Exactly 14 days from now (truncate sub-second so it does not exceed boundary)
@@ -125,8 +126,8 @@ class TestDeskValidation:
 
     def test_desk_booking_15_days_returns_400(self, api_client, employee):
         """D-02 extra: one full day past the boundary must return 400 (boundary is date-based)."""
-        # today+14d (any time) is valid; today+15d is not
-        resource = _make_resource('desk', available_days=list(range(7)))
+        # advance_booking_days=14 is set explicitly; today+15d is not allowed.
+        resource = _make_resource('desk', available_days=list(range(7)), advance_booking_days=14)
         api_client.force_authenticate(user=employee)
         now = timezone.now()
         start = (now + timedelta(days=15)).replace(microsecond=0)
@@ -271,7 +272,7 @@ class TestMeetingRoomValidation:
 
 @pytest.mark.django_db
 class TestParkingValidation:
-    """Parking: whole-day only (00:00–23:59 or next day 00:00), max 7 days ahead."""
+    """Parking: whole-day only (00:00–23:59 or next day 00:00); advance limit from resource field."""
 
     def test_parking_whole_day_succeeds(self, api_client, employee):
         resource = _make_resource('parking')
@@ -305,7 +306,9 @@ class TestParkingValidation:
         assert 'whole day' in str(resp.json()).lower() or 'whole-day' in str(resp.json()).lower()
 
     def test_parking_beyond_7_days_returns_400(self, api_client, employee):
-        resource = _make_resource('parking')
+        # Explicitly set advance_booking_days=7 to test the 7-day enforcement.
+        # The model default is 14 (shared across types); each resource controls its own window.
+        resource = _make_resource('parking', advance_booking_days=7)
         api_client.force_authenticate(user=employee)
         day = _next_weekday(8)
         start = day.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -471,6 +474,52 @@ class TestResourceLevelDurationValidation:
         }, format='json')
 
         assert resp.status_code == status.HTTP_201_CREATED
+
+
+# ─── Meeting room advance_booking_days ────────────────────────────────
+
+@pytest.mark.django_db
+class TestMeetingRoomAdvanceBookingDays:
+    """
+    Meeting rooms now respect advance_booking_days uniformly — no special-casing.
+    advance_booking_days is a non-nullable PositiveIntegerField (default=14), so
+    the null case is impossible at the DB level with the current model; the code
+    handles it defensively (None → no limit enforced).
+    """
+
+    def test_meeting_room_too_far_ahead_returns_400(self, api_client, employee):
+        """Booking 4 days ahead when advance_booking_days=3 must return 400."""
+        resource = _make_resource('meeting_room', capacity=4, advance_booking_days=3)
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now + timedelta(days=4)).replace(second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert '3' in str(resp.json()), resp.json()
+
+    def test_meeting_room_within_advance_days_returns_201(self, api_client, employee):
+        """Booking 2 days ahead when advance_booking_days=3 must return 201."""
+        resource = _make_resource('meeting_room', capacity=4, advance_booking_days=3,
+                                  available_days=list(range(7)))
+        api_client.force_authenticate(user=employee)
+        now = timezone.now()
+        start = (now + timedelta(days=2)).replace(second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        resp = api_client.post(RESERVATIONS_URL, {
+            'resource_id': resource.id,
+            'start_time': start.isoformat(),
+            'end_time': end.isoformat(),
+        }, format='json')
+
+        assert resp.status_code == status.HTTP_201_CREATED, resp.json()
 
 
 # ─── Auth checks ──────────────────────────────────────────────────────

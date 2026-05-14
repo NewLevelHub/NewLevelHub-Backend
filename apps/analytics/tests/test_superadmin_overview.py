@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from django.db.models import Count
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -231,6 +232,18 @@ class TestSuperadminOverview:
     ):
         base = _aware_local(2026, 5, 2, 9, 0, 0)
 
+        # Capture pre-existing SR counts in the test's period window so assertions
+        # stay correct even if the test DB has stale committed records from a
+        # previously-crashed run (transactions not rolled back on SIGKILL).
+        _period_start = _aware_local(2026, 4, 26, 0, 0, 0)
+        _period_end = _aware_local(2026, 5, 2, 23, 59, 59, 999999)
+        _pre_sr = {
+            row['request_type']: row['c']
+            for row in ServiceRequest.objects.filter(
+                created_at__range=(_period_start, _period_end),
+            ).values('request_type').annotate(c=Count('id'))
+        }
+
         emp_a = User.objects.create_user(
             email='extended-a@x.test',
             password='p',
@@ -350,10 +363,10 @@ class TestSuperadminOverview:
         registrations = {row['week']: row['count'] for row in data['new_registrations']}
         assert sum(registrations.values()) >= 2
 
-        # service requests grouped by request_type
+        # service requests grouped by request_type (relative to pre-existing stale data)
         sr_by_type = {row['type']: row['count'] for row in data['service_requests_by_type']}
-        assert sr_by_type['cleaning'] == 2
-        assert sr_by_type['repair'] == 1
+        assert sr_by_type['cleaning'] == _pre_sr.get('cleaning', 0) + 2
+        assert sr_by_type['repair'] == _pre_sr.get('repair', 0) + 1
 
         # top tables are capped and include expected leaders
         assert len(data['top_resources']) <= 5

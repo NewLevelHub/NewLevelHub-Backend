@@ -1402,6 +1402,11 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 start_time=new_start,
                 end_time=new_end,
             )
+            validator._validate_type_specific_rules(
+                resource=resource,
+                start_time=new_start,
+                end_time=new_end,
+            )
             validator._ensure_no_conflicts(
                 resource=resource,
                 start_time=new_start,

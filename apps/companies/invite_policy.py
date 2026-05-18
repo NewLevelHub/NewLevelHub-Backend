@@ -19,10 +19,14 @@ def email_blocks_new_company_invitation(email: str, company) -> Optional[str]:
     Return an error message if a new invitation to this company must be rejected.
 
     None means the email may receive an invitation (e.g. user was removed from the
-    company and the row remains with company=NULL).
+    company and the row remains with company=NULL, or the user is a guest being
+    upgraded to a company role).
     """
     user = lookup_user_by_invite_email(email)
     if user is None:
+        return None
+    # Guests can always be invited — the invite upgrades them to a company role.
+    if user.role == 'guest':
         return None
     if user.company_id == company.id and user.is_active:
         return 'User with this email is already a member of this company.'
@@ -43,6 +47,9 @@ def existing_user_cannot_accept_invite_error(user: User, invitation) -> Optional
     Return an error string if registration must fail; None if the user may re-join
     via this invitation (update existing row).
     """
+    # Guests can accept invites — the invite upgrades them to a company role.
+    if user.role == 'guest':
+        return None
     if user.company_id == invitation.company_id and user.is_active:
         return 'A user with this email is already registered.'
     if user.company_id is not None and user.company_id != invitation.company_id and user.is_active:

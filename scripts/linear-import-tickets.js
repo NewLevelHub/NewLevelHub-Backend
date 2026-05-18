@@ -150,13 +150,56 @@ function buildFullDescription(base, acceptanceCriteria, planning) {
   return parts.join("\n\n");
 }
 
-function pickBacklogState(states) {
-  const preferred = ["backlog", "triage", "todo"];
+function pickStateId(states, preferredName) {
   const nodes = states?.nodes || states || [];
+  if (preferredName && String(preferredName).trim()) {
+    const wanted = String(preferredName).trim().toLowerCase();
+    const exact = nodes.find((s) => String(s.name).toLowerCase() === wanted);
+    if (exact?.id) return exact.id;
+  }
+
+  const preferred = ["backlog", "triage", "todo"];
   return (
     nodes.find((s) => preferred.includes(String(s.name).toLowerCase()))?.id ??
     null
   );
+}
+
+async function resolveCycleId(teamId, cycleName) {
+  if (!cycleName || !String(cycleName).trim()) return null;
+  const wantedRaw = String(cycleName).trim();
+  const wanted = wantedRaw.toLowerCase();
+
+  const data = await gql(
+    `query($teamId: ID!) {
+      cycles(
+        filter: { team: { id: { eq: $teamId } } }
+        first: 100
+      ) {
+        nodes {
+          id
+          name
+          number
+        }
+      }
+    }`,
+    { teamId }
+  );
+
+  const nodes = data.cycles?.nodes || [];
+  const exactByName = nodes.find(
+    (c) => String(c.name || "").toLowerCase() === wanted
+  );
+  if (exactByName?.id) return exactByName.id;
+
+  const m = wanted.match(/^(?:cycle\s*)?(\d+)$/i);
+  if (m) {
+    const n = Number(m[1]);
+    const byNumber = nodes.find((c) => Number(c.number) === n);
+    if (byNumber?.id) return byNumber.id;
+  }
+
+  throw new Error(`Cycle not found in team: ${wantedRaw}`);
 }
 
 function loadTickets(filePath) {
@@ -473,8 +516,38 @@ function parseCliArgs() {
   const raw = process.argv.slice(2);
   const dryRun = raw.includes("--dry-run");
   const args = raw.filter((a) => a !== "--dry-run");
-  const jsonPath = args[0] || defaultJsonPath;
-  return { jsonPath, dryRun };
+
+  let stateName =
+    process.env.LINEAR_TARGET_STATE || local.LINEAR_TARGET_STATE || null;
+  let cycleName =
+    process.env.LINEAR_TARGET_CYCLE || local.LINEAR_TARGET_CYCLE || null;
+
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--state" && args[i + 1]) {
+      stateName = args[i + 1];
+      i++;
+      continue;
+    }
+    if (a.startsWith("--state=")) {
+      stateName = a.slice("--state=".length);
+      continue;
+    }
+    if (a === "--cycle" && args[i + 1]) {
+      cycleName = args[i + 1];
+      i++;
+      continue;
+    }
+    if (a.startsWith("--cycle=")) {
+      cycleName = a.slice("--cycle=".length);
+      continue;
+    }
+    positional.push(a);
+  }
+
+  const jsonPath = positional[0] || defaultJsonPath;
+  return { jsonPath, dryRun, stateName, cycleName };
 }
 
 (async () => {
@@ -485,7 +558,7 @@ function parseCliArgs() {
     process.exit(1);
   }
 
-  const { jsonPath, dryRun } = parseCliArgs();
+  const { jsonPath, dryRun, stateName, cycleName } = parseCliArgs();
   let tickets;
   try {
     tickets = loadTickets(jsonPath);
@@ -507,10 +580,29 @@ function parseCliArgs() {
     process.exit(1);
   }
 
-  const stateId = pickBacklogState(team.states);
+  const stateId = pickStateId(team.states, stateName);
+  if (stateName && !stateId) {
+    console.error(`State not found in team: ${stateName}`);
+    process.exit(1);
+  }
+
+  let cycleId = null;
+  try {
+    cycleId = await resolveCycleId(team.id, cycleName);
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+
   console.log(`Team: ${team.name} (${team.key || team.id})`);
   console.log(`File: ${path.resolve(jsonPath)}`);
   console.log(`Tickets: ${tickets.length}`);
+  console.log(
+    `Target state: ${stateName || "(default backlog/triage/todo)"}`
+  );
+  if (cycleName) {
+    console.log(`Target cycle: ${cycleName}`);
+  }
   if (dryRun) {
     console.log("Mode: DRY-RUN (no writes to Linear)\n");
   } else {
@@ -552,6 +644,8 @@ function parseCliArgs() {
         description,
         ...(title ? { title } : {}),
         ...(labelIds.length ? { labelIds } : {}),
+        ...(stateId ? { stateId } : {}),
+        ...(cycleId ? { cycleId } : {}),
       };
 
       if (dryRun) {
@@ -561,6 +655,8 @@ function parseCliArgs() {
         console.log(`  → would set description (${description.length} chars)`);
         if (title) console.log(`  → would set title: ${title}`);
         if (labelIds.length) console.log(`  → would set ${labelIds.length} label(s)`);
+        if (stateId) console.log(`  → would set state`);
+        if (cycleId) console.log(`  → would set cycle`);
       } else {
         const { issueUpdate } = await gql(
           `mutation($id: String!, $input: IssueUpdateInput!) {
@@ -607,6 +703,7 @@ function parseCliArgs() {
     const input = {
       teamId: team.id,
       ...(stateId ? { stateId } : {}),
+      ...(cycleId ? { cycleId } : {}),
       title,
       description,
       ...(labelIds.length ? { labelIds } : {}),

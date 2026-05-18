@@ -1,0 +1,244 @@
+{
+  "_comment": "Распределение тикетов Cycle 7 между разработчиками. Перед запуском убедись что email-адреса верные.",
+  "assignees": {
+    "baidar": "baidar.zh@gmail.com",
+    "beka": "yessimkhanuly@gmail.com"
+  },
+  "assignments": [
+    {
+      "identifier": "DEV-245",
+      "assignee": "baidar",
+      "_note": "[Guest][Bookings] Запрет бронирования — backend RBAC + frontend"
+    },
+    {
+      "identifier": "DEV-244",
+      "assignee": "baidar",
+      "_note": "[Employee][Leaves] Редактирование/отмена заявок — backend + frontend"
+    },
+    {
+      "identifier": "DEV-243",
+      "assignee": "beka",
+      "_note": "[Employee][Dashboard] Маршрутизация — только frontend"
+    },
+    {
+      "identifier": "DEV-242",
+      "assignee": "baidar",
+      "_note": "[Leaves][Localization] Ошибки отпусков — backend+frontend, тот же модуль что DEV-241/244"
+    },
+    {
+      "identifier": "DEV-241",
+      "assignee": "baidar",
+      "_note": "[Leaves][Approval] Self-approve + другой admin — Parallel:no, полный стек"
+    },
+    {
+      "identifier": "DEV-240",
+      "assignee": "baidar",
+      "_note": "[Storage] Убрать шеринг файлов — Parallel:no, полный стек"
+    },
+    {
+      "identifier": "DEV-239",
+      "assignee": "beka",
+      "_note": "[Guest Pass] Предзаполнение времени — только frontend"
+    },
+    {
+      "identifier": "DEV-238",
+      "assignee": "beka",
+      "_note": "[Bookings][Admin] Сортировка списка — UI/UX, минимальный backend"
+    },
+    {
+      "identifier": "DEV-237",
+      "assignee": "beka",
+      "_note": "[Bookings][Admin] Отменённая бронь отображается как активная — UI-баг"
+    },
+    {
+      "identifier": "DEV-236",
+      "assignee": "baidar",
+      "_note": "[Bookings][Recurring] Включить текущий день — Parallel:no; DEV-235 намеренно у того же разработчика"
+    },
+    {
+      "identifier": "DEV-235",
+      "assignee": "baidar",
+      "_note": "[Bookings][Recurring] Отображение в календаре — зависит от логики DEV-236, оба у Baidar"
+    },
+    {
+      "identifier": "DEV-234",
+      "assignee": "baidar",
+      "_note": "[Leaves][Company Admin] Баг подачи заявки — backend+frontend, тот же модуль leaves"
+    },
+    {
+      "identifier": "DEV-233",
+      "assignee": "baidar",
+      "_note": "[Onboarding Templates] Шаблон по умолчанию — backend+frontend"
+    },
+    {
+      "identifier": "DEV-232",
+      "assignee": "beka",
+      "_note": "[Invites][Localization] Локализация ролей — только frontend+i18n"
+    },
+    {
+      "identifier": "DEV-231",
+      "assignee": "baidar",
+      "_note": "[Onboarding] Баг загрузки через инвайт — Parallel:no, полный стек"
+    },
+    {
+      "identifier": "DEV-230",
+      "assignee": "baidar",
+      "_note": "[Settings][CRM] Унификация endpoint лейблов — backend+frontend"
+    },
+    {
+      "identifier": "DEV-229",
+      "assignee": "baidar",
+      "_note": "[Company Admin][Users] Вкладка Сотрудники + статус email — backend+frontend"
+    },
+    {
+      "identifier": "DEV-228",
+      "assignee": "baidar",
+      "_note": "[Analytics] Top-5 методика — Parallel:no, backend-heavy"
+    },
+    {
+      "identifier": "DEV-227",
+      "assignee": "baidar",
+      "_note": "[Analytics] Объединить графики загруженности — backend+frontend"
+    },
+    {
+      "identifier": "DEV-226",
+      "assignee": "baidar",
+      "_note": "[Analytics] Загруженность по конкретным ресурсам — Parallel:no; DEV-225 у Beka независима (только i18n заголовков)"
+    },
+    {
+      "identifier": "DEV-225",
+      "assignee": "beka",
+      "_note": "[Analytics][CSV] Локализация заголовков экспорта — i18n, не зависит от расчётной логики DEV-226/228"
+    },
+    {
+      "identifier": "DEV-224",
+      "assignee": "baidar",
+      "_note": "[CRM Boards] Показать компанию, поиск, фильтр, кнопка назад — backend+frontend"
+    },
+    {
+      "identifier": "DEV-223",
+      "assignee": "baidar",
+      "_note": "[CRM Boards] Ограничить исполнителей задач — backend+frontend"
+    },
+    {
+      "identifier": "DEV-222",
+      "assignee": "baidar",
+      "_note": "[Service Requests] Роль ответственного — Parallel:no, RBAC полный стек"
+    },
+    {
+      "identifier": "DEV-221",
+      "assignee": "baidar",
+      "_note": "[Service Requests] Фильтр ресурсов по этажу — backend+frontend"
+    },
+    {
+      "identifier": "DEV-220",
+      "assignee": "baidar",
+      "_note": "[Building Map] Удаление этажа — backend+frontend"
+    },
+    {
+      "identifier": "DEV-219",
+      "assignee": "beka",
+      "_note": "[Access Log][CSV] Экспорт = таблица, русские заголовки — DEV-218 тоже у Beka, порядок сама определит"
+    },
+    {
+      "identifier": "DEV-218",
+      "assignee": "beka",
+      "_note": "[Access Log] Колонка компании — frontend + небольшой backend, сделать до DEV-219"
+    },
+    {
+      "identifier": "DEV-217",
+      "assignee": "baidar",
+      "_note": "[Access Log] Обновление в реальном времени — backend (polling/websocket) + frontend"
+    },
+    {
+      "identifier": "DEV-216",
+      "assignee": "beka",
+      "_note": "[Auth] Валидация домена email — UI-валидация + локализованная ошибка"
+    },
+    {
+      "identifier": "DEV-215",
+      "assignee": "beka",
+      "_note": "[Access] Формат даты dd.mm.yyyy — только frontend"
+    },
+    {
+      "identifier": "DEV-214",
+      "assignee": "beka",
+      "_note": "[Access][Localization] Ошибки и статусы на странице пропуска — i18n frontend"
+    },
+    {
+      "identifier": "DEV-213",
+      "assignee": "baidar",
+      "_note": "[Access][Reception] QR только через камеру — backend permission + frontend"
+    },
+    {
+      "identifier": "DEV-212",
+      "assignee": "baidar",
+      "_note": "[Bookings][Superadmin] Участники из любой компании — backend+frontend"
+    },
+    {
+      "identifier": "DEV-211",
+      "assignee": "beka",
+      "_note": "[Bookings][Admin] Скрыть нерелевантные статусы — UI-фильтрация, Beka делает вместе с DEV-237/238"
+    },
+    {
+      "identifier": "DEV-210",
+      "assignee": "baidar",
+      "_note": "[Bookings] Страница деталей ресурса по клику — backend+frontend"
+    },
+    {
+      "identifier": "DEV-209",
+      "assignee": "baidar",
+      "_note": "[Resources][Building Map] Выбор существующего этажа — Parallel:no, форма создания ресурса"
+    },
+    {
+      "identifier": "DEV-208",
+      "assignee": "baidar",
+      "_note": "[Resources] Мульти-загрузка фото — backend+frontend"
+    },
+    {
+      "identifier": "DEV-207",
+      "assignee": "baidar",
+      "_note": "[Resources] Явная активация/деактивация — backend+frontend"
+    },
+    {
+      "identifier": "DEV-206",
+      "assignee": "baidar",
+      "_note": "[Resources] Привязка к компании — Parallel:no, баг создания ресурса"
+    },
+    {
+      "identifier": "DEV-205",
+      "assignee": "beka",
+      "_note": "[Resources] UI отображения времени — только frontend, не пересекается с формой создания"
+    },
+    {
+      "identifier": "DEV-204",
+      "assignee": "beka",
+      "_note": "[Resources][Localization] Полная русификация — только frontend+i18n"
+    },
+    {
+      "identifier": "DEV-203",
+      "assignee": "baidar",
+      "_note": "[Companies] Настройки компании для superadmin — backend+frontend"
+    },
+    {
+      "identifier": "DEV-202",
+      "assignee": "baidar",
+      "_note": "[Invites] Инвайт для guest-email — backend (роли) + frontend"
+    },
+    {
+      "identifier": "DEV-201",
+      "assignee": "beka",
+      "_note": "[Localization] Ошибки в критичных user-flow — i18n, преимущественно frontend"
+    },
+    {
+      "identifier": "DEV-200",
+      "assignee": "baidar",
+      "_note": "[Superadmin][Users] Объединить Пользователи+Команда — Parallel:no, большой рефактор навигации"
+    },
+    {
+      "identifier": "DEV-199",
+      "assignee": "beka",
+      "_note": "[Superadmin][Dashboard] Маршрутизация быстрых действий — только frontend"
+    }
+  ]
+}

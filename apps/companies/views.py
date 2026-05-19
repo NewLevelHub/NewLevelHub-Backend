@@ -25,7 +25,7 @@ from apps.access.models import GuestPass
 from apps.companies.limits import get_company_storage_used_bytes
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
-from apps.hr.models import LeaveRequest
+from apps.hr.models import LeaveBalance, LeaveRequest
 from apps.users.models import User
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from .filters import CompanyFilter, CompanyMemberFilter, CompanyDirectoryFilter
@@ -405,8 +405,16 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if request.method == 'PATCH':
             serializer = CompanySettingsSerializer(settings_obj, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
+            old_vacation_days = settings_obj.vacation_days_per_year
             serializer.save()
             settings_obj.refresh_from_db()
+            new_vacation_days = settings_obj.vacation_days_per_year
+            if new_vacation_days != old_vacation_days:
+                from datetime import date as _date
+                LeaveBalance.objects.filter(
+                    user__company=company,
+                    year__gte=_date.today().year,
+                ).update(total_days=new_vacation_days)
 
         return Response(CompanySettingsSerializer(settings_obj).data)
 

@@ -516,7 +516,7 @@ class TestResourceCatalogOrdering:
 
 @pytest.mark.django_db
 class TestResourceCatalogAssignedVisibility:
-    def test_basic_hides_assigned_even_own_company(
+    def test_basic_sees_own_company_assigned(
         self, api_client, superadmin, employee, company
     ):
         api_client.force_authenticate(user=superadmin)
@@ -534,7 +534,7 @@ class TestResourceCatalogAssignedVisibility:
         api_client.force_authenticate(user=employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}
-        assert rid not in ids
+        assert rid in ids
 
     def test_premium_sees_own_assigned(self, api_client, superadmin, premium_employee, premium_company):
         api_client.force_authenticate(user=superadmin)

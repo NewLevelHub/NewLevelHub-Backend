@@ -251,6 +251,10 @@ class ResourceListSerializer(serializers.ModelSerializer):
     status = serializers.SerializerMethodField()
     reason = serializers.SerializerMethodField()
     available_at = serializers.SerializerMethodField()
+    assigned_company = serializers.PrimaryKeyRelatedField(read_only=True)
+    assigned_company_name = serializers.CharField(
+        source='assigned_company.name', read_only=True, allow_null=True, default=None,
+    )
 
     class Meta:
         model = Resource
@@ -269,6 +273,8 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'availability_days',
             'parking_type',
             'capsule_zone',
+            'assigned_company',
+            'assigned_company_name',
             'status',
             'reason',
             'available_at',

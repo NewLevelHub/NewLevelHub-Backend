@@ -19,6 +19,8 @@ class ResourceFilter(django_filters.FilterSet):
     has_tv = django_filters.BooleanFilter()
     has_video_conf = django_filters.BooleanFilter()
     is_active = django_filters.BooleanFilter()
+    assigned_company = django_filters.NumberFilter(field_name='assigned_company_id')
+    company_id = django_filters.NumberFilter(field_name='assigned_company_id')
     # Интервал свободности (datetime): без пересечений с подтверждёнными бронированиями и блокировками.
     # Имена параметров совпадают с полями модели по смыслу запроса, не с TimeField available_from.
     available_from = django_filters.IsoDateTimeFilter(method='filter_free_interval')
@@ -26,7 +28,7 @@ class ResourceFilter(django_filters.FilterSet):
 
     class Meta:
         model = Resource
-        fields = ['resource_type', 'floor', 'is_active']
+        fields = ['resource_type', 'floor', 'is_active', 'assigned_company', 'company_id']
 
     def filter_equipment(self, queryset, name, value):
         if value in (None, ''):

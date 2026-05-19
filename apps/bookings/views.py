@@ -762,6 +762,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             'blocks',
             'unblock',
             'bulk_create',
+            'activate',
+            'deactivate',
         ):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -825,6 +827,47 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 title=f'Бронирование отменено: {resource.name}',
                 message=cancellation_reason,
             )
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Activate a resource (superadmin)',
+        request=None,
+        responses={
+            200: ResourceSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Resource not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='activate',
+            permission_classes=[IsSuperAdmin])
+    def activate(self, request, pk=None):
+        resource = self.get_object()
+        resource.is_active = True
+        resource.save(update_fields=['is_active', 'updated_at'])
+        return Response(ResourceSerializer(resource).data)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Deactivate a resource and cancel its future bookings (superadmin)',
+        request=None,
+        responses={
+            200: ResourceSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Resource not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='deactivate',
+            permission_classes=[IsSuperAdmin])
+    def deactivate(self, request, pk=None):
+        resource = self.get_object()
+        if not resource.is_active:
+            return Response(ResourceSerializer(resource).data)
+        resource.is_active = False
+        resource.save(update_fields=['is_active', 'updated_at'])
+        self._cancel_future_bookings(resource)
+        return Response(ResourceSerializer(resource).data)
 
     @extend_schema(
         tags=['Resources'],

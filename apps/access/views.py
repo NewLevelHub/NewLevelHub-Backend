@@ -1,9 +1,10 @@
 import csv
+import io
 from datetime import timedelta
 
 from django.core.cache import cache
 from django.db import transaction
-from django.http import HttpResponse
+from django.http import StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -310,6 +311,47 @@ class AccessLogViewSet(viewsets.ModelViewSet):
             return qs
         return qs.filter(guest_pass__company=user.company)
 
+    def _export_filter_queryset(self, request, qs):
+        """Apply filter/search backends, stripping company_id for non-superadmin users."""
+        filter_params = request.query_params.copy()
+        if request.user.role != 'superadmin':
+            filter_params.pop('company_id', None)
+
+        if self.filterset_class is not None:
+            filterset = self.filterset_class(filter_params, queryset=qs, request=request)
+            if filterset.is_valid():
+                qs = filterset.qs
+
+        from rest_framework.filters import SearchFilter, OrderingFilter
+        for backend_class in self.filter_backends:
+            if backend_class in (SearchFilter, OrderingFilter):
+                qs = backend_class().filter_queryset(request, qs, self)
+
+        return qs
+
+    EXPORT_HEADERS_RU = [
+        "Имя гостя",
+        "Email гостя",
+        "Компания",
+        "Пригласил",
+        "Проверил",
+        "Валидирован",
+        "Метод",
+    ]
+    EXPORT_HEADERS_EN = [
+        "Guest Name",
+        "Guest Email",
+        "Company",
+        "Invited By",
+        "Validated By",
+        "Validated At",
+        "Method",
+    ]
+    _EXPORT_HEADERS_BY_LANG = {
+        'ru': EXPORT_HEADERS_RU,
+        'en': EXPORT_HEADERS_EN,
+    }
+
     @extend_schema(
         tags=['Access'],
         summary='Export access logs as CSV',
@@ -317,36 +359,64 @@ class AccessLogViewSet(viewsets.ModelViewSet):
             OpenApiParameter('date_from', str, description='From date (YYYY-MM-DD)'),
             OpenApiParameter('date_to', str, description='To date (YYYY-MM-DD)'),
             OpenApiParameter('company_id', int, description='Filter by company (superadmin only)'),
+            OpenApiParameter('lang', str, description='Language for headers (default: ru)'),
         ],
         responses={200: OpenApiResponse(description='CSV file download')},
     )
     @action(detail=False, methods=['get'], url_path='export')
     def export(self, request):
-        qs = self.filter_queryset(self.get_queryset())
+        # Apply all standard filter backends via filter_queryset, but first
+        # strip company_id for non-superadmin users — their queryset is
+        # already scoped to their own company and adding a company_id from
+        # another company would wrongly return zero rows.
+        qs = self.get_queryset().order_by('-created_at')
+        qs = self._export_filter_queryset(request, qs)
 
-        response = HttpResponse(content_type='text/csv; charset=utf-8')
-        response['Content-Disposition'] = 'attachment; filename="access_logs.csv"'
+        today_str = timezone.localdate().strftime('%Y-%m-%d')
+        filename = f'access_logs_{today_str}.csv'
+        lang = request.query_params.get('lang', 'ru')
+        headers = self._EXPORT_HEADERS_BY_LANG.get(lang, self.EXPORT_HEADERS_RU)
 
-        writer = csv.writer(response)
-        writer.writerow(['id', 'guest_pass', 'invited_by', 'validated_at', 'validated_by',
-                         'entry_point', 'method', 'is_entry'])
+        def _iter_rows():
+            # UTF-8 BOM so Excel recognises Cyrillic correctly
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(headers)
+            yield '﻿' + buf.getvalue()
 
-        for log in qs:
-            invited_by = ''
-            if log.guest_pass and log.guest_pass.created_by:
-                invited_by = log.guest_pass.created_by.full_name
-            validated_by = log.checked_by.full_name if log.checked_by else ''
-            guest_pass_id = log.guest_pass_id or ''
+            for log in qs.iterator():
+                gp = log.guest_pass
+                if gp:
+                    guest_name = gp.guest_name
+                    guest_email = gp.guest_email
+                    company_name = gp.company.name if gp.company else ''
+                else:
+                    guest_name = ''
+                    guest_email = ''
+                    company_name = ''
 
-            writer.writerow([
-                log.id,
-                guest_pass_id,
-                invited_by,
-                log.created_at.isoformat() if log.created_at else '',
-                validated_by,
-                log.entry_point,
-                log.method,
-                log.is_entry,
-            ])
+                invited_by = ''
+                if gp and gp.created_by:
+                    invited_by = gp.created_by.full_name
 
+                validated_by = log.checked_by.full_name if log.checked_by else ''
+                validated_at = (
+                    log.created_at.strftime('%d.%m.%Y %H:%M') if log.created_at else ''
+                )
+
+                row_buf = io.StringIO()
+                row_writer = csv.writer(row_buf)
+                row_writer.writerow([
+                    guest_name,
+                    guest_email,
+                    company_name,
+                    invited_by,
+                    validated_by,
+                    validated_at,
+                    log.method or '',
+                ])
+                yield row_buf.getvalue()
+
+        response = StreamingHttpResponse(_iter_rows(), content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         return response

@@ -679,7 +679,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         else:
             qs = qs.filter(is_active=True)
             company = getattr(user, 'company', None)
-            if company and getattr(company, 'plan', None) == 'premium':
+            if company:
                 qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
             else:
                 qs = qs.filter(assigned_company__isnull=True)

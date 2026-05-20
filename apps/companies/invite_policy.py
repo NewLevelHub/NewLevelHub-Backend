@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List
 
 from apps.users.models import User
+
+
+def _i18n(key: str, params: dict = None) -> List[dict]:
+    """Return an _i18n-marked error list suitable for raise serializers.ValidationError(...)."""
+    return [{'_i18n': True, 'key': key, 'params': params or {}}]
 
 
 def lookup_user_by_invite_email(email: str) -> Optional[User]:
@@ -14,9 +19,9 @@ def lookup_user_by_invite_email(email: str) -> Optional[User]:
     return User.objects.filter(email__iexact=normalized).first()
 
 
-def email_blocks_new_company_invitation(email: str, company) -> Optional[str]:
+def email_blocks_new_company_invitation(email: str, company) -> Optional[List[dict]]:
     """
-    Return an error message if a new invitation to this company must be rejected.
+    Return an _i18n error list if a new invitation to this company must be rejected.
 
     None means the email may receive an invitation (e.g. user was removed from the
     company and the row remains with company=NULL).
@@ -25,28 +30,25 @@ def email_blocks_new_company_invitation(email: str, company) -> Optional[str]:
     if user is None:
         return None
     if user.company_id == company.id and user.is_active:
-        return 'User with this email is already a member of this company.'
+        return _i18n('company.invite_email_already_member')
     if user.company_id == company.id and not user.is_active:
-        return (
-            'A user with this email still belongs to this company but is deactivated. '
-            'Reactivate their account or remove them before sending a new invitation.'
-        )
+        return _i18n('company.invite_email_member_deactivated')
     if user.company_id is not None and user.company_id != company.id and user.is_active:
-        return 'User with this email is already an active member of another company.'
+        return _i18n('company.invite_email_in_another_company')
     return None
 
 
-def existing_user_cannot_accept_invite_error(user: User, invitation) -> Optional[str]:
+def existing_user_cannot_accept_invite_error(user: User, invitation) -> Optional[List[dict]]:
     """
     Invite registration: a User already exists for the invitation email.
 
-    Return an error string if registration must fail; None if the user may re-join
+    Return an _i18n error list if registration must fail; None if the user may re-join
     via this invitation (update existing row).
     """
     if user.company_id == invitation.company_id and user.is_active:
-        return 'A user with this email is already registered.'
+        return _i18n('users.email_already_registered')
     if user.company_id is not None and user.company_id != invitation.company_id and user.is_active:
-        return 'This account belongs to another organization. Log out and use the correct account.'
+        return _i18n('company.invite_email_registered_other_org')
     if user.company_id is None and user.is_active:
-        return 'A user with this email is already registered.'
+        return _i18n('users.email_already_registered')
     return None

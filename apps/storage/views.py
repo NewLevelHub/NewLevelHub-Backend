@@ -4,12 +4,15 @@ from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 from apps.companies.limits import (
     get_company_storage_used_bytes,
     notify_company_admins_limit_thresholds,
 )
+from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
+from apps.core.exceptions import LocalizedError, raise_validation_error
+from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyMember
 from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
@@ -87,7 +90,7 @@ class FolderViewSet(viewsets.ModelViewSet):
                 try:
                     queryset = queryset.filter(parent_id=int(parent_id))
                 except (TypeError, ValueError):
-                    raise ValidationError({'parent_id': 'Must be an integer or "null".'})
+                    raise_validation_error('parent_id', 'storage.parent_id_invalid')
         return queryset.order_by('-created_at')
 
     def _resolve_scope(self):
@@ -106,20 +109,20 @@ class FolderViewSet(viewsets.ModelViewSet):
         try:
             parent_id = int(parent_id)
         except (TypeError, ValueError):
-            raise ValidationError({'parent_id': 'Must be an integer, null, or empty.'})
+            raise_validation_error('parent_id', 'storage.parent_id_not_integer')
 
         try:
             parent = Folder.objects.get(pk=parent_id)
         except Folder.DoesNotExist:
-            raise ValidationError({'parent_id': 'Parent folder not found.'})
+            raise_validation_error('parent_id', 'storage.parent_folder_not_found')
 
         user = self.request.user
         if scope == 'personal':
             if parent.scope != 'personal' or parent.owner_id != user.id:
-                raise ValidationError({'parent_id': 'Personal parent folder is not accessible.'})
+                raise_validation_error('parent_id', 'storage.personal_parent_inaccessible')
         else:
             if user.role != 'superadmin' and (parent.scope != 'company' or parent.company_id != user.company_id):
-                raise ValidationError({'parent_id': 'Company parent folder is not accessible.'})
+                raise_validation_error('parent_id', 'storage.company_parent_inaccessible')
         return parent
 
     def create(self, request, *args, **kwargs):
@@ -241,7 +244,7 @@ class FileViewSet(viewsets.ModelViewSet):
                 try:
                     queryset = queryset.filter(folder_id=int(folder_id))
                 except (TypeError, ValueError):
-                    raise ValidationError({'folder_id': 'Must be an integer or "null".'})
+                    raise_validation_error('folder_id', 'storage.folder_id_invalid')
 
         return queryset.annotate(size=F('file_size')).order_by('-created_at')
 
@@ -260,13 +263,13 @@ class FileViewSet(viewsets.ModelViewSet):
         try:
             folder = Folder.objects.get(pk=int(folder_id))
         except (TypeError, ValueError, Folder.DoesNotExist):
-            raise ValidationError({'folder_id': 'Folder not found.'})
+            raise_validation_error('folder_id', 'storage.folder_not_found')
 
         user = self.request.user
         if folder.scope == 'personal' and folder.owner_id != user.id:
-            raise ValidationError({'folder_id': 'Personal folder is not accessible.'})
+            raise_validation_error('folder_id', 'storage.personal_folder_inaccessible')
         if folder.scope == 'company' and user.role != 'superadmin' and folder.company_id != user.company_id:
-            raise ValidationError({'folder_id': 'Company folder is not accessible.'})
+            raise_validation_error('folder_id', 'storage.company_folder_inaccessible')
         return folder
 
     def _get_share_for_user(self, file_obj, user):
@@ -292,12 +295,14 @@ class FileViewSet(viewsets.ModelViewSet):
 
         share = self._get_share_for_user(file_obj, user)
         if share is None:
-            raise PermissionDenied('You do not have access to this file.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('storage.file_access_denied', lang))
 
         share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
         required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
         if share_level < required_level:
-            raise PermissionDenied('You do not have enough permissions for this file action.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('storage.file_action_forbidden', lang))
 
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get('file')
@@ -313,7 +318,10 @@ class FileViewSet(viewsets.ModelViewSet):
             current_storage_used = get_company_storage_used_bytes(company)
             storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
             if current_storage_used + uploaded_size > storage_limit_bytes:
-                return Response({'detail': 'Storage limit exceeded'}, status=status.HTTP_400_BAD_REQUEST)
+                raise LocalizedError(
+                    code=STORAGE_LIMIT_EXCEEDED,
+                    i18n_key='storage.limit_exceeded',
+                )
         else:
             current_storage_used = 0
 
@@ -407,7 +415,8 @@ class FileViewSet(viewsets.ModelViewSet):
     def shares(self, request, pk=None):
         file_obj = self.get_object()
         if request.user.role != 'superadmin' and file_obj.owner_id != request.user.id:
-            raise PermissionDenied('Only the file owner can see share recipients.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('storage.recipients_owner_only', lang))
 
         queryset = FileShare.objects.filter(file=file_obj).order_by('-created_at')
         page = self.paginate_queryset(queryset)

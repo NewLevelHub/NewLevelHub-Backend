@@ -295,9 +295,9 @@ class TestCompanyListScoping:
         api_client.force_authenticate(user=user)
         response = api_client.get(COMPANIES_LIST_URL)
         assert response.status_code == status.HTTP_403_FORBIDDEN
-        assert response.data['error'] is True
-        assert response.data['detail']['code'] == 'company_not_assigned'
-        assert 'message' in response.data['detail']
+        assert response.data['success'] is False
+        assert response.data['error']['details']['code'] == 'company_not_assigned'
+        assert 'message' in response.data['error']['details']
 
 
 # ---------------------------------------------------------------------------

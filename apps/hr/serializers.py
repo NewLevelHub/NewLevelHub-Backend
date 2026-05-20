@@ -1,6 +1,8 @@
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.companies.models import CompanySettings
+from apps.core.exceptions import raise_validation_error
 from apps.users.models import User
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
@@ -37,10 +39,10 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         leave_type = attrs.get('leave_type')
 
         if start_date and end_date and start_date > end_date:
-            raise serializers.ValidationError({'start_date': 'start_date must be less than or equal to end_date.'})
+            raise_validation_error('start_date', 'hr.start_date_after_end_date')
 
         if start_date and start_date < timezone.localdate():
-            raise serializers.ValidationError({'start_date': 'start_date must be today or later.'})
+            raise_validation_error('start_date', 'hr.start_date_in_past')
 
         if start_date and end_date:
             user = self.instance.user if self.instance else self.context['request'].user
@@ -53,8 +55,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             if self.instance:
                 overlap_qs = overlap_qs.exclude(pk=self.instance.pk)
             if overlap_qs.exists():
-                raise serializers.ValidationError(
-                    {'non_field_errors': ['Cannot request leave on dates overlapping with approved leave.']}
+                raise DRFValidationError(
+                    {'non_field_errors': [{'_i18n': True, 'key': 'hr.leave_dates_overlap', 'params': {}}]}
                 )
 
             if leave_type in ('vacation', 'day_off'):
@@ -68,8 +70,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                     used_days = balance.used_days
                 remaining_days = max(total_days - used_days, 0)
                 if duration_days > remaining_days:
-                    raise serializers.ValidationError(
-                        {'non_field_errors': ['Not enough leave balance for selected dates.']}
+                    raise DRFValidationError(
+                        {'non_field_errors': [{'_i18n': True, 'key': 'hr.leave_balance_insufficient', 'params': {}}]}
                     )
 
         return attrs
@@ -95,7 +97,7 @@ class LeaveBalanceSetSerializer(serializers.Serializer):
 
     def validate_user_id(self, value):
         if not User.objects.filter(id=value).exists():
-            raise serializers.ValidationError('User not found.')
+            raise_validation_error('user_id', 'hr.user_not_found')
         return value
 
 

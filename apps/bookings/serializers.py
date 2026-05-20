@@ -6,9 +6,15 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import serializers
-from rest_framework.exceptions import APIException
 
 from apps.companies.models import Company
+from apps.core.error_codes import (
+    BOOKING_ADVANCE_DAYS_EXCEEDED,
+    BOOKING_DURATION_TOO_SHORT,
+    BOOKING_DURATION_TOO_LONG,
+    BOOKING_PARKING_WHOLE_DAY_ONLY,
+)
+from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.notifications.utils import create_notification
 from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
@@ -127,34 +133,24 @@ class ResourceSerializer(serializers.ModelSerializer):
         if rtype == 'meeting_room':
             if instance is None:
                 if 'capacity' not in data or data.get('capacity') is None:
-                    raise serializers.ValidationError(
-                        {'capacity': 'This field is required for meeting_room.'}
-                    )
+                    raise_validation_error('capacity', 'booking.capacity_required_for_meeting_room')
             if data.get('capacity') is not None and data['capacity'] < 1:
-                raise serializers.ValidationError(
-                    {'capacity': 'Capacity must be at least 1.'}
-                )
+                raise_validation_error('capacity', 'booking.capacity_min_one')
 
         if rtype == 'parking' and instance is None and 'parking_type' not in data:
-            raise serializers.ValidationError(
-                {'parking_type': 'This field is required for parking.'}
-            )
+            raise_validation_error('parking_type', 'booking.parking_type_required')
 
         if rtype == 'capsule' and instance is None:
             zone = data.get('capsule_zone', '') or ''
             if zone not in ('quiet', 'regular'):
-                raise serializers.ValidationError(
-                    {'capsule_zone': 'Must be "quiet" or "regular" for capsule.'}
-                )
+                raise_validation_error('capsule_zone', 'booking.capsule_zone_invalid')
 
         equipment = data.get('equipment', serializers.empty)
         if equipment is not serializers.empty and equipment is not None:
             if not isinstance(equipment, dict):
-                raise serializers.ValidationError({'equipment': 'Must be a JSON object.'})
+                raise_validation_error('equipment', 'booking.equipment_must_be_json')
             if rtype != 'meeting_room':
-                raise serializers.ValidationError(
-                    {'equipment': 'Equipment JSON is only used for meeting_room resources.'}
-                )
+                raise_validation_error('equipment', 'booking.equipment_meeting_room_only')
 
         availability_start = data.get(
             'available_from',
@@ -165,9 +161,7 @@ class ResourceSerializer(serializers.ModelSerializer):
             instance.available_until if instance else None,
         )
         if availability_start and availability_end and availability_start >= availability_end:
-            raise serializers.ValidationError(
-                {'availability_start': 'availability_start must be earlier than availability_end.'}
-            )
+            raise_validation_error('availability_start', 'booking.availability_start_after_end')
 
         return data
 
@@ -356,11 +350,6 @@ class ResourceBulkCreateSerializer(serializers.Serializer):
 
 
 class BookingCreateSerializer(serializers.ModelSerializer):
-    class BookingConflictException(APIException):
-        status_code = 409
-        default_detail = 'Selected time slot is already occupied.'
-        default_code = 'booking_conflict'
-
     resource_id = serializers.IntegerField(write_only=True, required=False)
     participant_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=[])
 
@@ -386,17 +375,15 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if resource is not None:
             return resource
         if resource_id is None:
-            raise serializers.ValidationError({'resource_id': 'This field is required.'})
+            raise_validation_error('resource_id', 'booking.resource_id_required')
         try:
             return Resource.objects.get(pk=resource_id)
-        except Resource.DoesNotExist as exc:
-            raise serializers.ValidationError({'resource_id': 'Resource does not exist.'}) from exc
+        except Resource.DoesNotExist:
+            raise_validation_error('resource_id', 'booking.resource_not_found')
 
     def _validate_access(self, *, resource, user):
         if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
-            raise serializers.ValidationError(
-                {'resource': 'Resource is assigned to another company.'}
-            )
+            raise_validation_error('resource_id', 'booking.resource_wrong_company')
 
     def _validate_availability_window(self, *, resource, start_time, end_time):
         local_start = timezone.localtime(start_time)
@@ -410,25 +397,19 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             and local_end.hour == 0 and local_end.minute == 0
         )
         if not is_parking_whole_day and local_start.date() != local_end.date():
-            raise serializers.ValidationError(
-                {'detail': 'Booking must be within a single day.'}
-            )
+            raise_validation_error('detail', 'booking.same_day_only')
 
         available_days = resource.available_days or list(range(7))
         weekday = local_start.weekday()
         if weekday not in available_days:
-            raise serializers.ValidationError(
-                {'detail': 'Booking is outside resource availability days.'}
-            )
+            raise_validation_error('detail', 'booking.unavailable_day')
 
         # Skip availability-hours check for whole-day parking bookings
         if not is_parking_whole_day:
             start_local_time = local_start.time()
             end_local_time = local_end.time()
             if start_local_time < resource.available_from or end_local_time > resource.available_until:
-                raise serializers.ValidationError(
-                    {'detail': 'Booking is outside resource availability hours.'}
-                )
+                raise_validation_error('detail', 'booking.outside_operating_hours')
 
     def _validate_type_specific_rules(self, *, resource, start_time, end_time):
         """Validate type-specific booking rules per resource type."""
@@ -446,18 +427,24 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 timezone.localtime(timezone.now()) + timedelta(days=resource.advance_booking_days)
             ).date()
             if timezone.localtime(start_time).date() > max_start_date:
-                raise serializers.ValidationError(
-                    {'detail': f'Booking must start within {resource.advance_booking_days} days from now.'}
+                raise LocalizedError(
+                    code=BOOKING_ADVANCE_DAYS_EXCEEDED,
+                    i18n_key='booking.advance_days_exceeded',
+                    params={'advance_days': resource.advance_booking_days},
                 )
 
         if rtype == 'meeting_room':
             if duration_minutes < _MEETING_ROOM_MIN_MINUTES:
-                raise serializers.ValidationError(
-                    {'detail': 'Meeting room booking minimum duration is 30 minutes.'}
+                raise LocalizedError(
+                    code=BOOKING_DURATION_TOO_SHORT,
+                    i18n_key='booking.duration_too_short',
+                    params={'min_minutes': _MEETING_ROOM_MIN_MINUTES},
                 )
             if duration_minutes > _MEETING_ROOM_MAX_MINUTES:
-                raise serializers.ValidationError(
-                    {'detail': 'Meeting room booking maximum duration is 4 hours.'}
+                raise LocalizedError(
+                    code=BOOKING_DURATION_TOO_LONG,
+                    i18n_key='booking.duration_too_long',
+                    params={'max_minutes': _MEETING_ROOM_MAX_MINUTES},
                 )
 
         elif rtype == 'parking':
@@ -471,19 +458,23 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 )
             )
             if not is_whole_day:
-                raise serializers.ValidationError(
-                    {'detail': 'Parking booking must be whole-day only '
-                               '(start 00:00, end 23:59 or next day 00:00).'}
+                raise LocalizedError(
+                    code=BOOKING_PARKING_WHOLE_DAY_ONLY,
+                    i18n_key='booking.parking_whole_day_only',
                 )
 
         elif rtype == 'capsule':
             if duration_minutes < _CAPSULE_MIN_MINUTES:
-                raise serializers.ValidationError(
-                    {'detail': 'Capsule booking minimum duration is 1 hour.'}
+                raise LocalizedError(
+                    code=BOOKING_DURATION_TOO_SHORT,
+                    i18n_key='booking.duration_too_short',
+                    params={'min_minutes': _CAPSULE_MIN_MINUTES},
                 )
             if duration_minutes > _CAPSULE_MAX_MINUTES:
-                raise serializers.ValidationError(
-                    {'detail': 'Capsule booking maximum duration is 8 hours.'}
+                raise LocalizedError(
+                    code=BOOKING_DURATION_TOO_LONG,
+                    i18n_key='booking.duration_too_long',
+                    params={'max_minutes': _CAPSULE_MAX_MINUTES},
                 )
 
     def _validate_resource_duration_limits(self, *, resource, start_time, end_time):
@@ -498,12 +489,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         duration_minutes = (end_time - start_time).total_seconds() / 60
 
         if resource.min_duration_minutes and duration_minutes < resource.min_duration_minutes:
-            raise serializers.ValidationError(
-                {'detail': f'Minimum booking duration is {resource.min_duration_minutes} minutes.'}
+            raise LocalizedError(
+                code=BOOKING_DURATION_TOO_SHORT,
+                i18n_key='booking.duration_too_short',
+                params={'min_minutes': resource.min_duration_minutes},
             )
         if resource.max_duration_minutes and duration_minutes > resource.max_duration_minutes:
-            raise serializers.ValidationError(
-                {'detail': f'Maximum booking duration is {resource.max_duration_minutes} minutes.'}
+            raise LocalizedError(
+                code=BOOKING_DURATION_TOO_LONG,
+                i18n_key='booking.duration_too_long',
+                params={'max_minutes': resource.max_duration_minutes},
             )
 
     def _validate_user_active_limit(self, *, user):
@@ -514,9 +509,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             end_time__gt=timezone.now(),
         ).count()
         if active_count >= active_limit:
-            raise serializers.ValidationError(
-                {'detail': f'Active booking limit exceeded ({active_limit}).'}
-            )
+            raise_validation_error('detail', 'booking.active_limit_exceeded', {'limit': active_limit})
 
     def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None):
         booking_overlap_qs = Booking.objects.filter(
@@ -529,7 +522,11 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             booking_overlap_qs = booking_overlap_qs.exclude(pk=exclude_booking_id)
         has_booking_overlap = booking_overlap_qs.exists()
         if has_booking_overlap:
-            raise self.BookingConflictException()
+            raise LocalizedError(
+                code='BOOKING_CONFLICT',
+                i18n_key='booking.conflict',
+                http_status=409,
+            )
 
         has_block_overlap = ResourceBlock.objects.filter(
             resource=resource,
@@ -537,7 +534,11 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             end_time__gt=start_time,
         ).exists()
         if has_block_overlap:
-            raise self.BookingConflictException()
+            raise LocalizedError(
+                code='BOOKING_CONFLICT',
+                i18n_key='booking.conflict',
+                http_status=409,
+            )
 
     def validate_participant_ids(self, value):
         if not value:
@@ -553,7 +554,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 )
                 if invalid:
                     raise serializers.ValidationError(
-                        f'Users {invalid} do not belong to your company.'
+                        [{'_i18n': True, 'key': 'booking.participants_wrong_company', 'params': {'ids': str(invalid)}}]
                     )
         return value
 
@@ -578,9 +579,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             time_part = raw_str.split('T')[-1] if 'T' in raw_str else raw_str.split(' ')[-1]
             has_offset = '+' in time_part or (time_part.count('-') > 0 and ':' in time_part)
             if not has_z and not has_offset:
-                raise serializers.ValidationError(
-                    {field_name: 'Datetime must include timezone info (e.g. 2025-04-16T10:00:00+05:00).'}
-                )
+                raise_validation_error(field_name, 'booking.datetime_must_be_timezone_aware')
 
     def validate(self, attrs):
         self._check_timezone_aware('start_time')
@@ -588,11 +587,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         attrs['resource'] = self._resolve_resource(attrs)
         attrs.pop('resource_id', None)
         if attrs['start_time'] >= attrs['end_time']:
-            raise serializers.ValidationError('start_time must be before end_time')
+            raise_validation_error('non_field_errors', 'booking.start_time_before_end_time')
         if attrs['start_time'] <= timezone.now():
-            raise serializers.ValidationError(
-                {'start_time': 'Booking start time must be in the future.'}
-            )
+            raise_validation_error('start_time', 'booking.start_time_must_be_future')
         self._validate_type_specific_rules(
             resource=attrs['resource'],
             start_time=attrs['start_time'],
@@ -660,10 +657,10 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                         create_notification(
                             user=participant_user,
                             notification_type='booking_confirmed',
-                            title=f'You have been added to a meeting: {resource.name}',
+                            title=f'Вас добавили на встречу: {resource.name}',
                             message=(
-                                f'{user.full_name} invited you to '
-                                f'{resource.name} on {start_time:%Y-%m-%d %H:%M}.'
+                                f'{user.full_name} пригласил вас в '
+                                f'{resource.name} на {start_time:%Y-%m-%d %H:%M}.'
                             ),
                             link=f'/bookings/{booking.id}',
                         )
@@ -762,8 +759,8 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
     def validate_resource_id(self, value):
         try:
             return Resource.objects.get(pk=value)
-        except Resource.DoesNotExist as exc:
-            raise serializers.ValidationError('Resource does not exist.') from exc
+        except Resource.DoesNotExist:
+            raise_validation_error('resource_id', 'booking.resource_not_found')
 
     def validate(self, attrs):
         resource = attrs['resource_id']
@@ -772,23 +769,23 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         today = timezone.localdate()
 
         if attrs['start_time'] >= attrs['end_time']:
-            raise serializers.ValidationError({'end_time': 'end_time must be later than start_time.'})
+            raise_validation_error('end_time', 'booking.start_time_before_end_time')
 
         if attrs['repeat_until'] < today:
-            raise serializers.ValidationError({'repeat_until': 'repeat_until must not be in the past.'})
+            raise_validation_error('repeat_until', 'booking.repeat_until_in_past')
 
         if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
-            raise serializers.ValidationError({'resource_id': 'Resource is assigned to another company.'})
+            raise_validation_error('resource_id', 'booking.resource_wrong_company')
 
         available_days = resource.available_days or list(range(7))
         if attrs['day_of_week'] not in available_days:
-            raise serializers.ValidationError({'day_of_week': 'Booking is outside resource availability days.'})
+            raise_validation_error('day_of_week', 'booking.unavailable_day')
 
         if (
             attrs['start_time'] < resource.available_from
             or attrs['end_time'] > resource.available_until
         ):
-            raise serializers.ValidationError({'detail': 'Booking is outside resource availability hours.'})
+            raise_validation_error('detail', 'booking.outside_operating_hours')
 
         # Один слот (ресурс + день недели + интервал времени) — одна активная серия на всех
         # пользователей компании не дублируем: иначе админ и сотрудник могли бы занять одно и то же время.
@@ -803,9 +800,7 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
             Q(valid_until__isnull=True) | Q(valid_until__gte=today)
         ).exists()
         if has_duplicate_series:
-            raise serializers.ValidationError(
-                {'detail': 'Active recurring series for this slot already exists.'}
-            )
+            raise_validation_error('detail', 'booking.recurring_slot_conflict')
 
         attrs['resource'] = resource
         return attrs
@@ -821,7 +816,5 @@ class ResourceBlockSerializer(serializers.ModelSerializer):
         start_time = attrs.get('start_time')
         end_time = attrs.get('end_time')
         if start_time and end_time and start_time >= end_time:
-            raise serializers.ValidationError(
-                {'detail': 'start_time must be before end_time'}
-            )
+            raise_validation_error('detail', 'booking.start_time_before_end_time')
         return attrs

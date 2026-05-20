@@ -190,7 +190,9 @@ class TestLeaveCreateValidation:
         response = api_client.post(LEAVES_URL, payload, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail']['non_field_errors'][0] == 'Not enough leave balance for selected dates.'
+        assert response.data['error']['details']['non_field_errors'][0] == (
+            'Недостаточно дней отпуска для выбранных дат.'
+        )
 
 
 @pytest.mark.django_db

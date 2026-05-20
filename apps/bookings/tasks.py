@@ -7,6 +7,8 @@ from django.core.mail import send_mail
 from django.db import transaction
 from django.utils import timezone
 
+from apps.core.exceptions import LocalizedError
+
 from .models import Booking, RecurringBooking, Resource
 from .serializers import BookingCreateSerializer
 
@@ -226,7 +228,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
                     start_time=start_time,
                     end_time=end_time,
                 )
-            except BookingCreateSerializer.BookingConflictException:
+            except LocalizedError:
                 skipped_dates.append(booking_date.isoformat())
                 continue
 

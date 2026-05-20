@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
+from apps.core.exceptions import raise_validation_error
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
 from apps.users.models import User
 from apps.companies.models import Company
@@ -55,13 +56,17 @@ def _parse_optional_int(param_name, raw):
     try:
         return int(raw)
     except (TypeError, ValueError):
-        raise ValidationError({param_name: ['Must be a valid integer.']})
+        raise_validation_error(param_name, 'analytics.must_be_integer')
 
 
 def _resolve_period_metadata(query_params):
     period = query_params.get('period') or '30d'
     if period not in PERIOD_CHOICES:
-        raise ValidationError({'period': [f'Invalid period. Must be one of: {", ".join(sorted(PERIOD_CHOICES))}.']})
+        raise_validation_error(
+            'period',
+            'analytics.invalid_period',
+            {'choices': ', '.join(sorted(PERIOD_CHOICES))},
+        )
 
     today = timezone.localdate()
 
@@ -70,18 +75,18 @@ def _resolve_period_metadata(query_params):
         dt_raw = query_params.get('date_to')
         if not df_raw or not dt_raw:
             raise ValidationError(
-                {
-                    'detail': 'For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.',
-                },
+                {'detail': {'_i18n': True, 'key': 'analytics.custom_period_dates_required', 'params': {}}},
             )
         date_from = parse_date(df_raw)
         date_to = parse_date(dt_raw)
         if date_from is None:
-            raise ValidationError({'date_from': ['Enter a valid date (YYYY-MM-DD).']})
+            raise_validation_error('date_from', 'analytics.invalid_date')
         if date_to is None:
-            raise ValidationError({'date_to': ['Enter a valid date (YYYY-MM-DD).']})
+            raise_validation_error('date_to', 'analytics.invalid_date')
         if date_from > date_to:
-            raise ValidationError({'detail': 'date_from must be on or before date_to.'})
+            raise ValidationError(
+                {'detail': {'_i18n': True, 'key': 'analytics.date_from_after_date_to', 'params': {}}}
+            )
         return period, date_from, date_to
 
     span = PERIOD_DAY_LENGTH[period]

@@ -696,7 +696,7 @@ class TestTaskMove:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_move_url(task_a.id), {'column_id': column_a2.id}, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert res.data['detail']['detail'] == 'WIP limit reached (max 1 tasks)'
+        assert res.data['error']['code'] == 'CRM_WIP_LIMIT_EXCEEDED'
 
     def test_move_wip_limit_not_exceeded_returns_200(self, api_client, admin_a, task_a, column_a2):
         """Moving to a column under WIP capacity succeeds."""
@@ -819,7 +819,7 @@ class TestTaskArchive:
         api_client.force_authenticate(admin_a)
         res = api_client.post(task_archive_url(task_a.id))
         assert res.status_code == status.HTTP_200_OK
-        assert res.data['detail'] == 'Task archived'
+        assert 'detail' in res.data
 
     def test_archive_sets_is_deleted(self, api_client, admin_a, task_a):
         api_client.force_authenticate(admin_a)

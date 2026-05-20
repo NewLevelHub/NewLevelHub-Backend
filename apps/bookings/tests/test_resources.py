@@ -234,7 +234,8 @@ class TestResourceCreate:
             format='json',
         )
         assert r.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'availability_start' in r.json()['detail']
+        body = r.json()
+        assert 'availability_start' in body.get('error', {}).get('details', body)
 
     def test_availability_days_values_must_be_0_to_6(self, api_client, superadmin):
         api_client.force_authenticate(user=superadmin)
@@ -249,7 +250,8 @@ class TestResourceCreate:
             format='json',
         )
         assert r.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'availability_days' in r.json()['detail']
+        body = r.json()
+        assert 'availability_days' in body.get('error', {}).get('details', body)
 
     def test_create_with_availability_fields(self, api_client, superadmin):
         api_client.force_authenticate(user=superadmin)

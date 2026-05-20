@@ -15,6 +15,9 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
+from apps.core.exceptions import raise_validation_error, LocalizedError
+from apps.core.i18n import translate, get_lang
+from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import (
     IsCompanyAdmin, IsCompanyMember, IsEmailVerifiedOrSuperAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
@@ -103,7 +106,7 @@ def _normalize_positions(column):
         summary='Create board',
         description=(
             'Creates a new board for the authenticated user\'s company. '
-            'Three default columns ("К выполнению", "В работе", "Готово") are automatically created. '
+            'Three default columns ("To Do", "In Progress", "Done") are automatically created. '
             'Returns 400 if the company has reached its plan limit of non-archived boards.'
         ),
         request=BoardSerializer,
@@ -183,8 +186,9 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         company = request.user.company
         current_boards = company.boards.filter(is_archived=False).count()
         if current_boards >= company.max_boards:
+            lang = get_lang(request)
             return Response(
-                {'detail': 'Board limit reached for your plan'},
+                {'detail': translate('crm.board_limit_exceeded', lang)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -199,8 +203,13 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
 
     def perform_create(self, serializer):
         board = serializer.save(company=self.request.user.company, created_by=self.request.user)
-        # Колонки по умолчанию
-        for i, name in enumerate(['К выполнению', 'В работе', 'Готово']):
+        lang = get_lang(self.request)
+        default_columns = [
+            translate('crm.default_column_todo', lang),
+            translate('crm.default_column_in_progress', lang),
+            translate('crm.default_column_done', lang),
+        ]
+        for i, name in enumerate(default_columns):
             Column.objects.create(board=board, name=name, position=i)
 
     def retrieve(self, request, *args, **kwargs):
@@ -294,7 +303,7 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
                         value={
                             'error': True,
                             'status_code': 400,
-                            'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа',
+                            'detail': 'Cannot unarchive: board limit reached for your plan.',
                         },
                         response_only=True,
                         status_codes=['400'],
@@ -318,8 +327,9 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if board.is_archived:
             active_count = board.company.boards.filter(is_archived=False).count()
             if active_count >= board.company.max_boards:
+                lang = get_lang(request)
                 return Response(
-                    {'detail': 'Невозможно разархивировать: достигнут лимит досок для вашего тарифа'},
+                    {'detail': translate('crm.board_unarchive_limit', lang)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             board.is_archived = False
@@ -399,10 +409,11 @@ class ColumnViewSet(viewsets.ModelViewSet):
         try:
             board = Board.objects.get(pk=board_pk)
         except Board.DoesNotExist:
-            raise NotFound('Board not found.')
+            raise NotFound()
         user = self.request.user
         if user.role != 'superadmin' and board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this board.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.board_access_denied', lang))
         return board
 
     def get_queryset(self):
@@ -485,22 +496,22 @@ class ColumnViewSet(viewsets.ModelViewSet):
 
         move_to_id = request.query_params.get('move_to')
         if not move_to_id:
-            raise ValidationError({'move_to': 'This query parameter is required.'})
+            raise_validation_error('move_to', 'crm.move_to_required')
 
         # Cannot delete the last column
         board_columns = Column.objects.filter(board=board)
         if board_columns.count() <= 1:
-            raise ValidationError({'detail': 'Cannot delete the last column on a board.'})
+            raise_validation_error('detail', 'crm.last_column_cannot_delete')
 
         # Validate move_to column
         try:
             move_to_id = int(move_to_id)
             target_column = board_columns.get(pk=move_to_id)
         except (ValueError, Column.DoesNotExist):
-            raise ValidationError({'move_to': 'Target column not found on this board.'})
+            raise_validation_error('move_to', 'crm.move_to_column_not_found')
 
         if target_column.pk == instance.pk:
-            raise ValidationError({'move_to': 'Target column must differ from the deleted column.'})
+            raise_validation_error('move_to', 'crm.move_to_same_column')
 
         active_in_source = Task.objects.filter(column=instance, is_archived=False).count()
         if active_in_source > 0:
@@ -555,10 +566,12 @@ class ColumnViewSet(viewsets.ModelViewSet):
             extra = provided_ids - board_column_ids
             errors = []
             if missing:
-                errors.append(f'Missing column IDs: {sorted(missing)}.')
+                errors.append({'_i18n': True, 'key': 'crm.reorder_missing_columns',
+                               'params': {'ids': str(sorted(missing))}})
             if extra:
-                errors.append(f'Unknown column IDs: {sorted(extra)}.')
-            raise ValidationError({'column_ids': ' '.join(errors)})
+                errors.append({'_i18n': True, 'key': 'crm.reorder_unknown_columns',
+                               'params': {'ids': str(sorted(extra))}})
+            raise ValidationError({'column_ids': errors})
 
         # Assign new positions in the given order
         columns_by_id = {col.id: col for col in Column.objects.filter(board=board)}
@@ -620,7 +633,7 @@ class ColumnViewSet(viewsets.ModelViewSet):
     create=extend_schema(
         tags=['CRM'],
         operation_id='task_create',
-        summary='Создать задачу',
+        summary='Create task',
         description=(
             'Creates a task. board_id and column_id must belong to the requesting user\'s company. '
             'assignee_id must be an employee of the same company. '
@@ -630,45 +643,45 @@ class ColumnViewSet(viewsets.ModelViewSet):
             name='TaskCreateRequest',
             fields={
                 'board_id': drf_serializers.IntegerField(
-                    help_text='ID доски',
+                    help_text='Board ID',
                 ),
                 'column_id': drf_serializers.IntegerField(
-                    help_text='ID колонки на доске',
+                    help_text='Column ID on the board',
                 ),
                 'title': drf_serializers.CharField(
                     max_length=255,
-                    help_text='Название задачи',
+                    help_text='Task title',
                 ),
                 'description': drf_serializers.CharField(
                     required=False,
                     allow_blank=True,
-                    help_text='Описание задачи',
+                    help_text='Task description',
                 ),
                 'priority': drf_serializers.ChoiceField(
                     choices=['low', 'medium', 'high', 'critical'],
-                    help_text='Приоритет задачи',
+                    help_text='Task priority',
                 ),
                 'deadline': drf_serializers.DateField(
                     required=False,
                     allow_null=True,
-                    help_text='Срок выполнения (YYYY-MM-DD)',
+                    help_text='Due date (YYYY-MM-DD)',
                 ),
                 'assignee_id': drf_serializers.IntegerField(
                     required=False,
                     allow_null=True,
-                    help_text='ID исполнителя (сотрудник той же компании)',
+                    help_text='Assignee user ID (must be an employee of the same company)',
                 ),
                 'label_ids': drf_serializers.ListField(
                     child=drf_serializers.IntegerField(),
                     required=False,
-                    help_text='Список ID меток доски',
+                    help_text='List of label IDs belonging to the board',
                 ),
             },
         ),
         responses={
             201: TaskSerializer,
             400: OpenApiResponse(
-                description='Validation error — assignee из другой компании, неверный board/column.',
+                description='Validation error — assignee from a different company, invalid board/column.',
             ),
             401: OpenApiResponse(description='Not authenticated.'),
             403: OpenApiResponse(description='Forbidden — company members only.'),
@@ -679,8 +692,8 @@ class ColumnViewSet(viewsets.ModelViewSet):
                 value={
                     'board_id': 1,
                     'column_id': 3,
-                    'title': 'Разработать API авторизации',
-                    'description': 'Реализовать JWT-аутентификацию с refresh-токенами',
+                    'title': 'Implement auth API',
+                    'description': 'Add JWT authentication with refresh token support',
                     'priority': 'high',
                     'deadline': '2026-05-01',
                     'assignee_id': 42,
@@ -987,13 +1000,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         target_column_obj = Column.objects.select_related('board').get(pk=target_column.pk)
 
         if target_column_obj.board_id != task.column.board_id:
-            raise ValidationError({'column_id': 'Target column must belong to the same board as the task.'})
+            raise_validation_error('column_id', 'crm.column_wrong_task_board')
 
         # Validate tenant isolation: target column's board must belong to the request user's company.
         # Superadmin bypasses this check.
         if request.user.role != 'superadmin':
             if target_column_obj.board.company_id != request.user.company_id:
-                raise ValidationError({'column_id': 'Target column does not belong to your company.'})
+                raise_validation_error('column_id', 'crm.column_wrong_company')
 
         check_wip_limit(target_column_obj, exclude_task_pk=task.pk)
 
@@ -1175,7 +1188,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_value='False',
             new_value='True',
         )
-        return Response({'detail': 'Task archived'}, status=status.HTTP_200_OK)
+        lang = get_lang(request)
+        return Response({'detail': translate('crm.task_archived', lang)}, status=status.HTTP_200_OK)
 
     @extend_schema(
         tags=['CRM'],
@@ -1203,8 +1217,9 @@ class TaskViewSet(viewsets.ModelViewSet):
         # so get_object() correctly finds soft-deleted (archived) tasks.
         task = self.get_object()
 
+        lang = get_lang(request)
         if not task.is_archived:
-            return Response({'detail': 'Task is not archived'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': translate('crm.task_not_archived', lang)}, status=status.HTTP_400_BAD_REQUEST)
 
         check_wip_limit(task.column, exclude_task_pk=task.pk)
 
@@ -1220,7 +1235,7 @@ class TaskViewSet(viewsets.ModelViewSet):
             old_value='True',
             new_value='False',
         )
-        return Response({'detail': 'Task unarchived'}, status=status.HTTP_200_OK)
+        return Response({'detail': translate('crm.task_unarchived', lang)}, status=status.HTTP_200_OK)
 
 
 @extend_schema_view(
@@ -1303,10 +1318,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         try:
             task = Task.all_objects.select_related('column__board', 'assignee', 'created_by').get(pk=task_pk)
         except Task.DoesNotExist:
-            raise NotFound('Task not found.')
+            raise NotFound()
         user = self.request.user
         if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this task.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.task_access_denied', lang))
         return task
 
     def get_queryset(self):
@@ -1425,9 +1441,10 @@ class ChecklistViewSet(viewsets.ViewSet):
         try:
             task = Task.all_objects.select_related('column__board').get(pk=task_id)
         except Task.DoesNotExist:
-            raise NotFound('Task not found.')
+            raise NotFound()
         if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this task.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.task_access_denied', lang))
         return task
 
     @extend_schema(
@@ -1460,12 +1477,12 @@ class ChecklistViewSet(viewsets.ViewSet):
 
     @extend_schema(
         tags=['CRM'],
-        summary='Обновить чеклист',
+        summary='Update checklist',
         operation_id='checklist_partial_update',
         request=inline_serializer(
             name='ChecklistPatchRequest',
             fields={
-                'title': drf_serializers.CharField(required=False, help_text='Название чеклиста'),
+                'title': drf_serializers.CharField(required=False, help_text='Checklist title'),
             },
         ),
         responses={
@@ -1488,9 +1505,10 @@ class ChecklistViewSet(viewsets.ViewSet):
         try:
             checklist = Checklist.objects.select_related('task__column__board').get(pk=pk)
         except Checklist.DoesNotExist:
-            raise NotFound('Checklist not found.')
+            raise NotFound()
         if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this checklist.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('crm.checklist_access_denied', lang))
         serializer = ChecklistSerializer(checklist, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -1510,9 +1528,10 @@ class ChecklistViewSet(viewsets.ViewSet):
         try:
             checklist = Checklist.objects.select_related('task__column__board').get(pk=pk)
         except Checklist.DoesNotExist:
-            raise NotFound('Checklist not found.')
+            raise NotFound()
         if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this checklist.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('crm.checklist_access_denied', lang))
         checklist.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -1537,9 +1556,10 @@ class ChecklistItemViewSet(viewsets.ViewSet):
         try:
             checklist = Checklist.objects.select_related('task__column__board').get(pk=checklist_id)
         except Checklist.DoesNotExist:
-            raise NotFound('Checklist not found.')
+            raise NotFound()
         if user.role != 'superadmin' and checklist.task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this checklist.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.checklist_access_denied', lang))
         return checklist
 
     def _get_item_or_403(self, item_id):
@@ -1547,9 +1567,10 @@ class ChecklistItemViewSet(viewsets.ViewSet):
         try:
             item = ChecklistItem.objects.select_related('checklist__task__column__board').get(pk=item_id)
         except ChecklistItem.DoesNotExist:
-            raise NotFound('Item not found.')
+            raise NotFound()
         if user.role != 'superadmin' and item.checklist.task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this item.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.checklist_item_access_denied', lang))
         return item
 
     @extend_schema(
@@ -1683,10 +1704,11 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
         try:
             task = Task.all_objects.select_related('column__board').get(pk=task_pk)
         except Task.DoesNotExist:
-            raise NotFound('Task not found.')
+            raise NotFound()
         user = self.request.user
         if user.role != 'superadmin' and task.column.board.company_id != user.company_id:
-            raise PermissionDenied('You do not have access to this task.')
+            lang = get_lang(self.request)
+            raise PermissionDenied(translate('crm.task_access_denied', lang))
         return task
 
     def get_queryset(self):
@@ -1721,7 +1743,10 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
                 current_used = get_company_storage_used_bytes(company)
                 storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
                 if current_used + file_obj.size > storage_limit_bytes:
-                    raise ValidationError({'detail': 'Storage limit exceeded'})
+                    raise LocalizedError(
+                        code=STORAGE_LIMIT_EXCEEDED,
+                        i18n_key='storage.limit_exceeded',
+                    )
 
             attachment = TaskAttachment.objects.create(
                 task=task,
@@ -1749,7 +1774,7 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
             try:
                 storage_file = sf_qs.get()
             except StorageFile.DoesNotExist:
-                raise NotFound('Storage file not found or does not belong to your company.')
+                raise NotFound()
 
             attachment = TaskAttachment.objects.create(
                 task=task,
@@ -1770,7 +1795,7 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
                 'uploaded_by', 'storage_file', 'task__column__board',
             ).get(pk=pk, task__id=task_pk)
         except TaskAttachment.DoesNotExist:
-            raise NotFound('Attachment not found.')
+            raise NotFound()
 
         # Object-level permission check: uploader, company_admin of same company, or superadmin
         user = request.user
@@ -1780,7 +1805,7 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
             and (user.role == 'superadmin' or attachment.company_id == user.company_id)
         )
         if not (is_owner or is_admin_same_company):
-            raise PermissionDenied('Only the uploader or company admin can delete this attachment.')
+            raise PermissionDenied(translate('crm.attachment_delete_forbidden', get_lang(request)))
 
         # Delete file from disk only for direct uploads
         if not attachment.storage_file_id and attachment.file:

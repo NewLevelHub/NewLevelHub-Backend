@@ -8,7 +8,7 @@ from django.db import transaction
 from rest_framework import serializers, viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError, PermissionDenied, NotFound
+from rest_framework.exceptions import PermissionDenied, NotFound
 from rest_framework.response import Response
 from drf_spectacular.utils import (
     extend_schema,
@@ -21,6 +21,8 @@ from drf_spectacular.utils import (
 from drf_spectacular.types import OpenApiTypes
 import rest_framework.fields as fields
 
+from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import translate, get_lang
 from apps.core.permissions import (
     IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
     IsEmailVerifiedOrSuperAdmin,
@@ -779,9 +781,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
             end_time__gt=now,
             status='confirmed',
         ).exists():
-            raise ValidationError(
-                {'detail': 'Cannot delete a resource that has future confirmed bookings.'}
-            )
+            raise_validation_error('detail', 'booking.resource_has_future_bookings')
         return super().destroy(request, *args, **kwargs)
 
     def _cancel_future_bookings(self, resource):
@@ -791,7 +791,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         for booking in qs:
             booking.status = 'cancelled'
             booking.cancelled_by = admin
-            booking.cancel_reason = 'Resource deactivated'
+            booking.cancel_reason = 'Ресурс деактивирован'
             booking.save()
             create_notification(
                 user=booking.user,
@@ -899,13 +899,14 @@ class ResourceViewSet(viewsets.ModelViewSet):
         date_param = request.query_params.get('date')
         local_tz = timezone.get_current_timezone()
         now = timezone.now()
+        lang = get_lang(request)
 
         if week_param:
             try:
                 anchor = date.fromisoformat(week_param)
             except ValueError:
                 return Response(
-                    {'detail': 'Invalid week format. Use YYYY-MM-DD.'},
+                    {'detail': translate('booking.invalid_week_format', lang)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             range_start, range_end = week_range_for_date(anchor)
@@ -921,7 +922,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
                     target_date = date.fromisoformat(date_param)
                 except ValueError:
                     return Response(
-                        {'detail': 'Invalid date format. Use YYYY-MM-DD.'},
+                        {'detail': translate('booking.invalid_date_format', lang)},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
             else:
@@ -1356,7 +1357,8 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     def _ensure_participants_manage_permission(self, user):
         if user.is_superadmin() or user.is_company_admin():
             return
-        raise PermissionDenied('Only company admins can manage participants.')
+        lang = get_lang(self.request)
+        raise PermissionDenied(translate('booking.participants_admin_only', lang))
 
     def partial_update(self, request, *args, **kwargs):
         # AC DEV-77: when updating reservation times, reuse creation conflict-control.
@@ -1364,7 +1366,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         if not updates_time:
             return super().partial_update(request, *args, **kwargs)
         if 'start_time' not in request.data or 'end_time' not in request.data:
-            raise ValidationError({'detail': 'Both start_time and end_time are required for time updates.'})
+            raise_validation_error('detail', 'booking.both_times_required')
 
         with transaction.atomic():
             current = (
@@ -1375,7 +1377,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 .first()
             )
             if current is None:
-                raise NotFound('Not found.')
+                raise NotFound()
             serializer = BookingSerializer(
                 current,
                 data=request.data,
@@ -1387,7 +1389,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             new_start = serializer.validated_data.get('start_time', current.start_time)
             new_end = serializer.validated_data.get('end_time', current.end_time)
             if new_start >= new_end:
-                raise ValidationError({'detail': 'start_time must be before end_time'})
+                raise_validation_error('detail', 'booking.start_time_before_end_time')
 
             validator = BookingCreateSerializer(
                 data=request.data,
@@ -1497,22 +1499,15 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     def cancel(self, request, pk=None):
         booking = self.get_object()
         if booking.status == 'cancelled':
-            raise ValidationError({'detail': 'Booking is already cancelled.'})
+            raise_validation_error('detail', 'booking.already_cancelled')
 
         now = timezone.now()
         if booking.start_time <= now:
-            raise ValidationError({'detail': 'Cannot cancel a booking that has already started.'})
+            raise_validation_error('detail', 'booking.already_started')
 
         min_cancel_minutes = booking.resource.min_cancel_minutes
         if booking.start_time - now < timedelta(minutes=min_cancel_minutes):
-            raise ValidationError(
-                {
-                    'detail': (
-                        f'Booking can only be cancelled at least '
-                        f'{min_cancel_minutes} minutes before start.'
-                    )
-                }
-            )
+            raise_validation_error('detail', 'booking.cancel_window_passed', {'min_minutes': min_cancel_minutes})
 
         booking.status = 'cancelled'
         booking.cancelled_by = request.user
@@ -1559,7 +1554,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         booking = self.get_object()
         reason = str(request.data.get('reason', '')).strip()
         if not reason:
-            raise ValidationError({'reason': 'This field is required.'})
+            raise_validation_error('reason', 'booking.reason_required')
 
         now = timezone.now()
         booking.status = 'cancelled'
@@ -1605,13 +1600,13 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         self._ensure_participants_manage_permission(request.user)
         booking = self.get_object()
         if booking.resource.resource_type != 'meeting_room':
-            raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})
+            raise_validation_error('detail', 'booking.participants_meeting_room_only')
 
         user_ids = request.data.get('user_ids')
         if not isinstance(user_ids, list) or not user_ids:
-            raise ValidationError({'user_ids': 'Provide a non-empty list of user ids.'})
+            raise_validation_error('user_ids', 'booking.user_ids_empty')
         if not all(isinstance(uid, int) for uid in user_ids):
-            raise ValidationError({'user_ids': 'All user ids must be integers.'})
+            raise_validation_error('user_ids', 'booking.user_ids_must_be_integers')
 
         users = list(
             User.objects.filter(
@@ -1622,7 +1617,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         found_ids = {u.id for u in users}
         missing_ids = sorted(set(user_ids) - found_ids)
         if missing_ids:
-            raise ValidationError({'user_ids': f'Users not found in company: {missing_ids}'})
+            raise_validation_error('user_ids', 'booking.users_not_in_company', {'ids': str(missing_ids)})
 
         added_ids = []
         with transaction.atomic():
@@ -1634,8 +1629,8 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 create_notification(
                     user=user,
                     notification_type='booking_confirmed',
-                    title=f'You were added to meeting: {booking.resource.name}',
-                    message='Check your bookings for updated participants.',
+                    title=f'Вас добавили на встречу: {booking.resource.name}',
+                    message='Проверьте ваши бронирования для просмотра обновлённого списка участников.',
                 )
             self._create_change_audit(
                 booking=booking,
@@ -1673,16 +1668,16 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         self._ensure_participants_manage_permission(request.user)
         booking = self.get_object()
         if booking.resource.resource_type != 'meeting_room':
-            raise ValidationError({'detail': 'Participants can only be managed for meeting_room bookings.'})
+            raise_validation_error('detail', 'booking.participants_meeting_room_only')
 
         try:
             user_id_int = int(user_id)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError({'user_id': 'User id must be an integer.'}) from exc
+        except (TypeError, ValueError):
+            raise_validation_error('user_id', 'booking.user_id_must_be_integer')
 
         deleted, _ = BookingParticipant.objects.filter(booking=booking, user_id=user_id_int).delete()
         if not deleted:
-            raise ValidationError({'detail': 'Participant is not attached to this booking.'})
+            raise_validation_error('detail', 'booking.participant_not_found')
 
         self._create_change_audit(
             booking=booking,
@@ -1708,10 +1703,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     @action(detail=False, methods=['get'], url_path='my')
     def my_bookings(self, request):
         if 'user' in request.query_params:
-            raise ValidationError(
-                "The 'user' filter is not supported on this endpoint. "
-                "Use /bookings/reservations/ to filter by user."
-            )
+            raise_validation_error('non_field_errors', 'booking.user_filter_not_supported')
         qs = (
             Booking.objects
             .filter(Q(user=request.user) | Q(participants__user=request.user))
@@ -1733,14 +1725,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             elif status_filter == 'cancelled':
                 qs = qs.filter(status='cancelled')
             else:
-                raise ValidationError(
-                    {
-                        'status': (
-                            "Unsupported status filter. "
-                            "Use one of: upcoming, past, cancelled."
-                        )
-                    }
-                )
+                raise_validation_error('status', 'booking.invalid_status_filter')
 
         if resource_type:
             qs = qs.filter(resource__resource_type=resource_type)
@@ -1748,13 +1733,13 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         if date_from_raw:
             date_from = parse_datetime(date_from_raw)
             if date_from is None:
-                raise ValidationError({'date_from': 'Invalid datetime format.'})
+                raise_validation_error('date_from', 'booking.invalid_datetime_format')
             qs = qs.filter(start_time__gte=date_from)
 
         if date_to_raw:
             date_to = parse_datetime(date_to_raw)
             if date_to is None:
-                raise ValidationError({'date_to': 'Invalid datetime format.'})
+                raise_validation_error('date_to', 'booking.invalid_datetime_format')
             qs = qs.filter(start_time__lte=date_to)
 
         if status_filter == 'upcoming':
@@ -1843,13 +1828,13 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
             now = timezone.now()
             if now < booking.start_time:
-                raise ValidationError({'detail': 'Check-in is not allowed before the booking start time.'})
+                raise_validation_error('detail', 'booking.checkin_before_start')
 
             if booking.status != 'confirmed':
-                raise ValidationError({'detail': 'Check-in is only allowed for confirmed bookings.'})
+                raise_validation_error('detail', 'booking.checkin_not_confirmed')
 
             if booking.checked_in_at is not None:
-                raise ValidationError({'detail': 'Booking has already been checked in.'})
+                raise_validation_error('detail', 'booking.already_checked_in')
 
             booking.checked_in_at = now
             booking.save(update_fields=['checked_in_at'])

@@ -11,6 +11,9 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.companies.invite_policy import existing_user_cannot_accept_invite_error
 from apps.companies.models import Invitation
+from apps.core.error_codes import EMAIL_NOT_VERIFIED
+from apps.core.exceptions import LocalizedError, raise_validation_error
+from apps.core.i18n import get_lang, translate
 from apps.hr.tasks import initialize_user_onboarding_progress
 from .models import User
 
@@ -104,7 +107,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if attrs['password'] != attrs.pop('password_confirm'):
-            raise serializers.ValidationError({'password_confirm': 'Passwords do not match'})
+            raise_validation_error('password_confirm', 'auth.passwords_dont_match')
         return attrs
 
     def create(self, validated_data):
@@ -113,7 +116,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 
 class InviteRegistrationSerializer(serializers.ModelSerializer):
-    """Регистрация сотрудника по инвайт-токену."""
+    """Register an employee via an invite token."""
     password = serializers.CharField(write_only=True, min_length=8)
     token = serializers.UUIDField(write_only=True)
 
@@ -124,18 +127,20 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         invitation = Invitation.objects.select_related('company').filter(token=attrs['token']).first()
         if not invitation:
-            raise serializers.ValidationError({'token': 'Invalid invitation token'})
+            raise_validation_error('token', 'auth.token_invalid')
         if invitation.is_used:
-            raise serializers.ValidationError({'token': 'Invitation already used'})
+            raise_validation_error('token', 'company.invite_already_used')
         if invitation.is_expired:
-            raise serializers.ValidationError({'token': 'Invitation expired'})
+            raise_validation_error('token', 'company.invite_expired')
         existing = User.objects.filter(email__iexact=_normalized_invite_email(invitation.email)).first()
         if existing:
             err = existing_user_cannot_accept_invite_error(existing, invitation)
             if err:
                 raise serializers.ValidationError({'email': err})
         if invitation.company.is_employee_limit_reached:
-            raise serializers.ValidationError('Employee limit reached')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.member_limit_exceeded', 'params': {}}]
+            )
 
         attrs['invitation'] = invitation
         attrs['email'] = _normalized_invite_email(invitation.email)
@@ -147,11 +152,13 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
         with transaction.atomic():
             invitation = Invitation.objects.select_for_update().select_related('company').get(pk=invitation.pk)
             if invitation.is_used:
-                raise serializers.ValidationError({'token': 'Invitation already used'})
+                raise_validation_error('token', 'company.invite_already_used')
             if invitation.is_expired:
-                raise serializers.ValidationError({'token': 'Invitation expired'})
+                raise_validation_error('token', 'company.invite_expired')
             if invitation.company.is_employee_limit_reached:
-                raise serializers.ValidationError('Employee limit reached')
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'company.member_limit_exceeded', 'params': {}}]
+                )
 
             email_key = _normalized_invite_email(invitation.email)
             existing = User.objects.select_for_update().filter(email__iexact=email_key).first()
@@ -195,7 +202,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                     )
                 except IntegrityError as exc:
                     raise serializers.ValidationError(
-                        {'email': 'A user with this email is already registered.'},
+                        {'email': [{'_i18n': True, 'key': 'users.email_already_registered', 'params': {}}]},
                     ) from exc
 
             initialize_user_onboarding_progress(user)
@@ -217,13 +224,19 @@ class LoginSerializer(serializers.Serializer):
         user_qs = User.objects.filter(email__iexact=email)
         blocked_user = user_qs.filter(is_active=False).first()
         if blocked_user and blocked_user.check_password(password):
-            raise PermissionDenied('Account is blocked')
+            raise PermissionDenied(translate('auth.account_blocked', get_lang(self.context.get('request'))))
 
         user = authenticate(email=email, password=password)
         if not user:
-            raise serializers.ValidationError('Invalid credentials')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'auth.invalid_credentials', 'params': {}}]
+            )
         if not user.is_email_verified:
-            raise PermissionDenied('Email not verified. Please check your inbox.')
+            raise LocalizedError(
+                code=EMAIL_NOT_VERIFIED,
+                i18n_key='auth.email_not_verified',
+                http_status=403,
+            )
         attrs['user'] = user
         return attrs
 
@@ -274,12 +287,12 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
         content_type = getattr(image, 'content_type', None)
         if content_type not in AVATAR_ALLOWED_CONTENT_TYPES:
             raise serializers.ValidationError(
-                'Unsupported image type. Allowed types: JPEG, PNG, WebP.'
+                [{'_i18n': True, 'key': 'users.avatar_type_not_supported', 'params': {}}]
             )
 
         if image.size > AVATAR_MAX_BYTES:
             raise serializers.ValidationError(
-                'Avatar file too large. Maximum allowed size is 5 MB.'
+                [{'_i18n': True, 'key': 'users.avatar_too_large', 'params': {'max_mb': 5}}]
             )
 
         return image
@@ -303,7 +316,9 @@ class ChangePasswordSerializer(serializers.Serializer):
 
     def validate_current_password(self, value):
         if not self.context['request'].user.check_password(value):
-            raise serializers.ValidationError('Current password is incorrect')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'auth.current_password_wrong', 'params': {}}]
+            )
         return value
 
 
@@ -328,7 +343,7 @@ class EmailVerifySerializer(serializers.Serializer):
 
 
 class UserListSerializer(serializers.ModelSerializer):
-    """Для списков пользователей (суперадмин)."""
+    """Lightweight serializer for user lists (superadmin)."""
     full_name = serializers.CharField(read_only=True)
     company = CompanyBriefSerializer(read_only=True)
 
@@ -341,7 +356,7 @@ class UserListSerializer(serializers.ModelSerializer):
 
 
 class UserDetailSerializer(serializers.ModelSerializer):
-    """Полная информация о пользователе для суперадмина."""
+    """Full user detail for superadmin."""
     full_name = serializers.CharField(read_only=True)
     company = CompanyBriefSerializer(read_only=True)
     bookings_count = serializers.IntegerField(read_only=True)

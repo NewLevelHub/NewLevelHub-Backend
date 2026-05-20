@@ -142,7 +142,8 @@ class TestBookingCreate:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'resource' in response.json()['detail']
+        body = response.json()
+        assert 'resource_id' in body['error']['details']
 
     def test_create_booking_conflict_returns_409(self, api_client, employee, shared_resource, company):
         api_client.force_authenticate(user=employee)
@@ -167,7 +168,7 @@ class TestBookingCreate:
         )
 
         assert response.status_code == status.HTTP_409_CONFLICT
-        assert 'detail' in response.json()['detail']
+        assert 'error' in response.json()
 
     def test_create_booking_outside_availability_returns_400(
         self, api_client, employee, shared_resource
@@ -187,7 +188,7 @@ class TestBookingCreate:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'detail' in response.json()
+        assert 'error' in response.json()
 
     def test_create_booking_limit_active_reservations_returns_400(
         self, api_client, employee, shared_resource, company, settings
@@ -216,4 +217,4 @@ class TestBookingCreate:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'detail' in response.json()
+        assert 'error' in response.json()

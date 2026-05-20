@@ -105,7 +105,7 @@ class TestWipLimitCentralized:
             'priority': 'low',
         }, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert str(res.data['detail']['detail'][0]) == 'WIP limit reached (max 1 tasks)'
+        assert res.data['error']['code'] == 'CRM_WIP_LIMIT_EXCEEDED'
 
     def test_create_task_wip_not_exceeded_succeeds(
         self, api_client, admin, board, col_limit_2
@@ -130,7 +130,7 @@ class TestWipLimitCentralized:
             'column_id': col_limit_1.id,
         }, format='json')
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert res.data['detail']['detail'] == 'WIP limit reached (max 1 tasks)'
+        assert res.data['error']['code'] == 'CRM_WIP_LIMIT_EXCEEDED'
 
     def test_move_task_wip_not_exceeded_succeeds(
         self, api_client, admin, board, col_no_limit, col_limit_2
@@ -151,7 +151,7 @@ class TestWipLimitCentralized:
         api_client.force_authenticate(admin)
         res = api_client.post(task_unarchive_url(archived_task.pk))
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert res.data['detail']['detail'] == 'WIP limit reached (max 1 tasks)'
+        assert res.data['error']['code'] == 'CRM_WIP_LIMIT_EXCEEDED'
 
     def test_unarchive_task_wip_not_exceeded_succeeds(
         self, api_client, admin, board, col_limit_2
@@ -171,7 +171,7 @@ class TestWipLimitCentralized:
         api_client.force_authenticate(admin)
         res = api_client.delete(delete_url)
         assert res.status_code == status.HTTP_400_BAD_REQUEST
-        assert res.data['detail']['detail'] == 'WIP limit reached (max 2 tasks)'
+        assert res.data['error']['code'] == 'CRM_WIP_LIMIT_EXCEEDED'
 
     def test_wip_limit_zero_always_allows_all_operations(
         self, api_client, admin, board, col_no_limit

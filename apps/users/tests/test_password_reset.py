@@ -163,7 +163,7 @@ class TestPasswordResetConfirm:
 
         assert first.status_code == status.HTTP_200_OK
         assert second.status_code == status.HTTP_400_BAD_REQUEST
-        assert second.data['detail'] == 'Token already used'
+        assert second.data['error']['code'] == 'TOKEN_ALREADY_USED'
 
     def test_expired_token_returns_400(self, api_client, expired_token):
         response = api_client.post(CONFIRM_URL, {
@@ -172,7 +172,7 @@ class TestPasswordResetConfirm:
         }, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Token expired'
+        assert response.data['error']['code'] == 'TOKEN_EXPIRED'
 
     def test_used_token_returns_400(self, api_client, used_token):
         response = api_client.post(CONFIRM_URL, {
@@ -181,7 +181,7 @@ class TestPasswordResetConfirm:
         }, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Token already used'
+        assert response.data['error']['code'] == 'TOKEN_ALREADY_USED'
 
     def test_nonexistent_token_returns_400(self, api_client, db):
         response = api_client.post(CONFIRM_URL, {
@@ -190,7 +190,7 @@ class TestPasswordResetConfirm:
         }, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Invalid token'
+        assert response.data['error']['code'] == 'TOKEN_INVALID'
 
     def test_inactive_user_token_returns_400(self, api_client, inactive_user):
         token = PasswordResetToken.objects.create(
@@ -203,7 +203,7 @@ class TestPasswordResetConfirm:
         }, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Invalid token'
+        assert response.data['error']['code'] == 'TOKEN_INVALID'
 
     def test_short_password_returns_400(self, api_client, reset_token):
         response = api_client.post(CONFIRM_URL, {

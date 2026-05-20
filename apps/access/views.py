@@ -18,6 +18,8 @@ from rest_framework import renderers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
+from apps.core.exceptions import LocalizedError
+from apps.core.i18n import get_lang, translate
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsSuperAdminOrReception
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
@@ -116,13 +118,14 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     def revoke(self, request, pk=None):
         guest_pass = self.get_object()
         if guest_pass.status in ('used', 'expired'):
-            return Response(
-                {'detail': 'Used or expired passes cannot be revoked.'},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code='PASS_CANNOT_REVOKE',
+                i18n_key='access.pass_cannot_revoke',
+                http_status=400,
             )
         guest_pass.status = 'revoked'
         guest_pass.save(update_fields=['status'])
-        return Response({'detail': 'Pass revoked'})
+        return Response({'detail': translate('access.pass_revoke_success', get_lang(request))})
 
     @extend_schema(
         tags=['Access'],
@@ -140,9 +143,13 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     def resend(self, request, pk=None):
         guest_pass = self.get_object()
         if guest_pass.status != 'active':
-            return Response(
-                {'detail': f'Cannot resend pass with status "{guest_pass.status}"'},
-                status=status.HTTP_400_BAD_REQUEST,
+            lang = get_lang(request)
+            translated_status = translate(f'access.status.{guest_pass.status}', lang)
+            raise LocalizedError(
+                code='RESEND_STATUS_INVALID',
+                i18n_key='access.resend_status_invalid',
+                params={'status': translated_status},
+                http_status=400,
             )
         now = timezone.now()
         window_start = now - timedelta(hours=1)
@@ -168,16 +175,17 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
                 locked_pass.resend_attempts_in_window = 0
 
             if locked_pass.resend_attempts_in_window >= 3 or (cache_attempts is not None and cache_attempts > 3):
-                return Response(
-                    {'detail': 'Rate limit exceeded. Max 3 resends per hour.'},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                raise LocalizedError(
+                    code='RESEND_RATE_LIMIT_EXCEEDED',
+                    i18n_key='access.resend_rate_limit_exceeded',
+                    http_status=429,
                 )
 
             locked_pass.resend_attempts_in_window += 1
             locked_pass.save(update_fields=['resend_window_started_at', 'resend_attempts_in_window'])
 
         tasks.send_guest_pass_email.delay(guest_pass.id)
-        return Response({'detail': 'QR code resent'})
+        return Response({'detail': translate('access.qr_resent', get_lang(request))})
 
 
 @extend_schema(

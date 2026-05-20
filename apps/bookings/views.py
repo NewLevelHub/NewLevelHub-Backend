@@ -30,6 +30,7 @@ from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.users.models import User
 from .models import (
     Resource,
+    ResourcePhoto,
     Booking,
     BookingParticipant,
     RecurringBooking,
@@ -39,6 +40,7 @@ from .models import (
 )
 from .serializers import (
     ResourceSerializer,
+    ResourcePhotoSerializer,
     ResourceDetailSerializer,
     ResourceListSerializer,
     ResourceBulkCreateSerializer,
@@ -705,11 +707,12 @@ class ResourceViewSet(viewsets.ModelViewSet):
                     ).order_by('end_time'),
                     to_attr='_active_blocks_prefetch',
                 ),
+                'photos',
             )
             # TimeStampedModel задаёт Meta.ordering = -created_at; без сброса БД может
             # вернуть строки в порядке создания, игнорируя ?ordering=name (QA DEV-71).
             return qs.order_by()
-        return qs.order_by('-created_at')
+        return qs.prefetch_related('photos').order_by('-created_at')
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -764,6 +767,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             'bulk_create',
             'activate',
             'deactivate',
+            'photos_upload',
+            'photos_delete',
         ):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -1163,6 +1168,38 @@ class ResourceViewSet(viewsets.ModelViewSet):
         if block is None:
             return Response(status=status.HTTP_404_NOT_FOUND)
         block.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Upload a photo for a resource',
+        request={'multipart/form-data': ResourcePhotoSerializer},
+        responses={201: ResourcePhotoSerializer},
+    )
+    @action(detail=True, methods=['post'], url_path='photos', url_name='photos-upload')
+    def photos_upload(self, request, pk=None):
+        resource = self.get_object()
+        serializer = ResourcePhotoSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(resource=resource)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Delete a photo of a resource',
+        responses={204: None},
+    )
+    @action(
+        detail=True, methods=['delete'],
+        url_path=r'photos/(?P<photo_id>[^/.]+)',
+        url_name='photos-delete',
+    )
+    def photos_delete(self, request, pk=None, photo_id=None):
+        resource = self.get_object()
+        photo = ResourcePhoto.objects.filter(pk=photo_id, resource=resource).first()
+        if photo is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        photo.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

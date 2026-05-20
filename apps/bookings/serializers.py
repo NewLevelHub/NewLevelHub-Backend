@@ -10,7 +10,7 @@ from rest_framework.exceptions import APIException
 
 from apps.companies.models import Company
 from apps.notifications.utils import create_notification
-from .models import Resource, Booking, BookingParticipant, RecurringBooking, ResourceBlock
+from .models import Resource, ResourcePhoto, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
 User = get_user_model()
@@ -44,6 +44,24 @@ def apply_equipment_to_resource(resource, data):
         field = _EQUIPMENT_KEYS.get(key)
         if field is not None and isinstance(value, bool):
             setattr(resource, field, value)
+
+
+class ResourcePhotoSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResourcePhoto
+        fields = ['id', 'image', 'image_url', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get('request')
+        url = obj.image.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 
 
 class ResourceSerializer(serializers.ModelSerializer):
@@ -223,10 +241,11 @@ class ResourceDetailSerializer(ResourceSerializer):
     """GET retrieve: поля ресурса + занятые интервалы на 7 календарных дней (локальная дата)."""
 
     schedule = serializers.SerializerMethodField()
+    photos = serializers.SerializerMethodField()
 
     class Meta(ResourceSerializer.Meta):
-        fields = list(ResourceSerializer.Meta.fields) + ['schedule']
-        read_only_fields = list(ResourceSerializer.Meta.read_only_fields) + ['schedule']
+        fields = list(ResourceSerializer.Meta.fields) + ['schedule', 'photos']
+        read_only_fields = list(ResourceSerializer.Meta.read_only_fields) + ['schedule', 'photos']
 
     def get_schedule(self, obj):
         start, end = seven_day_range_from_today()
@@ -234,6 +253,10 @@ class ResourceDetailSerializer(ResourceSerializer):
             busy_slots_for_resource(obj.pk, start, end),
             many=True,
         ).data
+
+    def get_photos(self, obj):
+        qs = obj.photos.all()
+        return ResourcePhotoSerializer(qs, many=True, context=self.context).data
 
 
 class ResourceListSerializer(serializers.ModelSerializer):
@@ -247,6 +270,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
     )
     parking_type = serializers.SerializerMethodField()
     photo_url = serializers.SerializerMethodField()
+    photos = serializers.SerializerMethodField()
     equipment = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
     reason = serializers.SerializerMethodField()
@@ -266,6 +290,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'zone',
             'photo',
             'photo_url',
+            'photos',
             'capacity',
             'equipment',
             'is_active',
@@ -293,6 +318,10 @@ class ResourceListSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(url)
         return url
+
+    def get_photos(self, obj):
+        qs = obj.photos.all()
+        return ResourcePhotoSerializer(qs, many=True, context=self.context).data
 
     def get_equipment(self, obj):
         if obj.resource_type == 'meeting_room':

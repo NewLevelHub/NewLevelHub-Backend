@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
-from apps.companies.models import CompanySettings
+from apps.companies.models import Company, CompanySettings
 from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
@@ -327,11 +327,25 @@ class OnboardingTemplateViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = OnboardingTemplate.objects.prefetch_related('steps').order_by('id')
         if self.request.user.role == 'superadmin':
+            company_id = self.request.query_params.get('company_id')
+            if company_id and self.action == 'list':
+                return queryset.filter(company_id=company_id)
             return queryset
         return queryset.filter(company=self.request.user.company)
 
     def perform_create(self, serializer):
-        serializer.save(company=self.request.user.company)
+        user = self.request.user
+        if user.role != 'superadmin':
+            serializer.save(company=user.company)
+            return
+        company_id = self.request.query_params.get('company_id')
+        if not company_id:
+            raise ValidationError({'company_id': 'Superadmin must provide company_id query parameter.'})
+        try:
+            company = Company.objects.get(pk=company_id)
+        except Company.DoesNotExist:
+            raise ValidationError({'company_id': 'Company not found.'})
+        serializer.save(company=company)
 
 
 def _build_progress_response(user):

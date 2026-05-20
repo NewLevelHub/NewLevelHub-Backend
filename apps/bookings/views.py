@@ -32,6 +32,7 @@ from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.users.models import User
 from .models import (
     Resource,
+    ResourcePhoto,
     Booking,
     BookingParticipant,
     RecurringBooking,
@@ -41,6 +42,7 @@ from .models import (
 )
 from .serializers import (
     ResourceSerializer,
+    ResourcePhotoSerializer,
     ResourceDetailSerializer,
     ResourceListSerializer,
     ResourceBulkCreateSerializer,
@@ -681,7 +683,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         else:
             qs = qs.filter(is_active=True)
             company = getattr(user, 'company', None)
-            if company and getattr(company, 'plan', None) == 'premium':
+            if company:
                 qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
             else:
                 qs = qs.filter(assigned_company__isnull=True)
@@ -707,11 +709,12 @@ class ResourceViewSet(viewsets.ModelViewSet):
                     ).order_by('end_time'),
                     to_attr='_active_blocks_prefetch',
                 ),
+                'photos',
             )
             # TimeStampedModel задаёт Meta.ordering = -created_at; без сброса БД может
             # вернуть строки в порядке создания, игнорируя ?ordering=name (QA DEV-71).
             return qs.order_by()
-        return qs.order_by('-created_at')
+        return qs.prefetch_related('photos').order_by('-created_at')
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -764,6 +767,10 @@ class ResourceViewSet(viewsets.ModelViewSet):
             'blocks',
             'unblock',
             'bulk_create',
+            'activate',
+            'deactivate',
+            'photos_upload',
+            'photos_delete',
         ):
             return [IsSuperAdmin()]
         return [IsAuthenticated()]
@@ -825,6 +832,47 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 title=f'Бронирование отменено: {resource.name}',
                 message=cancellation_reason,
             )
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Activate a resource (superadmin)',
+        request=None,
+        responses={
+            200: ResourceSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Resource not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='activate',
+            permission_classes=[IsSuperAdmin])
+    def activate(self, request, pk=None):
+        resource = self.get_object()
+        resource.is_active = True
+        resource.save(update_fields=['is_active', 'updated_at'])
+        return Response(ResourceSerializer(resource).data)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Deactivate a resource and cancel its future bookings (superadmin)',
+        request=None,
+        responses={
+            200: ResourceSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Resource not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='deactivate',
+            permission_classes=[IsSuperAdmin])
+    def deactivate(self, request, pk=None):
+        resource = self.get_object()
+        if not resource.is_active:
+            return Response(ResourceSerializer(resource).data)
+        resource.is_active = False
+        resource.save(update_fields=['is_active', 'updated_at'])
+        self._cancel_future_bookings(resource)
+        return Response(ResourceSerializer(resource).data)
 
     @extend_schema(
         tags=['Resources'],
@@ -1121,6 +1169,38 @@ class ResourceViewSet(viewsets.ModelViewSet):
         if block is None:
             return Response(status=status.HTTP_404_NOT_FOUND)
         block.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Upload a photo for a resource',
+        request={'multipart/form-data': ResourcePhotoSerializer},
+        responses={201: ResourcePhotoSerializer},
+    )
+    @action(detail=True, methods=['post'], url_path='photos', url_name='photos-upload')
+    def photos_upload(self, request, pk=None):
+        resource = self.get_object()
+        serializer = ResourcePhotoSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        serializer.save(resource=resource)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=['Resources'],
+        summary='Delete a photo of a resource',
+        responses={204: None},
+    )
+    @action(
+        detail=True, methods=['delete'],
+        url_path=r'photos/(?P<photo_id>[^/.]+)',
+        url_name='photos-delete',
+    )
+    def photos_delete(self, request, pk=None, photo_id=None):
+        resource = self.get_object()
+        photo = ResourcePhoto.objects.filter(pk=photo_id, resource=resource).first()
+        if photo is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        photo.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

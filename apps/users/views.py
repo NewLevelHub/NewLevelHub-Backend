@@ -173,16 +173,19 @@ def register_by_invite(request):
             )
 
         existing = lookup_user_by_invite_email(invitation.email)
+        is_guest_upgrade = False
         if existing:
             err = existing_user_cannot_accept_invite_error(existing, invitation)
             if err:
                 raise ValidationError({'email': err})
+            is_guest_upgrade = (existing.role == 'guest')
 
         return Response(
             {
                 'company_name': invitation.company.name,
                 'email': invitation.email,
                 'role': invitation.role,
+                'is_guest_upgrade': is_guest_upgrade,
             }
         )
 

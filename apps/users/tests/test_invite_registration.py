@@ -180,7 +180,10 @@ class TestInviteRegistration:
         assert response.data['success'] is False
         assert 'email' in response.data['error']['details']
 
-    def test_post_register_by_invite_fails_if_email_normalized_match(self, api_client, company, inviter):
+    def test_post_register_by_invite_fails_if_active_employee_email_normalized_match(
+        self, api_client, company, inviter
+    ):
+        """Normalized-email collision with an active non-guest blocks the invite."""
         invitation = Invitation.objects.create(
             company=company,
             email='new.user@EXAMPLE.COM',
@@ -188,11 +191,14 @@ class TestInviteRegistration:
             role='employee',
             expires_at=timezone.now() + timedelta(hours=72),
         )
+        other_company = Company.objects.create(name='Other Co', plan='basic')
         User.objects.create_user(
             email='new.user@example.com',
             password='StrongPass123!',
             first_name='Existing',
             last_name='User',
+            role='employee',
+            company=other_company,
         )
         response = api_client.post(
             REGISTER_INVITE_URL,
@@ -207,6 +213,54 @@ class TestInviteRegistration:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data['success'] is False
         assert 'email' in response.data['error']['details']
+
+    def test_get_invite_succeeds_and_signals_guest_upgrade(self, api_client, invitation):
+        User.objects.create_user(
+            email=invitation.email,
+            password='StrongPass123!',
+            first_name='Guest',
+            last_name='User',
+            role='guest',
+            company=None,
+            is_active=True,
+        )
+        response = api_client.get(REGISTER_INVITE_URL, {'token': str(invitation.token)})
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['is_guest_upgrade'] is True
+
+    @patch('apps.users.views.send_verification_email.delay')
+    def test_post_register_by_invite_upgrades_guest_account(
+        self, mock_send_email, api_client, invitation
+    ):
+        User.objects.create_user(
+            email=invitation.email,
+            password='OldPass123!',
+            first_name='Was',
+            last_name='Guest',
+            role='guest',
+            company=None,
+            is_active=True,
+        )
+        response = api_client.post(
+            REGISTER_INVITE_URL,
+            {
+                'token': str(invitation.token),
+                'first_name': 'Now',
+                'last_name': 'Employee',
+                'password': 'StrongPass123!',
+            },
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        user = User.objects.get(email=invitation.email)
+        assert user.company_id == invitation.company_id
+        assert user.role == invitation.role
+        assert user.is_active is True
+        assert user.is_email_verified is False
+        assert user.check_password('StrongPass123!')
+        invitation.refresh_from_db()
+        assert invitation.is_used is True
+        mock_send_email.assert_called_once()
 
     def test_post_register_by_invite_fails_if_employee_limit_reached(self, api_client, invitation):
         company = invitation.company

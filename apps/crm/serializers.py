@@ -72,9 +72,15 @@ class LabelSerializer(serializers.ModelSerializer):
         return value.lower()
 
     def validate(self, attrs):
-        company = self.context['request'].user.company
+        user = self.context['request'].user
         name = attrs.get('name', getattr(self.instance, 'name', None))
-        qs = Label.objects.filter(company=company, name__iexact=name)
+        if user.role == 'superadmin':
+            company_id = self.context['request'].query_params.get('company_id')
+            if not company_id:
+                return attrs
+            qs = Label.objects.filter(company_id=company_id, name__iexact=name)
+        else:
+            qs = Label.objects.filter(company=user.company, name__iexact=name)
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():

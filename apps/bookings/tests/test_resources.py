@@ -518,7 +518,7 @@ class TestResourceCatalogOrdering:
 
 @pytest.mark.django_db
 class TestResourceCatalogAssignedVisibility:
-    def test_basic_hides_assigned_even_own_company(
+    def test_basic_sees_own_company_assigned(
         self, api_client, superadmin, employee, company
     ):
         api_client.force_authenticate(user=superadmin)
@@ -536,7 +536,7 @@ class TestResourceCatalogAssignedVisibility:
         api_client.force_authenticate(user=employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}
-        assert rid not in ids
+        assert rid in ids
 
     def test_premium_sees_own_assigned(self, api_client, superadmin, premium_employee, premium_company):
         api_client.force_authenticate(user=superadmin)
@@ -1053,3 +1053,65 @@ class TestResourceCatalogSoonAvailableRule:
         row = next(x for x in _list_results(r) if x['id'] == rid)
         assert row['status'] == 'occupied'
         assert row['available_at'] is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: DEV-63 — resource with assigned_company must be filterable by company
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestResourceFilterByCompany:
+    """Superadmin must be able to filter resources by assigned_company via ?assigned_company= or ?company_id=."""
+
+    def test_filter_by_assigned_company_returns_assigned_resource(
+        self, api_client, superadmin, company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        assigned = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'CompanyDesk', 'floor': 1, 'assigned_company': company.id},
+            format='json',
+        )
+        unassigned = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'FreeDesk', 'floor': 1},
+            format='json',
+        )
+        assigned_id = assigned.json()['id']
+        unassigned_id = unassigned.json()['id']
+
+        r = api_client.get(RESOURCES_URL, {'assigned_company': company.id})
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert assigned_id in ids
+        assert unassigned_id not in ids
+
+    def test_filter_by_company_id_alias(self, api_client, superadmin, company):
+        api_client.force_authenticate(user=superadmin)
+        assigned = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'AliasDesk', 'floor': 2, 'assigned_company': company.id},
+            format='json',
+        )
+        assigned_id = assigned.json()['id']
+
+        r = api_client.get(RESOURCES_URL, {'company_id': company.id})
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert assigned_id in ids
+
+    def test_filter_by_wrong_company_excludes_resource(
+        self, api_client, superadmin, company, premium_company
+    ):
+        api_client.force_authenticate(user=superadmin)
+        assigned = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'WrongCoDeskDEV63', 'floor': 1, 'assigned_company': company.id},
+            format='json',
+        )
+        assigned_id = assigned.json()['id']
+
+        r = api_client.get(RESOURCES_URL, {'assigned_company': premium_company.id})
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert assigned_id not in ids

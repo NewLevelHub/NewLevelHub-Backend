@@ -4,6 +4,13 @@ import time
 import pytest
 from django.conf import settings
 
+try:
+    import xdist  # noqa: F401
+except ImportError:
+    @pytest.fixture(scope='session')
+    def worker_id():
+        return 'master'
+
 
 @pytest.fixture(autouse=True)
 def celery_eager(settings):

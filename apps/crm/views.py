@@ -15,6 +15,7 @@ from drf_spectacular.utils import (
 )
 
 from apps.companies.limits import notify_company_admins_limit_thresholds
+from apps.companies.models import Company
 from apps.core.exceptions import raise_validation_error, LocalizedError
 from apps.core.i18n import translate, get_lang
 from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
@@ -1417,6 +1418,29 @@ class LabelViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
         if self.action in ('partial_update', 'destroy'):
             return [IsCompanyAdmin(), IsEmailVerifiedOrSuperAdmin()]
         return [IsCompanyMember(), IsEmailVerifiedOrSuperAdmin()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'superadmin' and self.action == 'list':
+            company_id = self.request.query_params.get('company_id')
+            if company_id:
+                qs = qs.filter(company_id=company_id)
+        return qs
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if user.role != 'superadmin':
+            super().perform_create(serializer)
+            return
+        company_id = self.request.query_params.get('company_id')
+        if not company_id:
+            raise ValidationError({'company_id': 'Superadmin must provide company_id query parameter.'})
+        try:
+            company = Company.objects.get(pk=company_id)
+        except Company.DoesNotExist:
+            raise ValidationError({'company_id': 'Company not found.'})
+        serializer.save(company=company)
 
 
 class ChecklistViewSet(viewsets.ViewSet):

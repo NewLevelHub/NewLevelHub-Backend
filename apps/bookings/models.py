@@ -67,6 +67,18 @@ class Resource(TimeStampedModel):
         return f'{self.name} ({self.get_resource_type_display()})'
 
 
+class ResourcePhoto(TimeStampedModel):
+    resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='photos')
+    image = models.ImageField(upload_to='resources/photos/')
+
+    class Meta:
+        db_table = 'resource_photos'
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f'Photo #{self.pk} for {self.resource_id}'
+
+
 class Booking(TimeStampedModel):
     STATUS_CHOICES = [
         ('confirmed', 'Confirmed'),

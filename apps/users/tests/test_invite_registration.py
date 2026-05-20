@@ -287,4 +287,5 @@ class TestInviteRegistration:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['error']['details']['non_field_errors'][0] == 'Достигнут лимит сотрудников для вашего тарифа.'
+        msg = response.data['error']['details']['non_field_errors'][0]
+        assert msg == 'Достигнут лимит сотрудников для вашего тарифа.'

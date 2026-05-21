@@ -1,4 +1,5 @@
 from django.db.models import F, Q, Sum
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
@@ -394,7 +395,8 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
-        file_obj = self.get_object()
+        # Load by pk outside get_queryset() so denied access returns 403, not 404.
+        file_obj = get_object_or_404(File, pk=pk)
         self._ensure_file_permission(file_obj, 'download')
         if not file_obj.file:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)

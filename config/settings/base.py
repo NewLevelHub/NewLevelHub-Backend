@@ -18,6 +18,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # Third-party
+    'storages',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -103,6 +104,45 @@ _STATIC_SRC = BASE_DIR / 'static'
 STATICFILES_DIRS = [_STATIC_SRC] if _STATIC_SRC.exists() else []
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# S3 / MinIO object storage (staging, production, or optional local via docker-compose)
+USE_S3 = os.getenv('USE_S3', '').lower() in ('1', 'true', 'yes') or bool(
+    (os.getenv('AWS_STORAGE_BUCKET_NAME') or '').strip()
+)
+AWS_S3_PRESIGNED_URL_EXPIRY = int(os.getenv('AWS_S3_PRESIGNED_URL_EXPIRY', '900'))
+
+if USE_S3:
+    AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME', '')
+    AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME', 'eu-central-1')
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+    _s3_endpoint = (os.getenv('AWS_S3_ENDPOINT_URL') or '').strip()
+    AWS_S3_ENDPOINT_URL = _s3_endpoint or None
+    _addr_style = (os.getenv('AWS_S3_ADDRESSING_STYLE') or '').strip().lower()
+    if _addr_style in ('path', 'virtual'):
+        AWS_S3_ADDRESSING_STYLE = _addr_style
+    elif AWS_S3_ENDPOINT_URL:
+        AWS_S3_ADDRESSING_STYLE = 'path'
+    AWS_DEFAULT_ACL = None
+    AWS_S3_FILE_OVERWRITE = False
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {

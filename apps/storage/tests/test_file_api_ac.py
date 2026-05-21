@@ -218,7 +218,7 @@ class TestFileApiAcceptanceCriteria:
         assert 'uploaded_by' in response.data
         assert 'created_at' in response.data
 
-    def test_get_download_returns_attachment_disposition(self, api_client, company_member):
+    def test_get_download_returns_presigned_json(self, api_client, company_member):
         file_obj = File.objects.create(
             name='manual.txt',
             file=_upload('manual.txt', size=32),
@@ -232,7 +232,9 @@ class TestFileApiAcceptanceCriteria:
         response = api_client.get(_file_download_url(file_obj.id))
 
         assert response.status_code == status.HTTP_200_OK
-        assert 'attachment' in response.headers.get('Content-Disposition', '')
+        assert 'url' in response.data
+        assert 'expires_in' in response.data
+        assert isinstance(response.data['expires_in'], int)
 
     def test_patch_rename_file(self, api_client, company_member):
         file_obj = File.objects.create(
@@ -597,7 +599,8 @@ class TestFileApiAcceptanceCriteria:
         response = api_client.get(_file_download_url(company_file.id))
 
         assert response.status_code == status.HTTP_200_OK
-        assert 'attachment' in response.headers.get('Content-Disposition', '')
+        assert 'url' in response.data
+        assert 'expires_in' in response.data
 
     def test_company_member_cannot_modify_company_file_of_another_user(
         self,

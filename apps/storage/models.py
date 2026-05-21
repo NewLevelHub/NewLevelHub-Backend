@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from apps.core.models import TimeStampedModel, SoftDeleteModel
+from apps.storage.upload_paths import company_storage_file_upload_to
 
 
 class Folder(TimeStampedModel, SoftDeleteModel):
@@ -27,7 +28,7 @@ class Folder(TimeStampedModel, SoftDeleteModel):
 
 class File(TimeStampedModel, SoftDeleteModel):
     name = models.CharField(max_length=255)
-    file = models.FileField(upload_to='storage/%Y/%m/')
+    file = models.FileField(upload_to=company_storage_file_upload_to)
     file_size = models.PositiveBigIntegerField(default=0)
     content_type = models.CharField(max_length=100, blank=True, default='')
 

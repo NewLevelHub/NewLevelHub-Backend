@@ -62,6 +62,11 @@ urlpatterns = [
         name='task-attachments',
     ),
     path(
+        'tasks/<int:task_pk>/attachments/<int:pk>/download/',
+        views.TaskAttachmentViewSet.as_view({'get': 'download'}),
+        name='task-attachment-download',
+    ),
+    path(
         'tasks/<int:task_pk>/attachments/<int:pk>/',
         views.TaskAttachmentViewSet.as_view({'delete': 'destroy'}),
         name='task-attachment-detail',

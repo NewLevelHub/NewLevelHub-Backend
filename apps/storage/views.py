@@ -1,11 +1,11 @@
 from django.db.models import F, Q, Sum
-from django.http import FileResponse
 from django.utils import timezone
+from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 from apps.companies.limits import (
     get_company_storage_used_bytes,
     notify_company_admins_limit_thresholds,
@@ -13,7 +13,17 @@ from apps.companies.limits import (
 from apps.core.permissions import IsCompanyMember
 from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
+from .s3_helpers import presigned_get_url_for_fieldfile
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
+
+
+_FileDownloadResponseSerializer = inline_serializer(
+    name='StorageFileDownloadResponse',
+    fields={
+        'url': drf_serializers.URLField(),
+        'expires_in': drf_serializers.IntegerField(),
+    },
+)
 
 
 def _soft_delete_folder_recursive(folder):
@@ -367,20 +377,23 @@ class FileViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Storage'],
-        summary='Download file as attachment',
-        responses={200: OpenApiResponse(description='File content'), 404: OpenApiResponse(description='Not found')},
+        summary='Get presigned download URL for file',
+        responses={
+            200: OpenApiResponse(response=_FileDownloadResponseSerializer, description='Presigned GET URL'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
     )
     @action(detail=True, methods=['get'])
     def download(self, request, pk=None):
         file_obj = self.get_object()
         self._ensure_file_permission(file_obj, 'download')
-        file_handle = file_obj.file.open('rb')
-        return FileResponse(
-            file_handle,
-            as_attachment=True,
-            filename=file_obj.name,
-            content_type=file_obj.content_type or 'application/octet-stream',
-        )
+        if not file_obj.file:
+            return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
+        url, expires_in = presigned_get_url_for_fieldfile(file_obj.file)
+        if not url:
+            return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'url': url, 'expires_in': expires_in})
 
     @extend_schema(
         tags=['Storage'],

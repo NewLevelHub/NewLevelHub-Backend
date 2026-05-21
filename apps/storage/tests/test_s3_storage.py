@@ -1,5 +1,6 @@
 """S3 storage tests using moto (no real network calls)."""
 import os
+import threading
 import boto3
 import pytest
 from django.conf import settings
@@ -7,6 +8,7 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import override_settings
+from django.utils.functional import empty as _lazy_empty
 from moto import mock_aws
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -41,6 +43,13 @@ def s3_settings():
                 },
             },
         ):
+            # S3Storage caches boto3 connections in a class-level threading.local().
+            # Between tests the mock_aws context resets but the cached connection
+            # from a previous test still points to the old (now dead) moto backend.
+            # Reset it so every test opens a fresh connection inside the active mock.
+            from storages.backends.s3 import S3Storage
+            S3Storage._connections = threading.local()
+            default_storage._wrapped = _lazy_empty
             yield
 
 

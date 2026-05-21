@@ -24,6 +24,10 @@ def complete_step_url(step_id):
     return f'/api/v1/hr/onboarding/progress/steps/{step_id}/complete/'
 
 
+def set_default_url(template_id):
+    return f'/api/v1/hr/onboarding/templates/{template_id}/set-default/'
+
+
 def team_progress_url():
     return '/api/v1/hr/onboarding/progress/team/'
 
@@ -165,6 +169,76 @@ class TestOnboardingTemplatesAC:
 
 
 @pytest.mark.django_db
+class TestSetDefaultTemplateAC:
+    def test_company_admin_can_set_template_as_default(self, api_client, company_admin, company):
+        template, _ = create_template_with_steps(company=company)
+        auth(api_client, company_admin)
+
+        response = api_client.post(set_default_url(template.pk))
+
+        assert response.status_code == status.HTTP_200_OK
+        template.refresh_from_db()
+        assert template.is_default is True
+
+    def test_setting_new_default_unsets_previous_default(self, api_client, company_admin, company):
+        first_template, _ = create_template_with_steps(company=company, name='First')
+        second_template, _ = create_template_with_steps(company=company, name='Second')
+        first_template.set_as_default()
+        auth(api_client, company_admin)
+
+        api_client.post(set_default_url(second_template.pk))
+
+        first_template.refresh_from_db()
+        second_template.refresh_from_db()
+        assert first_template.is_default is False
+        assert second_template.is_default is True
+
+    def test_only_one_default_per_company_after_multiple_sets(self, api_client, company_admin, company):
+        t1, _ = create_template_with_steps(company=company, name='T1')
+        t2, _ = create_template_with_steps(company=company, name='T2')
+        t3, _ = create_template_with_steps(company=company, name='T3')
+        auth(api_client, company_admin)
+
+        api_client.post(set_default_url(t1.pk))
+        api_client.post(set_default_url(t2.pk))
+        api_client.post(set_default_url(t3.pk))
+
+        defaults = OnboardingTemplate.objects.filter(company=company, is_default=True)
+        assert defaults.count() == 1
+        assert defaults.first().pk == t3.pk
+
+    def test_employee_forbidden_from_set_default(self, api_client, employee, company):
+        template, _ = create_template_with_steps(company=company)
+        auth(api_client, employee)
+
+        response = api_client.post(set_default_url(template.pk))
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_admin_of_other_company_cannot_set_default(self, api_client, other_company_admin, company):
+        template, _ = create_template_with_steps(company=company)
+        auth(api_client, other_company_admin)
+
+        response = api_client.post(set_default_url(template.pk))
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_initialize_onboarding_uses_default_template(self, company, employee):
+        from apps.hr.tasks import initialize_user_onboarding_progress
+        _other, _ = create_template_with_steps(company=company, name='Non-default')
+        default_template, default_steps = create_template_with_steps(company=company, name='Default')
+        default_template.set_as_default()
+
+        count = initialize_user_onboarding_progress(employee)
+
+        assert count == len(default_steps)
+        assigned_step_ids = set(
+            UserOnboardingProgress.objects.filter(user=employee).values_list('step_id', flat=True)
+        )
+        assert assigned_step_ids == {s.pk for s in default_steps}
+
+
+@pytest.mark.django_db
 class TestInviteRegistrationCreatesOnboardingProgressAC:
     @patch('apps.users.views.send_verification_email.delay')
     def test_register_by_invite_auto_creates_user_progress(
@@ -214,6 +288,28 @@ class TestMyOnboardingProgressAC:
         assert isinstance(response.data['completed'], bool)
         assert isinstance(response.data['steps'], list)
         assert set(response.data['steps'][0].keys()) == {'id', 'title', 'is_completed'}
+
+    def test_progress_shows_only_default_template_steps(self, api_client, employee, company):
+        """Если у пользователя есть строки прогресса от нескольких шаблонов,
+        должны показываться только шаги дефолтного шаблона."""
+        default_template, default_steps = create_template_with_steps(company=company, name='Default')
+        default_template.set_as_default()
+        other_template, other_steps = create_template_with_steps(company=company, name='Other')
+
+        # Прогресс от дефолтного шаблона
+        UserOnboardingProgress.objects.create(user=employee, step=default_steps[0], is_completed=False)
+        UserOnboardingProgress.objects.create(user=employee, step=default_steps[1], is_completed=False)
+        # Прогресс от другого шаблона (мусор из прошлого)
+        UserOnboardingProgress.objects.create(user=employee, step=other_steps[0], is_completed=True)
+        UserOnboardingProgress.objects.create(user=employee, step=other_steps[1], is_completed=True)
+        auth(api_client, employee)
+
+        response = api_client.get(PROGRESS_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        returned_step_ids = {s['id'] for s in response.data['steps']}
+        assert returned_step_ids == {default_steps[0].pk, default_steps[1].pk}
+        assert len(response.data['steps']) == 2
 
 
 @pytest.mark.django_db

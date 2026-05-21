@@ -339,10 +339,38 @@ class OnboardingTemplateViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             raise ValidationError({'company_id': 'Company not found.'})
         serializer.save(company=company)
 
+    @extend_schema(
+        tags=['HR'],
+        summary='Set template as default',
+        responses={
+            200: OnboardingTemplateSerializer,
+            403: OpenApiResponse(description='Company admin only'),
+            404: OpenApiResponse(description='Template not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='set-default')
+    @transaction.atomic
+    def set_default(self, request, pk=None):
+        template = self.get_object()
+        template.set_as_default()
+        return Response(self.get_serializer(template).data)
+
+
+def _get_active_template(user):
+    """Возвращает текущий активный шаблон для компании пользователя (is_default → первый по id)."""
+    if not user.company_id:
+        return None
+    qs = OnboardingTemplate.objects.filter(company_id=user.company_id, is_active=True)
+    return qs.filter(is_default=True).first() or qs.order_by('id').first()
+
 
 def _build_progress_response(user):
+    template = _get_active_template(user)
+    if not template:
+        return {'completed': True, 'steps': []}
+
     progress_items = list(
-        UserOnboardingProgress.objects.filter(user=user)
+        UserOnboardingProgress.objects.filter(user=user, step__template=template)
         .select_related('step')
         .order_by('step__position')
     )

@@ -68,9 +68,17 @@ class OnboardingTemplate(TimeStampedModel):
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='onboarding_templates')
     title = models.CharField(max_length=255, default='Default onboarding')
     is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         db_table = 'hr_onboarding_templates'
+
+    def set_as_default(self):
+        """Назначить этот шаблон дефолтным, сняв флаг с остальных шаблонов компании."""
+        OnboardingTemplate.objects.filter(company=self.company, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        if not self.is_default:
+            self.is_default = True
+            self.save(update_fields=['is_default', 'updated_at'])
 
 
 class OnboardingStep(TimeStampedModel):

@@ -75,7 +75,9 @@ class OnboardingTemplate(TimeStampedModel):
 
     def set_as_default(self):
         """Назначить этот шаблон дефолтным, сняв флаг с остальных шаблонов компании."""
-        OnboardingTemplate.objects.filter(company=self.company, is_default=True).exclude(pk=self.pk).update(is_default=False)
+        OnboardingTemplate.objects.filter(company=self.company, is_default=True).exclude(pk=self.pk).update(
+            is_default=False
+        )
         if not self.is_default:
             self.is_default = True
             self.save(update_fields=['is_default', 'updated_at'])

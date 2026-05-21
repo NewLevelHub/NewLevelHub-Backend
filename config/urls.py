@@ -1,4 +1,4 @@
-"""URL configuration for NewLevelHub project."""
+"""URL configuration for NewLevelHub project."""  # CI smoke test (chore/ci-smoke-test)
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings

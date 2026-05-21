@@ -1410,6 +1410,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     queryset = Booking.objects.all()
     filterset_class = BookingFilter
     ordering_fields = ['start_time', 'created_at']
+    ordering = ['start_time', 'id']
     http_method_names = ['get', 'post', 'patch', 'delete']
 
     def get_serializer_class(self):
@@ -1509,7 +1510,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     def get_queryset(self):
-        return super().get_queryset().order_by('-start_time', '-id')
+        return super().get_queryset().order_by('start_time', 'id')
 
     @extend_schema(
         tags=['Bookings'],

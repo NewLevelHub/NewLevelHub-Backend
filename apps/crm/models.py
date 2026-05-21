@@ -133,6 +133,11 @@ class Comment(TimeStampedModel):
         return self.task.column.board.company_id
 
 
+def _task_attachment_upload_path(instance, filename):
+    """Kept for migration 0004; delegates to S3 key layout in storage.upload_paths."""
+    return task_attachment_upload_to(instance, filename)
+
+
 class TaskAttachment(TimeStampedModel):
     task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name='attachments')
     file = models.FileField(upload_to=task_attachment_upload_to, null=True, blank=True)

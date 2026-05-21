@@ -321,11 +321,14 @@ class TaskSerializer(serializers.ModelSerializer):
             board_qs = BoardModel.objects.filter(pk=board_id)
             if company:
                 board_qs = board_qs.filter(company=company)
-            if not board_qs.exists():
+            board_obj = board_qs.only('id', 'company_id').first()
+            if not board_obj:
                 raise serializers.ValidationError({'board_id': 'Board not found or does not belong to your company.'})
             self._validated_board_id = board_id
+            self._board_company_id = board_obj.company_id
         elif instance is not None:
             self._validated_board_id = instance.column.board_id
+            self._board_company_id = instance.column.board.company_id
         else:
             raise serializers.ValidationError({'board_id': 'This field is required.'})
 
@@ -335,10 +338,13 @@ class TaskSerializer(serializers.ModelSerializer):
             if column.board_id != self._validated_board_id:
                 raise serializers.ValidationError({'column_id': 'Column does not belong to the specified board.'})
 
-        # Validate assignee belongs to same company
+        # Validate assignee belongs to the board's company.
+        # For regular users `company` is their own company; for superadmin it is None
+        # so we fall back to the board's company stored in _board_company_id.
         assignee = attrs.get('assignee')
         if assignee is not None:
-            if company and assignee.company_id != company.id:
+            target_company_id = company.id if company is not None else getattr(self, '_board_company_id', None)
+            if target_company_id is not None and assignee.company_id != target_company_id:
                 raise serializers.ValidationError(
                     {'assignee_id': 'Assignee must be an employee of the same company.'}
                 )

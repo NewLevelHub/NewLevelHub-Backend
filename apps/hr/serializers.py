@@ -126,8 +126,8 @@ class OnboardingTemplateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OnboardingTemplate
-        fields = ['id', 'name', 'is_active', 'steps', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'name', 'is_active', 'is_default', 'steps', 'created_at']
+        read_only_fields = ['id', 'is_default', 'created_at']
 
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])

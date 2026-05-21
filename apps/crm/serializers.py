@@ -206,15 +206,10 @@ class TaskAttachmentSerializer(serializers.ModelSerializer):
 
     def get_url(self, obj):
         request = self.context.get('request')
-        if obj.storage_file_id:
-            file_field = obj.storage_file.file
-        else:
-            file_field = obj.file
-        if not file_field:
-            return None
+        rel = f'/api/v1/crm/tasks/{obj.task_id}/attachments/{obj.pk}/download/'
         if request:
-            return request.build_absolute_uri(file_field.url)
-        return file_field.url
+            return request.build_absolute_uri(rel)
+        return rel
 
     def validate(self, attrs):
         file = attrs.get('file')

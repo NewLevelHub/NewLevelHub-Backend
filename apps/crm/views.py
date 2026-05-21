@@ -26,6 +26,7 @@ from apps.core.permissions import (
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
+from apps.storage.s3_helpers import presigned_get_url_for_fieldfile
 from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
 from .services import check_wip_limit
 from .serializers import (
@@ -1706,7 +1707,7 @@ class ChecklistItemViewSet(viewsets.ViewSet):
         tags=['CRM'],
         summary='Delete a task attachment',
         description=(
-            'If the attachment is a direct upload, the file is deleted from disk. '
+            'If the attachment is a direct upload, the underlying file is removed from storage. '
             'If it links to a Storage file, only the link record is removed. '
             'Only the uploader or a company_admin may delete.'
         ),
@@ -1715,6 +1716,25 @@ class ChecklistItemViewSet(viewsets.ViewSet):
             401: OpenApiResponse(description='Not authenticated.'),
             403: OpenApiResponse(description='Only uploader or company admin can delete.'),
             404: OpenApiResponse(description='Attachment not found.'),
+        },
+    ),
+    download=extend_schema(
+        tags=['CRM'],
+        summary='Get presigned download URL for task attachment',
+        responses={
+            200: OpenApiResponse(
+                response=inline_serializer(
+                    name='TaskAttachmentDownloadResponse',
+                    fields={
+                        'url': drf_serializers.URLField(),
+                        'expires_in': drf_serializers.IntegerField(),
+                    },
+                ),
+                description='Presigned GET URL',
+            ),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Attachment or file not found.'),
         },
     ),
 )
@@ -1748,6 +1768,23 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
         qs = self.get_queryset()
         serializer = self.get_serializer(qs, many=True)
         return Response(serializer.data)
+
+    def download(self, request, task_pk=None, pk=None):
+        self._get_task_or_403()
+        try:
+            attachment = TaskAttachment.objects.select_related('storage_file').get(pk=pk, task_id=task_pk)
+        except TaskAttachment.DoesNotExist:
+            raise NotFound('Attachment not found.')
+        if attachment.storage_file_id:
+            field_file = attachment.storage_file.file
+        else:
+            field_file = attachment.file
+        if not field_file or not getattr(field_file, 'name', None):
+            raise NotFound('Attachment file not found.')
+        url, expires_in = presigned_get_url_for_fieldfile(field_file)
+        if not url:
+            raise NotFound('Attachment file not found.')
+        return Response({'url': url, 'expires_in': expires_in})
 
     def create(self, request, task_pk=None):
         from apps.companies.limits import get_company_storage_used_bytes, notify_company_admins_limit_thresholds

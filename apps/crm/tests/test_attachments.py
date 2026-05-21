@@ -28,6 +28,10 @@ def attachment_detail_url(task_pk, attachment_pk):
     return f'/api/v1/crm/tasks/{task_pk}/attachments/{attachment_pk}/'
 
 
+def attachment_download_url(task_pk, attachment_pk):
+    return f'/api/v1/crm/tasks/{task_pk}/attachments/{attachment_pk}/download/'
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -216,6 +220,29 @@ class TestAttachmentList:
         api_client.force_authenticate(employee_a)
         resp = api_client.get(attachments_url(99999))
         assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_list_url_points_to_download_endpoint(self, api_client, employee_a, task_a, attachment_a):
+        api_client.force_authenticate(employee_a)
+        resp = api_client.get(attachments_url(task_a.pk))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.json()[0]['url'].endswith(
+            f'/api/v1/crm/tasks/{task_a.pk}/attachments/{attachment_a.pk}/download/'
+        )
+
+
+@pytest.mark.django_db
+class TestAttachmentDownload:
+    def test_download_returns_presigned_json(self, api_client, employee_a, task_a, attachment_a):
+        api_client.force_authenticate(employee_a)
+        resp = api_client.get(attachment_download_url(task_a.pk, attachment_a.pk))
+        assert resp.status_code == status.HTTP_200_OK
+        assert 'url' in resp.json()
+        assert 'expires_in' in resp.json()
+
+    def test_other_company_cannot_download(self, api_client, employee_b, task_a, attachment_a):
+        api_client.force_authenticate(employee_b)
+        resp = api_client.get(attachment_download_url(task_a.pk, attachment_a.pk))
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
 # ---------------------------------------------------------------------------

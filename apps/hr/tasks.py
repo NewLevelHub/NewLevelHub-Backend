@@ -15,11 +15,8 @@ def initialize_user_onboarding_progress(user):
     if not user or not user.company_id:
         return 0
 
-    template = (
-        OnboardingTemplate.objects.filter(company_id=user.company_id, is_active=True)
-        .order_by('-created_at')
-        .first()
-    )
+    active_qs = OnboardingTemplate.objects.filter(company_id=user.company_id, is_active=True)
+    template = active_qs.filter(is_default=True).first() or active_qs.order_by('id').first()
     if not template:
         return 0
 

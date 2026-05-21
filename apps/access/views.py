@@ -337,28 +337,15 @@ class AccessLogViewSet(viewsets.ModelViewSet):
 
         return qs
 
-    EXPORT_HEADERS_RU = [
-        "Имя гостя",
-        "Email гостя",
-        "Компания",
-        "Пригласил",
-        "Проверил",
-        "Валидирован",
-        "Метод",
+    _EXPORT_HEADER_KEYS = [
+        'access.csv.guest_name',
+        'access.csv.guest_email',
+        'access.csv.company',
+        'access.csv.invited_by',
+        'access.csv.validated_by',
+        'access.csv.validated_at',
+        'access.csv.method',
     ]
-    EXPORT_HEADERS_EN = [
-        "Guest Name",
-        "Guest Email",
-        "Company",
-        "Invited By",
-        "Validated By",
-        "Validated At",
-        "Method",
-    ]
-    _EXPORT_HEADERS_BY_LANG = {
-        'ru': EXPORT_HEADERS_RU,
-        'en': EXPORT_HEADERS_EN,
-    }
 
     @extend_schema(
         tags=['Access'],
@@ -382,8 +369,8 @@ class AccessLogViewSet(viewsets.ModelViewSet):
 
         today_str = timezone.localdate().strftime('%Y-%m-%d')
         filename = f'access_logs_{today_str}.csv'
-        lang = request.query_params.get('lang', 'ru')
-        headers = self._EXPORT_HEADERS_BY_LANG.get(lang, self.EXPORT_HEADERS_RU)
+        lang = get_lang(request)
+        headers = [translate(key, lang) for key in self._EXPORT_HEADER_KEYS]
 
         def _iter_rows():
             # UTF-8 BOM so Excel recognises Cyrillic correctly

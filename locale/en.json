@@ -5,7 +5,6 @@
   "common.unauthenticated": "Authentication required.",
   "common.validation_error": "Validation error.",
   "common.invalid_field": "Invalid field value.",
-
   "auth.email_not_verified": "Email not verified. Please verify your email before signing in.",
   "auth.email_not_verified_short": "Email not verified.",
   "company.not_assigned": "Your account is not associated with a company. Please contact your administrator to be added to an organization.",
@@ -15,11 +14,9 @@
   "auth.token_already_used": "Token has already been used.",
   "auth.passwords_dont_match": "Passwords do not match.",
   "auth.current_password_wrong": "Current password is incorrect.",
-
   "booking.invalid_week_format": "Invalid week format. Use YYYY-MM-DD.",
   "booking.invalid_date_format": "Invalid date format. Use YYYY-MM-DD.",
   "booking.participants_admin_only": "Only company administrators can manage participants.",
-
   "booking.repeat_until_in_past": "repeat_until cannot be in the past.",
   "booking.advance_days_exceeded": "Booking must start within {advance_days} days from now.",
   "booking.conflict": "The selected time slot is already taken.",
@@ -64,7 +61,6 @@
   "booking.datetime_must_be_timezone_aware": "Date and time must include timezone information (e.g. 2025-04-16T10:00:00+05:00).",
   "booking.start_time_must_be_future": "Booking start time must be in the future.",
   "booking.recurring_slot_conflict": "An active recurring series already exists for this slot.",
-
   "crm.board_unarchive_limit": "Cannot unarchive: board limit reached for your plan.",
   "crm.board_access_denied": "You do not have access to this board.",
   "crm.label_color_invalid": "Must be a valid 6-digit HEX color, e.g. #ff00aa.",
@@ -86,7 +82,6 @@
   "crm.task_access_denied": "You do not have access to this task.",
   "crm.checklist_access_denied": "You do not have access to this checklist.",
   "crm.checklist_item_access_denied": "You do not have access to this checklist item.",
-
   "crm.wip_limit_exceeded": "WIP limit reached (max {wip_limit} tasks).",
   "crm.task_not_found": "Task not found.",
   "crm.column_not_found": "Column not found.",
@@ -102,11 +97,9 @@
   "crm.move_to_same_column": "Target column must be different from the column being deleted.",
   "crm.column_wrong_task_board": "Target column must belong to the same board as the task.",
   "crm.column_wrong_company": "Target column does not belong to your company.",
-
   "storage.file_access_denied": "You do not have access to this file.",
   "storage.file_action_forbidden": "Insufficient permissions to perform this action on the file.",
   "storage.recipients_owner_only": "Only the file owner can view recipients.",
-
   "storage.limit_exceeded": "Storage limit exceeded.",
   "storage.file_too_large": "File is too large. Maximum size is {max_mb} MB.",
   "storage.folder_not_found": "Folder not found.",
@@ -121,7 +114,6 @@
   "storage.folder_id_invalid": "Must be an integer or \"null\".",
   "storage.personal_folder_inaccessible": "Personal folder is not accessible.",
   "storage.company_folder_inaccessible": "Company folder is not accessible.",
-
   "company.own_calendar_only": "You can only view your own company's calendar.",
   "company.settings_employees_forbidden": "Employees cannot change company settings.",
   "company.settings_own_company_only": "You can only change your own company's settings.",
@@ -136,10 +128,8 @@
   "company.invite_revoked": "Invitation revoked.",
   "company.invite_resent": "Invitation resent.",
   "company.catalog_own_company_only": "You can only view your own company's catalog.",
-
   "company.working_hours_start_after_end": "working_hours.start must be before working_hours.end.",
   "company.hex_color_invalid": "Must be a valid HEX color, e.g. #RGB or #RRGGBB.",
-
   "company.invite_active_for_email": "An active invitation for this email already exists.",
   "company.role_superadmin_only": "Only a superadmin can invite users with role {role}.",
   "company.admin_cannot_invite_role": "Company admins cannot invite users with role {role}.",
@@ -164,7 +154,6 @@
   "company.event_type_invalid": "Unsupported value. Use one of: {choices}",
   "company.user_id_required": "This query parameter is required.",
   "company.user_not_in_company": "User not found in this company.",
-
   "users.token_required": "Token is required.",
   "users.invite_invalid_or_expired": "Invalid or expired invitation.",
   "users.registration_success": "Registration successful. Please verify your email before signing in.",
@@ -177,10 +166,8 @@
   "users.avatar_type_not_supported": "Unsupported image type. Allowed: JPEG, PNG, WebP.",
   "users.avatar_too_large": "Avatar is too large. Maximum size is {max_mb} MB.",
   "auth.account_blocked": "Account is blocked.",
-
   "hr.review_admin_only": "Only a company admin can review leave requests.",
   "hr.balance_own_company_only": "You can only manage leave balances for employees in your company.",
-
   "access.pass_expired": "Guest pass has expired.",
   "access.pass_revoked": "Guest pass has been revoked.",
   "access.pass_cannot_revoke": "Used or expired passes cannot be revoked.",
@@ -199,7 +186,6 @@
   "access.resend_rate_limit_exceeded": "Rate limit exceeded. Maximum 3 resends per hour.",
   "access.qr_resent": "QR code resent.",
   "access.pass_revoke_success": "Pass revoked.",
-
   "hr.leave_overlap": "Leave request overlaps with an existing one.",
   "hr.leave_not_found": "Leave request not found.",
   "hr.start_date_after_end_date": "Start date must be less than or equal to end date.",
@@ -211,16 +197,46 @@
   "hr.year_out_of_range": "Year must be between 1900 and 3000.",
   "hr.leave_approve_overlap": "Cannot approve leave on dates overlapping with already approved leave.",
   "hr.leave_approve_balance_insufficient": "Not enough leave balance to approve this request.",
-
   "services.coordinate_out_of_range": "Value must be between 0.0 and 100.0.",
   "services.resource_required_for_type": "Resource is required for point_type \"{point_type}\".",
   "services.company_required_for_office": "Company is required for point_type \"office\".",
   "services.field_required": "This field is required.",
   "services.invalid_status_transition": "Invalid status transition: {current} → {next_status}. Expected: {expected}.",
-
   "analytics.must_be_integer": "Must be a valid integer.",
   "analytics.invalid_period": "Invalid period. Must be one of: {choices}.",
   "analytics.custom_period_dates_required": "For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.",
   "analytics.invalid_date": "Enter a valid date (YYYY-MM-DD).",
-  "analytics.date_from_after_date_to": "date_from must be on or before date_to."
+  "analytics.date_from_after_date_to": "date_from must be on or before date_to.",
+  "analytics.csv.period": "Period",
+  "analytics.csv.date_from": "Date From",
+  "analytics.csv.date_to": "Date To",
+  "analytics.csv.total_companies": "Total Companies",
+  "analytics.csv.active_companies": "Active Companies",
+  "analytics.csv.total_users": "Total Users",
+  "analytics.csv.active_users_7d": "Active Users (7 days)",
+  "analytics.csv.bookings_today": "Bookings Today",
+  "analytics.csv.guests_today": "Guests Today",
+  "analytics.csv.open_service_requests": "Open Service Requests",
+  "analytics.csv.total_employees": "Total Employees",
+  "analytics.csv.active_7d": "Active (7 days)",
+  "analytics.csv.bookings_month": "Bookings This Month",
+  "analytics.csv.storage_used": "Storage Used",
+  "analytics.csv.storage_limit": "Storage Limit",
+  "analytics.csv.crm_total": "CRM Total",
+  "analytics.csv.crm_todo": "CRM: To Do",
+  "analytics.csv.crm_in_progress": "CRM: In Progress",
+  "analytics.csv.crm_done": "CRM: Done",
+  "analytics.csv.crm_other": "CRM: Other",
+  "analytics.csv.guest_visits_month": "Guest Visits This Month",
+  "analytics.csv.full_name": "Full Name",
+  "analytics.csv.booking_count_30d": "Bookings (30 days)",
+  "analytics.csv.task_count_active": "Active Tasks",
+  "analytics.csv.last_login": "Last Login",
+  "access.csv.guest_name": "Guest Name",
+  "access.csv.guest_email": "Guest Email",
+  "access.csv.company": "Company",
+  "access.csv.invited_by": "Invited By",
+  "access.csv.validated_by": "Validated By",
+  "access.csv.validated_at": "Validated At",
+  "access.csv.method": "Method"
 }

@@ -16,6 +16,7 @@ from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParamet
 from drf_spectacular.types import OpenApiTypes
 
 from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import get_lang, translate
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin
 from apps.users.models import User
 from apps.companies.models import Company
@@ -442,19 +443,20 @@ def _http_csv_attachment(filename_stem, rows):
     return response
 
 
-def _rows_superadmin_csv(payload):
+def _rows_superadmin_csv(payload, lang='ru'):
     ov = payload['overview']
+    t = lambda key: translate(key, lang)  # noqa: E731
     headers = [
-        'period',
-        'date_from',
-        'date_to',
-        'total_companies',
-        'active_companies',
-        'total_users',
-        'active_users_7d',
-        'bookings_today',
-        'guests_today',
-        'open_service_requests',
+        t('analytics.csv.period'),
+        t('analytics.csv.date_from'),
+        t('analytics.csv.date_to'),
+        t('analytics.csv.total_companies'),
+        t('analytics.csv.active_companies'),
+        t('analytics.csv.total_users'),
+        t('analytics.csv.active_users_7d'),
+        t('analytics.csv.bookings_today'),
+        t('analytics.csv.guests_today'),
+        t('analytics.csv.open_service_requests'),
     ]
     data_row = [
         payload['period'],
@@ -481,20 +483,21 @@ class _IgnoreDrfFormatQueryParamMixin:
         return (JSONRenderer(), 'application/json')
 
 
-def _rows_company_csv(data):
+def _rows_company_csv(data, lang='ru'):
     act = data['active_crm_tasks']
+    t = lambda key: translate(key, lang)  # noqa: E731
     summary_header = [
-        'total_employees',
-        'active_7d',
-        'bookings_month',
-        'storage_used',
-        'storage_limit',
-        'crm_total',
-        'crm_todo',
-        'crm_in_progress',
-        'crm_done',
-        'crm_other',
-        'guest_visits_month',
+        t('analytics.csv.total_employees'),
+        t('analytics.csv.active_7d'),
+        t('analytics.csv.bookings_month'),
+        t('analytics.csv.storage_used'),
+        t('analytics.csv.storage_limit'),
+        t('analytics.csv.crm_total'),
+        t('analytics.csv.crm_todo'),
+        t('analytics.csv.crm_in_progress'),
+        t('analytics.csv.crm_done'),
+        t('analytics.csv.crm_other'),
+        t('analytics.csv.guest_visits_month'),
     ]
     summary_row = [
         data['total_employees'],
@@ -510,11 +513,15 @@ def _rows_company_csv(data):
         data['guest_visits_month'],
     ]
     rows = [summary_header, summary_row, []]
-    rows.append(['user_id', 'full_name', 'booking_count_30d', 'task_count_active', 'last_login'])
+    rows.append([
+        t('analytics.csv.full_name'),
+        t('analytics.csv.booking_count_30d'),
+        t('analytics.csv.task_count_active'),
+        t('analytics.csv.last_login'),
+    ])
     for emp in data['employee_activity']:
         last_login = emp['last_login'].isoformat() if emp['last_login'] else ''
         rows.append([
-            emp['user_id'],
             emp['full_name'],
             emp['booking_count_30d'],
             emp['task_count_active'],
@@ -658,7 +665,7 @@ class SuperadminExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
             raise ValidationError({'format': ['Invalid or missing format. Use format=csv.']})
         payload = build_superadmin_dashboard_payload(request)
         stem = f'analytics-superadmin-{payload["period"]}'
-        return _http_csv_attachment(stem, _rows_superadmin_csv(payload))
+        return _http_csv_attachment(stem, _rows_superadmin_csv(payload, get_lang(request)))
 
 
 @extend_schema(
@@ -692,7 +699,7 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
             return Response({'detail': 'No company'}, status=400)
         data = build_company_analytics_data(user)
         safe_slug = ''.join(c if c.isalnum() else '-' for c in user.company.name.lower()) or 'company'
-        return _http_csv_attachment(f'analytics-company-{safe_slug}', _rows_company_csv(data))
+        return _http_csv_attachment(f'analytics-company-{safe_slug}', _rows_company_csv(data, get_lang(request)))
 
 
 @extend_schema(

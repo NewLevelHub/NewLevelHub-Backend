@@ -472,10 +472,27 @@ class FloorViewSet(viewsets.ModelViewSet):
             instance.plan_image.storage.delete(old_path)
 
     def perform_destroy(self, instance):
+        from django.db.models import Q
+        from apps.bookings.models import Resource
+
+        # Collect resources linked via map points on this floor
+        point_resource_ids = list(
+            instance.points.filter(resource__isnull=False)
+            .values_list('resource_id', flat=True)
+            .distinct()
+        )
+        floor_number = instance.number
+
         image_name = instance.plan_image.name if instance.plan_image else None
         storage = instance.plan_image.storage if instance.plan_image else None
-        instance.delete()
-        # Physically remove the file after the DB row is gone
+        instance.delete()  # CASCADE deletes all map points on this floor
+
+        # Delete resources by map-point link OR by floor number match
+        # (covers resources created for this floor but not yet placed on the map)
+        Resource.objects.filter(
+            Q(id__in=point_resource_ids) | Q(floor=floor_number)
+        ).delete()
+
         if image_name and storage:
             storage.delete(image_name)
 

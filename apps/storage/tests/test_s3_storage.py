@@ -162,10 +162,9 @@ class TestMigrateFilesToS3:
 
         with override_settings(MEDIA_ROOT=legacy_dir):
             call_command('migrate_files_to_s3')
-
-        file_obj.refresh_from_db()
-        assert file_obj.file.name.startswith('companies/')
-        assert default_storage.exists(file_obj.file.name)
+            file_obj.refresh_from_db()
+            assert file_obj.file.name.startswith('companies/')
+            assert default_storage.exists(file_obj.file.name)
 
 
 @pytest.mark.django_db

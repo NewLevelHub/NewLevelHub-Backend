@@ -176,14 +176,6 @@ class TestCleanupDeleteRetry:
 
         from apps.storage.tasks import _delete_fieldfile_with_retry
 
-        file_obj = File.objects.create(
-            name='retry.txt',
-            file=SimpleUploadedFile('retry.txt', b'x'),
-            file_size=1,
-            content_type='text/plain',
-            owner=company_member,
-            company=company,
-        )
         mock_field = MagicMock()
         mock_field.name = 'companies/1/files/2024/01/x.txt'
         mock_field.delete.side_effect = ClientError(

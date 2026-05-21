@@ -62,7 +62,10 @@ class Command(BaseCommand):
                 continue
 
             dest_name = company_storage_file_upload_to(file_obj, PurePath(old_name).name)
-            self.stdout.write(f'{msg_prefix} -> would copy to {dest_name!r}' if dry_run else f'{msg_prefix} -> {dest_name!r}')
+            if dry_run:
+                self.stdout.write(f'{msg_prefix} -> would copy to {dest_name!r}')
+            else:
+                self.stdout.write(f'{msg_prefix} -> {dest_name!r}')
 
             if dry_run:
                 migrated_files += 1
@@ -90,7 +93,10 @@ class Command(BaseCommand):
                 continue
 
             dest_name = task_attachment_upload_to(att, PurePath(old_name).name)
-            self.stdout.write(f'{msg_prefix} -> would copy to {dest_name!r}' if dry_run else f'{msg_prefix} -> {dest_name!r}')
+            if dry_run:
+                self.stdout.write(f'{msg_prefix} -> would copy to {dest_name!r}')
+            else:
+                self.stdout.write(f'{msg_prefix} -> {dest_name!r}')
 
             if dry_run:
                 migrated_attachments += 1
@@ -103,10 +109,10 @@ class Command(BaseCommand):
             att.save(update_fields=['file', 'updated_at'])
             migrated_attachments += 1
 
-        self.stdout.write(
-            self.style.NOTICE(
-                f'Done. storage_files: migrated={migrated_files}, skipped={skipped_files}, missing_local={failed_files}; '
-                f'attachments: migrated={migrated_attachments}, skipped={skipped_attachments}, '
-                f'missing_local={failed_attachments}; dry_run={dry_run}'
-            )
+        summary = (
+            f'Done. storage_files: migrated={migrated_files}, skipped={skipped_files}, '
+            f'missing_local={failed_files}; attachments: migrated={migrated_attachments}, '
+            f'skipped={skipped_attachments}, missing_local={failed_attachments}; '
+            f'dry_run={dry_run}'
         )
+        self.stdout.write(self.style.NOTICE(summary))

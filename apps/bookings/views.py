@@ -1516,7 +1516,6 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         ).values_list('booking_id', flat=True)
         return (
             Booking.objects.filter(Q(pk__in=qs) | Q(pk__in=participant_booking_ids))
-            .distinct()
             .order_by('-start_time', '-id')
         )
 

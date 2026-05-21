@@ -1507,7 +1507,17 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     def get_queryset(self):
-        return super().get_queryset().order_by('-start_time', '-id')
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'superadmin' or not user.company_id:
+            return qs.order_by('-start_time', '-id')
+        participant_booking_ids = BookingParticipant.objects.filter(
+            user=user,
+        ).values_list('booking_id', flat=True)
+        return (
+            Booking.objects.filter(Q(pk__in=qs) | Q(pk__in=participant_booking_ids))
+            .order_by('-start_time', '-id')
+        )
 
     @extend_schema(
         tags=['Bookings'],
@@ -1716,6 +1726,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                     notification_type='booking_confirmed',
                     title=f'You were added to meeting: {booking.resource.name}',
                     message='Check your bookings for updated participants.',
+                    link=f'/bookings/{booking.id}',
                 )
             self._create_change_audit(
                 booking=booking,

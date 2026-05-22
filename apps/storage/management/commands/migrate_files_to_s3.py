@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage, default_storage
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from apps.crm.models import TaskAttachment
 from apps.storage.models import File as StorageFile
@@ -73,9 +74,14 @@ class Command(BaseCommand):
 
             with legacy.open(old_name, 'rb') as src:
                 data = src.read()
-            default_storage.save(dest_name, ContentFile(data))
-            file_obj.file.name = dest_name
-            file_obj.save(update_fields=['file', 'updated_at'])
+            stored_name = default_storage.save(
+                dest_name,
+                ContentFile(data, name=PurePath(dest_name).name),
+            )
+            StorageFile.all_objects.filter(pk=file_obj.pk).update(
+                file=stored_name,
+                updated_at=timezone.now(),
+            )
             migrated_files += 1
 
         for att in TaskAttachment.objects.exclude(file='').iterator():
@@ -104,9 +110,14 @@ class Command(BaseCommand):
 
             with legacy.open(old_name, 'rb') as src:
                 data = src.read()
-            default_storage.save(dest_name, ContentFile(data))
-            att.file.name = dest_name
-            att.save(update_fields=['file', 'updated_at'])
+            stored_name = default_storage.save(
+                dest_name,
+                ContentFile(data, name=PurePath(dest_name).name),
+            )
+            TaskAttachment.objects.filter(pk=att.pk).update(
+                file=stored_name,
+                updated_at=timezone.now(),
+            )
             migrated_attachments += 1
 
         summary = (

@@ -291,7 +291,8 @@ class TestAttachmentDirectUpload:
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         body = resp.json()
-        assert 'File type not allowed' in str(body)
+        assert body['error']['code'] == 'VALIDATION_ERROR'
+        assert 'file' in body['error']['details']
 
     def test_oversized_file_returns_400(self, api_client, employee_a, task_a, monkeypatch):
         api_client.force_authenticate(employee_a)
@@ -301,7 +302,8 @@ class TestAttachmentDirectUpload:
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         body = resp.json()
-        assert 'File size exceeds 50MB limit' in str(body)
+        assert body['error']['code'] == 'VALIDATION_ERROR'
+        assert 'file' in body['error']['details']
 
     def test_no_file_no_storage_file_id_returns_400(self, api_client, employee_a, task_a):
         api_client.force_authenticate(employee_a)
@@ -506,7 +508,7 @@ class TestAttachmentStorageQuota:
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         body = resp.json()
-        assert 'Storage limit exceeded' in str(body)
+        assert body['error']['code'] == 'STORAGE_LIMIT_EXCEEDED'
 
     def test_direct_upload_counts_in_limits_helper(
         self, company_a, admin_a, task_a,
@@ -679,25 +681,25 @@ class TestAttachmentOctetStreamRegression:
         f = SimpleUploadedFile('archive.zip', b'PK\x03\x04', content_type='application/octet-stream')
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'File type not allowed' in str(resp.json())
+        assert resp.json()['error']['code'] == 'VALIDATION_ERROR'
 
     def test_exe_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
         api_client.force_authenticate(employee_a)
         f = SimpleUploadedFile('malware.exe', b'MZ\x90\x00', content_type='application/octet-stream')
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'File type not allowed' in str(resp.json())
+        assert resp.json()['error']['code'] == 'VALIDATION_ERROR'
 
     def test_mp4_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
         api_client.force_authenticate(employee_a)
         f = SimpleUploadedFile('video.mp4', b'\x00\x00\x00\x18ftyp', content_type='application/octet-stream')
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'File type not allowed' in str(resp.json())
+        assert resp.json()['error']['code'] == 'VALIDATION_ERROR'
 
     def test_bin_with_octet_stream_mime_is_blocked(self, api_client, employee_a, task_a):
         api_client.force_authenticate(employee_a)
         f = SimpleUploadedFile('data.bin', b'\xde\xad\xbe\xef', content_type='application/octet-stream')
         resp = api_client.post(attachments_url(task_a.pk), data={'file': f}, format='multipart')
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'File type not allowed' in str(resp.json())
+        assert resp.json()['error']['code'] == 'VALIDATION_ERROR'

@@ -7,6 +7,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
+from apps.core.exceptions import raise_validation_error
 from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
 
 User = get_user_model()
@@ -65,7 +66,9 @@ class LabelSerializer(serializers.ModelSerializer):
 
     def validate_color(self, value):
         if not re.match(r'^#[0-9a-fA-F]{6}$', value):
-            raise serializers.ValidationError('Color must be a valid hex code, e.g. #ff00aa.')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'crm.label_color_invalid', 'params': {}}]
+            )
         return value.lower()
 
     def validate(self, attrs):
@@ -81,7 +84,7 @@ class LabelSerializer(serializers.ModelSerializer):
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
-            raise serializers.ValidationError({'name': 'Label with this name already exists in your company.'})
+            raise_validation_error('name', 'crm.label_name_duplicate')
         return attrs
 
 
@@ -214,26 +217,26 @@ class TaskAttachmentSerializer(serializers.ModelSerializer):
 
         if not file and not storage_file_id:
             raise serializers.ValidationError(
-                'Provide either a file upload (file) or a storage_file_id.'
+                [{'_i18n': True, 'key': 'crm.attachment_file_or_storage_required', 'params': {}}]
             )
         if file and storage_file_id:
             raise serializers.ValidationError(
-                'Provide either file or storage_file_id, not both.'
+                [{'_i18n': True, 'key': 'crm.attachment_file_xor_storage', 'params': {}}]
             )
 
         if file:
             if file.size > MAX_ATTACHMENT_SIZE:
-                raise serializers.ValidationError({'file': 'File size exceeds 50MB limit'})
+                raise_validation_error('file', 'storage.file_too_large', {'max_mb': 50})
             mime = getattr(file, 'content_type', '') or ''
             ext = os.path.splitext(file.name or '')[1].lower()
             if mime == 'application/octet-stream':
                 # Generic MIME type — some clients send this for Office docs on Windows.
                 # Fall back to extension check only to avoid accepting all binary files.
                 if ext not in ALLOWED_EXTENSIONS:
-                    raise serializers.ValidationError({'file': 'File type not allowed'})
+                    raise_validation_error('file', 'crm.file_type_not_supported')
             else:
                 if mime not in ALLOWED_MIME_TYPES and ext not in ALLOWED_EXTENSIONS:
-                    raise serializers.ValidationError({'file': 'File type not allowed'})
+                    raise_validation_error('file', 'crm.file_type_not_supported')
 
         return attrs
 
@@ -322,26 +325,24 @@ class TaskSerializer(serializers.ModelSerializer):
             if company:
                 board_qs = board_qs.filter(company=company)
             if not board_qs.exists():
-                raise serializers.ValidationError({'board_id': 'Board not found or does not belong to your company.'})
+                raise_validation_error('board_id', 'crm.board_not_found')
             self._validated_board_id = board_id
         elif instance is not None:
             self._validated_board_id = instance.column.board_id
         else:
-            raise serializers.ValidationError({'board_id': 'This field is required.'})
+            raise_validation_error('board_id', 'crm.board_id_required')
 
         # Validate column belongs to board
         column = attrs.get('column')
         if column is not None:
             if column.board_id != self._validated_board_id:
-                raise serializers.ValidationError({'column_id': 'Column does not belong to the specified board.'})
+                raise_validation_error('column_id', 'crm.column_wrong_board')
 
         # Validate assignee belongs to same company
         assignee = attrs.get('assignee')
         if assignee is not None:
             if company and assignee.company_id != company.id:
-                raise serializers.ValidationError(
-                    {'assignee_id': 'Assignee must be an employee of the same company.'}
-                )
+                raise_validation_error('assignee_id', 'crm.assignee_wrong_company')
 
         # Validate labels belong to the board's company.
         # Superadmin has company=None and is intentionally allowed to attach any label.
@@ -349,9 +350,7 @@ class TaskSerializer(serializers.ModelSerializer):
         if labels and company is not None:
             invalid = [lb for lb in labels if lb.company_id != company.id]
             if invalid:
-                raise serializers.ValidationError(
-                    {'label_ids': 'All labels must belong to your company.'}
-                )
+                raise_validation_error('label_ids', 'crm.labels_wrong_company')
 
         from .services import check_wip_limit
 
@@ -429,8 +428,7 @@ class ColumnWriteSerializer(serializers.ModelSerializer):
         active_task_count = self.instance.tasks.filter(is_deleted=False, is_archived=False).count()
         if value < active_task_count:
             raise serializers.ValidationError(
-                f'WIP limit cannot be lower than the current number of active tasks in this column '
-                f'({active_task_count}).'
+                [{'_i18n': True, 'key': 'crm.wip_limit_below_active_tasks', 'params': {'count': active_task_count}}]
             )
         return value
 
@@ -439,9 +437,14 @@ class ColumnReorderSerializer(serializers.Serializer):
     """Validates the ordered list of column IDs for a board reorder operation."""
     column_ids = serializers.ListField(
         child=serializers.IntegerField(),
-        allow_empty=False,
-        error_messages={'empty': 'column_ids must not be empty.'},
     )
+
+    def validate_column_ids(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'crm.column_ids_empty', 'params': {}}]
+            )
+        return value
 
 
 class BoardSerializer(serializers.ModelSerializer):

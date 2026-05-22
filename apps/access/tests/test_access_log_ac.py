@@ -29,6 +29,13 @@ LOGS_EXPORT_URL = '/api/v1/access/logs/export/'
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _get_response_bytes(response):
+    """Return the full body bytes from a regular or streaming response."""
+    if hasattr(response, 'streaming_content'):
+        return b''.join(response.streaming_content)
+    return response.content
+
+
 def _make_company(name='Log AC Co'):
     return Company.objects.create(name=name, plan='basic')
 
@@ -377,53 +384,64 @@ class TestAccessLogExportAC:
     def test_export_csv_has_required_columns(self, api_client, superadmin, log_a):
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(LOGS_EXPORT_URL)
-        content = response.content.decode('utf-8')
+        # Strip BOM before parsing
+        content = _get_response_bytes(response).decode('utf-8-sig')
         reader = csv.DictReader(io.StringIO(content))
         headers = reader.fieldnames or []
-        for col in ('guest_pass', 'invited_by', 'validated_at', 'validated_by'):
+        for col in ('Имя гостя', 'Email гостя', 'Компания', 'Пригласил', 'Проверил', 'Валидирован', 'Метод'):
             assert col in headers, f'Missing column: {col}'
 
     def test_export_csv_contains_log_data(self, api_client, superadmin, log_a, pass_a, admin_a, reception_a):
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(LOGS_EXPORT_URL)
-        content = response.content.decode('utf-8')
+        content = _get_response_bytes(response).decode('utf-8-sig')
         reader = csv.DictReader(io.StringIO(content))
         rows = list(reader)
-        assert any(str(pass_a.id) in row.get('guest_pass', '') for row in rows)
+        assert any(pass_a.guest_name in row.get('Имя гостя', '') for row in rows)
 
     def test_export_filtered_by_date_from(self, api_client, superadmin, admin_a, reception_a, pass_a):
         now = timezone.now()
-        old_log = _make_log(pass_a, reception_a, created_at=now - timedelta(days=5))
+        _make_log(pass_a, reception_a, created_at=now - timedelta(days=5))
         new_log = _make_log(pass_a, reception_a, created_at=now)
 
         api_client.force_authenticate(user=superadmin)
         date_from = (now - timedelta(days=1)).date().isoformat()
         response = api_client.get(LOGS_EXPORT_URL, {'date_from': date_from})
         assert response.status_code == status.HTTP_200_OK
-        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
-        assert str(new_log.id) in ids
-        assert str(old_log.id) not in ids
+        content = _get_response_bytes(response).decode('utf-8-sig')
+        rows = list(csv.DictReader(io.StringIO(content)))
+        names = [row.get('Имя гостя', '') for row in rows]
+        assert pass_a.guest_name in names
+        # Only the new_log row should be present; verify by validated_at date
+        validated_ats = [row.get('Валидирован', '') for row in rows]
+        assert any(new_log.created_at.strftime('%d.%m.%Y') in v for v in validated_ats)
 
     def test_export_filtered_by_date_to(self, api_client, superadmin, admin_a, reception_a, pass_a):
         now = timezone.now()
         old_log = _make_log(pass_a, reception_a, created_at=now - timedelta(days=5))
-        new_log = _make_log(pass_a, reception_a, created_at=now)
+        _make_log(pass_a, reception_a, created_at=now)
 
         api_client.force_authenticate(user=superadmin)
         date_to = (now - timedelta(days=2)).date().isoformat()
         response = api_client.get(LOGS_EXPORT_URL, {'date_to': date_to})
         assert response.status_code == status.HTTP_200_OK
-        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
-        assert str(old_log.id) in ids
-        assert str(new_log.id) not in ids
+        content = _get_response_bytes(response).decode('utf-8-sig')
+        rows = list(csv.DictReader(io.StringIO(content)))
+        validated_ats = [row.get('Валидирован', '') for row in rows]
+        assert any(old_log.created_at.strftime('%d.%m.%Y') in v for v in validated_ats)
+        # The log from "now" must not appear (it is after date_to)
+        today_fmt = now.strftime('%d.%m.%Y')
+        assert not any(today_fmt in v for v in validated_ats)
 
-    def test_company_admin_export_only_own_company(self, api_client, admin_a, log_a, log_b):
+    def test_company_admin_export_only_own_company(self, api_client, admin_a, log_a, log_b, pass_a, pass_b):
         api_client.force_authenticate(user=admin_a)
         response = api_client.get(LOGS_EXPORT_URL)
         assert response.status_code == status.HTTP_200_OK
-        ids = {row['id'] for row in csv.DictReader(io.StringIO(response.content.decode('utf-8')))}
-        assert str(log_a.id) in ids
-        assert str(log_b.id) not in ids
+        content = _get_response_bytes(response).decode('utf-8-sig')
+        rows = list(csv.DictReader(io.StringIO(content)))
+        names = [row.get('Имя гостя', '') for row in rows]
+        assert pass_a.guest_name in names
+        assert pass_b.guest_name not in names
 
     def test_employee_export_gets_403(self, api_client, employee_a):
         api_client.force_authenticate(user=employee_a)

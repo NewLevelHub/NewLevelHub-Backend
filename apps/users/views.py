@@ -21,6 +21,9 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import rest_framework.fields as fields
 
+from apps.core.error_codes import TOKEN_INVALID, TOKEN_EXPIRED, TOKEN_ALREADY_USED
+from apps.core.exceptions import LocalizedError
+from apps.core.i18n import translate, get_lang
 from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
 from apps.companies.invite_policy import existing_user_cannot_accept_invite_error, lookup_user_by_invite_email
@@ -149,18 +152,25 @@ def register(request):
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def register_by_invite(request):
+    lang = get_lang(request)
     if request.method == 'GET':
         token = request.query_params.get('token')
         if not token:
-            return Response({'detail': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': translate('users.token_required', lang)}, status=status.HTTP_400_BAD_REQUEST)
         try:
             token = uuid.UUID(str(token))
         except (TypeError, ValueError):
-            return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'detail': translate('users.invite_invalid_or_expired', lang)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         invitation = Invitation.objects.select_related('company').filter(token=token).first()
         if not invitation or invitation.is_used or invitation.is_expired:
-            return Response({'detail': 'Invalid or expired invitation'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'detail': translate('users.invite_invalid_or_expired', lang)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         existing = lookup_user_by_invite_email(invitation.email)
         is_guest_upgrade = False
@@ -191,7 +201,7 @@ def register_by_invite(request):
             user.id,
         )
     return Response(
-        {'detail': 'Registration successful. Please verify your email before logging in.'},
+        {'detail': translate('users.registration_success', lang)},
         status=status.HTTP_201_CREATED,
     )
 
@@ -239,15 +249,16 @@ def login(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def logout(request):
+    lang = get_lang(request)
     refresh_token = request.data.get('refresh') or request.COOKIES.get(REFRESH_COOKIE_NAME)
     if not refresh_token:
-        return Response({'detail': 'Refresh token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': 'Refresh-токен обязателен'}, status=status.HTTP_400_BAD_REQUEST)
     try:
         token = RefreshToken(refresh_token)
         token.blacklist()
     except Exception:
-        return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
-    response = Response({'detail': 'Logged out'})
+        return Response({'detail': translate('auth.token_invalid', lang)}, status=status.HTTP_400_BAD_REQUEST)
+    response = Response({'detail': translate('users.logout_success', lang)})
     clear_refresh_cookie(response)
     return response
 
@@ -274,6 +285,7 @@ def logout(request):
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def verify_email(request):
+    lang = get_lang(request)
     serializer = EmailVerifySerializer(data=request.query_params)
     serializer.is_valid(raise_exception=True)
     verification_token = get_object_or_404(
@@ -282,16 +294,16 @@ def verify_email(request):
     )
 
     if verification_token.is_used:
-        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': translate('auth.token_already_used', lang)}, status=status.HTTP_400_BAD_REQUEST)
     if verification_token.is_expired:
-        return Response({'detail': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': translate('auth.token_expired', lang)}, status=status.HTTP_400_BAD_REQUEST)
 
     user = verification_token.user
     user.is_email_verified = True
     user.save(update_fields=['is_email_verified'])
     verification_token.is_used = True
     verification_token.save(update_fields=['is_used'])
-    return Response({'detail': 'Email verified'})
+    return Response({'detail': 'Email подтверждён'})
 
 
 @extend_schema(
@@ -307,13 +319,17 @@ def verify_email(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def resend_verification_email(request):
+    lang = get_lang(request)
     if request.user.is_email_verified:
-        return Response({'detail': 'Email already verified'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'detail': 'Email уже подтверждён'}, status=status.HTTP_403_FORBIDDEN)
 
     throttle_key = f'email_resend:{request.user.id}'
     resend_count = cache.get(throttle_key, 0)
     if resend_count >= 3:
-        return Response({'detail': 'Too many requests'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        return Response(
+            {'detail': translate('users.too_many_requests', lang)},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
 
     if resend_count == 0:
         cache.set(throttle_key, 1, timeout=600)
@@ -330,7 +346,7 @@ def resend_verification_email(request):
             request.user.id,
             exc_info=True,
         )
-    return Response({'detail': 'Verification email sent'})
+    return Response({'detail': translate('users.email_confirmation_sent', lang)})
 
 
 @extend_schema(
@@ -353,11 +369,12 @@ def password_reset_request(request):
     serializer.is_valid(raise_exception=True)
     email = serializer.validated_data['email']
 
+    lang = get_lang(request)
     try:
         user = User.objects.get(email=email, is_active=True)
     except User.DoesNotExist:
         # Anti-enumeration: always return 200 regardless of whether the account exists.
-        return Response({'detail': 'If an account exists, a reset link has been sent'})
+        return Response({'detail': translate('users.password_reset_email_sent', lang)})
 
     token = PasswordResetToken.objects.create(
         user=user,
@@ -383,7 +400,7 @@ def password_reset_request(request):
             exc_info=True,
         )
 
-    return Response({'detail': 'If an account exists, a reset link has been sent'})
+    return Response({'detail': translate('users.password_reset_email_sent', lang)})
 
 
 @extend_schema(
@@ -398,6 +415,7 @@ def password_reset_request(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def password_reset_confirm(request):
+    lang = get_lang(request)
     serializer = PasswordResetConfirmSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
@@ -407,30 +425,30 @@ def password_reset_confirm(request):
     try:
         reset_token = PasswordResetToken.objects.select_related('user').get(token=token_value)
     except PasswordResetToken.DoesNotExist:
-        return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+        raise LocalizedError(code=TOKEN_INVALID, i18n_key='auth.token_invalid')
 
     user = reset_token.user
 
     if not user.is_active:
-        return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+        raise LocalizedError(code=TOKEN_INVALID, i18n_key='auth.token_invalid')
 
     if reset_token.is_used:
-        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+        raise LocalizedError(code=TOKEN_ALREADY_USED, i18n_key='auth.token_already_used')
 
     if reset_token.is_expired:
-        return Response({'detail': 'Token expired'}, status=status.HTTP_400_BAD_REQUEST)
+        raise LocalizedError(code=TOKEN_EXPIRED, i18n_key='auth.token_expired')
 
     # Atomic update to prevent race condition: only proceeds if the token is still unused.
     updated = PasswordResetToken.objects.filter(token=token_value, is_used=False).update(is_used=True)
     if updated == 0:
-        return Response({'detail': 'Token already used'}, status=status.HTTP_400_BAD_REQUEST)
+        raise LocalizedError(code=TOKEN_ALREADY_USED, i18n_key='auth.token_already_used')
 
     user.set_password(new_password)
     user.save(update_fields=['password'])
 
     _blacklist_user_refresh_tokens(user)
 
-    return Response({'detail': 'Password has been reset'})
+    return Response({'detail': translate('users.password_reset_success', lang)})
 
 
 # ── Profile ───────────────────────────────────────────────────────────

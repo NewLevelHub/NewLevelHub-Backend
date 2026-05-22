@@ -75,8 +75,8 @@ class TestInviteRegistration:
         )
         response = api_client.get(REGISTER_INVITE_URL, {'token': str(invitation.token)})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['error'] is True
-        assert 'email' in response.data['detail']
+        assert response.data['success'] is False
+        assert 'email' in response.data['error']['details']
 
     @patch('apps.users.views.send_verification_email.delay')
     def test_post_register_by_invite_creates_user_marks_invite_used_and_sends_verification(
@@ -177,8 +177,8 @@ class TestInviteRegistration:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['error'] is True
-        assert 'email' in response.data['detail']
+        assert response.data['success'] is False
+        assert 'email' in response.data['error']['details']
 
     def test_post_register_by_invite_fails_if_active_employee_email_normalized_match(
         self, api_client, company, inviter
@@ -211,8 +211,8 @@ class TestInviteRegistration:
             format='json',
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['error'] is True
-        assert 'email' in response.data['detail']
+        assert response.data['success'] is False
+        assert 'email' in response.data['error']['details']
 
     def test_get_invite_succeeds_and_signals_guest_upgrade(self, api_client, invitation):
         User.objects.create_user(
@@ -287,4 +287,5 @@ class TestInviteRegistration:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'Employee limit reached' in str(response.data)
+        msg = response.data['error']['details']['non_field_errors'][0]
+        assert msg == 'Достигнут лимит сотрудников для вашего тарифа.'

@@ -301,9 +301,8 @@ class TestDelete:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         # Custom exception handler wraps into error envelope
-        assert response.data['error'] is True
-        assert response.data['status_code'] == 400
-        assert 'confirm' in str(response.data['detail']).lower()
+        assert response.data['success'] is False
+        assert 'confirm' in str(response.data['error']['details']).lower()
 
     def test_delete_with_wrong_confirm_value_returns_400(
         self, client, superadmin, company

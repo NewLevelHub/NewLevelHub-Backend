@@ -324,11 +324,14 @@ class TaskSerializer(serializers.ModelSerializer):
             board_qs = BoardModel.objects.filter(pk=board_id)
             if company:
                 board_qs = board_qs.filter(company=company)
-            if not board_qs.exists():
+            board_obj = board_qs.only('id', 'company_id').first()
+            if not board_obj:
                 raise_validation_error('board_id', 'crm.board_not_found')
             self._validated_board_id = board_id
+            self._board_company_id = board_obj.company_id
         elif instance is not None:
             self._validated_board_id = instance.column.board_id
+            self._board_company_id = instance.column.board.company_id
         else:
             raise_validation_error('board_id', 'crm.board_id_required')
 
@@ -338,10 +341,13 @@ class TaskSerializer(serializers.ModelSerializer):
             if column.board_id != self._validated_board_id:
                 raise_validation_error('column_id', 'crm.column_wrong_board')
 
-        # Validate assignee belongs to same company
+        # Validate assignee belongs to the board's company.
+        # For regular users `company` is their own company; for superadmin it is None
+        # so we fall back to the board's company stored in _board_company_id.
         assignee = attrs.get('assignee')
         if assignee is not None:
-            if company and assignee.company_id != company.id:
+            target_company_id = company.id if company is not None else getattr(self, '_board_company_id', None)
+            if target_company_id is not None and assignee.company_id != target_company_id:
                 raise_validation_error('assignee_id', 'crm.assignee_wrong_company')
 
         # Validate labels belong to the board's company.

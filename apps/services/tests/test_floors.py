@@ -505,3 +505,31 @@ def test_employee_cannot_delete_floor(api_client, employee, floor):
     response = api_client.delete(floors_detail_url(floor.id))
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert Floor.objects.filter(id=floor.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_floor_deletes_resource_linked_via_map_point(api_client, superadmin, company):
+    auth(api_client, superadmin)
+    resource = Resource.objects.create(name='Desk A-01', resource_type='desk', floor=2)
+    floor = Floor.objects.create(number=2, name='Second Floor', company=company)
+    MapPoint.objects.create(floor=floor, point_type='desk', x=10.0, y=20.0, resource=resource)
+
+    response = api_client.delete(floors_detail_url(floor.id))
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    assert not Floor.objects.filter(id=floor.id).exists()
+    assert not Resource.objects.filter(id=resource.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_floor_deletes_resource_by_floor_number(api_client, superadmin, company):
+    """Resource created with this floor's number but not placed on the map is also deleted."""
+    auth(api_client, superadmin)
+    floor = Floor.objects.create(number=5, name='Fifth Floor', company=company)
+    resource = Resource.objects.create(name='Desk B-01', resource_type='desk', floor=5)
+
+    response = api_client.delete(floors_detail_url(floor.id))
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    assert not Floor.objects.filter(id=floor.id).exists()
+    assert not Resource.objects.filter(id=resource.id).exists()

@@ -34,6 +34,9 @@ def s3_settings():
             AWS_SECRET_ACCESS_KEY='testing',
             AWS_S3_ENDPOINT_URL=None,
             AWS_S3_PRESIGNED_URL_EXPIRY=900,
+            # Mirrors production config: overwrite=False so exists() actually
+            # queries S3 instead of short-circuiting to False.
+            AWS_S3_FILE_OVERWRITE=False,
             STORAGES={
                 'default': {
                     'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',

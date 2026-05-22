@@ -339,7 +339,7 @@ class CompanyMemberSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'full_name', 'role', 'position',
-            'avatar', 'is_active', 'date_joined', 'last_login',
+            'avatar', 'is_active', 'is_email_verified', 'date_joined', 'last_login',
         ]
         read_only_fields = fields
 

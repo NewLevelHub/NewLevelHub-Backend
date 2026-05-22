@@ -92,8 +92,9 @@ class TestSuperadminOverview:
         r = api_client.get(SUPERADMIN_URL, {'period': '1y'})
         assert r.status_code == status.HTTP_400_BAD_REQUEST
         data = r.json()
-        assert data.get('error') is True
-        assert 'detail' in data
+        assert data.get('success') is False
+        assert 'error' in data
+        assert data['error'].get('code') == 'VALIDATION_ERROR'
 
     def test_custom_without_dates_400(self, api_client, superadmin):
         api_client.force_authenticate(user=superadmin)

@@ -225,8 +225,8 @@ class TestLeaveBalanceAcceptanceCriteria:
 
         assert first_approve.status_code == status.HTTP_200_OK
         assert second_approve.status_code == status.HTTP_400_BAD_REQUEST
-        assert second_approve.data['detail']['non_field_errors'][0] == (
-            'Cannot approve leave on dates overlapping with approved leave.'
+        assert second_approve.data['error']['details']['non_field_errors'][0] == (
+            'Нельзя одобрить отпуск на даты, пересекающиеся с уже одобренным.'
         )
 
         second_leave.refresh_from_db()
@@ -261,8 +261,8 @@ class TestLeaveBalanceAcceptanceCriteria:
 
         assert first_approve.status_code == status.HTTP_200_OK
         assert second_approve.status_code == status.HTTP_400_BAD_REQUEST
-        assert second_approve.data['detail']['non_field_errors'][0] == (
-            'Cannot approve leave on dates overlapping with approved leave.'
+        assert second_approve.data['error']['details']['non_field_errors'][0] == (
+            'Нельзя одобрить отпуск на даты, пересекающиеся с уже одобренным.'
         )
 
     def test_cannot_approve_leave_when_balance_is_not_enough(self, api_client, company_admin, employee):
@@ -280,7 +280,9 @@ class TestLeaveBalanceAcceptanceCriteria:
         response = api_client.post(_review_url(leave.id), {'status': 'approved'}, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail']['non_field_errors'][0] == 'Not enough leave balance for selected dates.'
+        assert response.data['error']['details']['non_field_errors'][0] == (
+            'Недостаточно дней отпуска для одобрения этой заявки.'
+        )
         leave.refresh_from_db()
         balance.refresh_from_db()
         assert leave.status == 'pending'

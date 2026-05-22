@@ -60,7 +60,7 @@ class TestFileLimit:
         )
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['detail'] == 'Storage limit exceeded'
+        assert response.data['error']['code'] == 'STORAGE_LIMIT_EXCEEDED'
 
     def test_upload_file_at_80_percent_creates_admin_notification(self, api_client, company_admin, company):
         File.objects.create(

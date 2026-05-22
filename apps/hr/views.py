@@ -10,6 +10,8 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.companies.models import Company, CompanySettings
+from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
@@ -61,10 +63,10 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         if year not in (None, ''):
             try:
                 parsed_year = int(year)
-            except (TypeError, ValueError) as exc:
-                raise ValidationError({'year': 'Year must be an integer.'}) from exc
+            except (TypeError, ValueError):
+                raise_validation_error('year', 'hr.year_not_integer')
             if parsed_year < 1900 or parsed_year > 3000:
-                raise ValidationError({'year': 'Year must be between 1900 and 3000.'})
+                raise_validation_error('year', 'hr.year_out_of_range')
             qs = qs.filter(start_date__year=parsed_year)
 
         return qs
@@ -109,10 +111,10 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
             return timezone.now().year
         try:
             parsed_year = int(year)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError({'year': 'Year must be an integer.'}) from exc
+        except (TypeError, ValueError):
+            raise_validation_error('year', 'hr.year_not_integer')
         if parsed_year < 1900 or parsed_year > 3000:
-            raise ValidationError({'year': 'Year must be between 1900 and 3000.'})
+            raise_validation_error('year', 'hr.year_out_of_range')
         return parsed_year
 
     def _default_total_days_for_user(self, user):
@@ -146,7 +148,8 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     @action(detail=True, methods=['post'], url_path='review', permission_classes=[IsAuthenticated])
     def review(self, request, pk=None):
         if request.user.role != 'company_admin':
-            raise PermissionDenied('Only company_admin can review leave requests.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('hr.review_admin_only', lang))
 
         ser = LeaveRequestReviewSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -162,7 +165,7 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
                 .first()
             )
             if leave is None:
-                raise NotFound('Not found.')
+                raise NotFound()
             old_status = leave.status
 
             if new_status == 'approved':
@@ -176,14 +179,18 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
                 ).exclude(pk=leave.pk).exists()
                 if overlap_exists:
                     raise ValidationError(
-                        {'non_field_errors': ['Cannot approve leave on dates overlapping with approved leave.']}
+                        {'non_field_errors': [{'_i18n': True, 'key': 'hr.leave_approve_overlap', 'params': {}}]}
                     )
 
                 if leave.leave_type not in ('sick_leave', 'remote') and old_status != 'approved':
                     balance, _ = self._get_or_create_balance(leave.user, leave.start_date.year)
                     remaining_days = max(balance.total_days - balance.used_days, 0)
                     if leave.duration_days > remaining_days:
-                        raise ValidationError({'non_field_errors': ['Not enough leave balance for selected dates.']})
+                        raise ValidationError(
+                            {'non_field_errors': [
+                                {'_i18n': True, 'key': 'hr.leave_approve_balance_insufficient', 'params': {}}
+                            ]}
+                        )
 
             leave.status = new_status
             leave.review_comment = ser.validated_data.get('review_comment', '')
@@ -253,7 +260,8 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         target_user = User.objects.select_related('company').get(id=target_user_id)
 
         if request.user.role != 'superadmin' and target_user.company_id != request.user.company_id:
-            raise PermissionDenied('You can only manage balances for your company employees.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('hr.balance_own_company_only', lang))
 
         balance, _ = self._get_or_create_balance(target_user, year)
         balance.total_days = total_days

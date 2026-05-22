@@ -1,5 +1,6 @@
 """S3 storage tests using moto (no real network calls)."""
 import os
+import threading
 import boto3
 import pytest
 from django.conf import settings
@@ -7,6 +8,7 @@ from django.core.files.storage import default_storage
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.test import override_settings
+from django.utils.functional import empty as _lazy_empty
 from moto import mock_aws
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -44,6 +46,13 @@ def s3_settings():
                 },
             },
         ):
+            # S3Storage caches boto3 connections in a class-level threading.local().
+            # Between tests the mock_aws context resets but the cached connection
+            # from a previous test still points to the old (now dead) moto backend.
+            # Reset it so every test opens a fresh connection inside the active mock.
+            from storages.backends.s3 import S3Storage
+            S3Storage._connections = threading.local()
+            default_storage._wrapped = _lazy_empty
             yield
 
 
@@ -168,7 +177,27 @@ class TestMigrateFilesToS3:
 
         file_obj.refresh_from_db()
         assert file_obj.file.name.startswith('companies/')
-        assert default_storage.exists(file_obj.file.name)
+
+        # Verify the object landed in the moto-intercepted bucket via a fresh
+        # boto3 client.  We cannot rely on default_storage.exists() here because
+        # S3Boto3Storage caches its internal boto3 resource/client in a
+        # thread-local (S3Storage._connections) that may have been initialised
+        # before the mock_aws context took full effect, leading to a stale
+        # connection that bypasses moto.  A boto3 client created directly inside
+        # the active mock_aws context is guaranteed to be intercepted by moto.
+        s3 = boto3.client(
+            's3',
+            region_name='eu-central-1',
+            aws_access_key_id='testing',
+            aws_secret_access_key='testing',
+        )
+        keys = [
+            obj['Key']
+            for obj in s3.list_objects_v2(Bucket='test-bucket').get('Contents', [])
+        ]
+        assert file_obj.file.name in keys, (
+            f"Expected {file_obj.file.name!r} in moto bucket, found: {keys}"
+        )
 
 
 @pytest.mark.django_db

@@ -1,4 +1,5 @@
-from rest_framework.exceptions import ValidationError
+from apps.core.error_codes import CRM_WIP_LIMIT_EXCEEDED
+from apps.core.exceptions import LocalizedError
 
 from .models import Task
 
@@ -18,6 +19,8 @@ def check_wip_limit(column, count=1, exclude_task_pk=None):
         qs = qs.exclude(pk=exclude_task_pk)
     current = qs.count()
     if current + count > column.wip_limit:
-        raise ValidationError(
-            {'detail': f'WIP limit reached (max {column.wip_limit} tasks)'}
+        raise LocalizedError(
+            code=CRM_WIP_LIMIT_EXCEEDED,
+            i18n_key='crm.wip_limit_exceeded',
+            params={'wip_limit': column.wip_limit},
         )

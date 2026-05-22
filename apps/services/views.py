@@ -764,7 +764,8 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             request_type='cleaning',
             urgency='low',
             floor=floor_obj,
-            description='Quick cleaning request',
+            location=request.data.get('location', ''),
+            description=request.data.get('description', 'Quick cleaning request'),
         )
         serializer = ServiceRequestSerializer(sr, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)

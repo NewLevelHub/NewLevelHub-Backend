@@ -8,7 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -23,6 +23,8 @@ from drf_spectacular.utils import (
 from apps.bookings.models import Booking
 from apps.access.models import GuestPass
 from apps.companies.limits import get_company_storage_used_bytes
+from apps.core.exceptions import raise_validation_error, LocalizedError
+from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
 from apps.hr.models import LeaveBalance, LeaveRequest
@@ -74,16 +76,16 @@ def _parse_bool_query_param(raw_value, field_name):
         return True
     if normalized in ('false', '0'):
         return False
-    raise ValidationError({field_name: 'Must be a boolean: true/false.'})
+    raise_validation_error(field_name, 'company.param_must_be_bool')
 
 
 def _parse_date_query_param(raw_value, field_name):
     if not raw_value:
-        raise ValidationError({field_name: 'This query parameter is required (YYYY-MM-DD).'})
+        raise_validation_error(field_name, 'company.date_param_required')
     try:
         return datetime.strptime(str(raw_value), '%Y-%m-%d').date()
-    except (TypeError, ValueError) as exc:
-        raise ValidationError({field_name: 'Invalid date format. Use YYYY-MM-DD.'}) from exc
+    except (TypeError, ValueError):
+        raise_validation_error(field_name, 'company.date_format_invalid')
 
 
 def _day_bounds(local_day):
@@ -97,7 +99,8 @@ def _resolve_calendar_company(request, company_id):
     company_qs = Company.objects.all()
     if request.user.role in ('company_admin', 'employee'):
         if request.user.company_id != company_id:
-            raise PermissionDenied('You can only access calendar of your own company.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('company.own_calendar_only', lang))
         company_qs = company_qs.filter(id=request.user.company_id)
     return get_object_or_404(company_qs, id=company_id)
 
@@ -395,10 +398,11 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if request.method == 'PATCH':
             # Only company_admin of the same company or superadmin may write.
             user = request.user
+            lang = get_lang(request)
             if user.role == 'employee':
-                raise PermissionDenied('Employees cannot update company settings.')
+                raise PermissionDenied(translate('company.settings_employees_forbidden', lang))
             if user.role == 'company_admin' and user.company_id != int(pk):
-                raise PermissionDenied('You can only update settings for your own company.')
+                raise PermissionDenied(translate('company.settings_own_company_only', lang))
 
         settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
 
@@ -469,7 +473,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
         company_qs = Company.objects.all()
         if request.user.role in ('company_admin', 'employee'):
             if request.user.company_id != int(pk):
-                raise PermissionDenied('You can only view members of your own company.')
+                lang = get_lang(request)
+                raise PermissionDenied(translate('company.members_own_company_only', lang))
             company_qs = company_qs.filter(id=request.user.company_id)
         company = get_object_or_404(company_qs, pk=pk)
 
@@ -615,12 +620,13 @@ class CompanyViewSet(viewsets.ModelViewSet):
         url_name='member-deactivate',
     )
     def deactivate_member(self, request, pk=None, user_id=None):
+        lang = get_lang(request)
         company = self.get_object()
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
             return Response(
-                {'detail': 'Cannot deactivate yourself'},
+                {'detail': translate('company.cannot_deactivate_self', lang)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -629,7 +635,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             target.save(update_fields=['is_active'])
             _blacklist_user_tokens(target)
 
-        return Response({'detail': 'User deactivated successfully'}, status=status.HTTP_200_OK)
+        return Response({'detail': translate('company.user_deactivated', lang)}, status=status.HTTP_200_OK)
 
     @extend_schema(
         tags=['Companies'],
@@ -658,6 +664,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
         url_name='member-activate',
     )
     def activate_member(self, request, pk=None, user_id=None):
+        lang = get_lang(request)
         company = self.get_object()
         # Allow inactive members to be looked up so they can be re-activated.
         target = get_object_or_404(User.objects.filter(company=company), pk=user_id)
@@ -666,7 +673,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             target.is_active = True
             target.save(update_fields=['is_active'])
 
-        return Response({'detail': 'User activated successfully'}, status=status.HTTP_200_OK)
+        return Response({'detail': translate('company.user_activated', lang)}, status=status.HTTP_200_OK)
 
     @extend_schema(
         tags=['Companies'],
@@ -707,19 +714,20 @@ class CompanyViewSet(viewsets.ModelViewSet):
         url_name='member-remove',
     )
     def remove_member(self, request, pk=None, user_id=None):
+        lang = get_lang(request)
         company = self.get_object()
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
             return Response(
-                {'detail': 'Cannot remove yourself'},
+                {'detail': translate('company.cannot_remove_self', lang)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Only superadmin may remove a company_admin.
         if target.role == 'company_admin' and request.user.role != 'superadmin':
             return Response(
-                {'detail': 'Only superadmin can remove a company admin'},
+                {'detail': translate('company.cannot_remove_admin', lang)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -731,7 +739,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
                 reassign_to_id = int(reassign_to_id)
             except (ValueError, TypeError):
                 return Response(
-                    {'detail': 'reassign_to must be a valid user ID'},
+                    {'detail': translate('company.reassign_to_invalid_id', lang)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             reassign_to_user = User.objects.filter(
@@ -739,7 +747,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             ).first()
             if reassign_to_user is None:
                 return Response(
-                    {'detail': 'reassign_to must be an active member of the same company'},
+                    {'detail': translate('company.reassign_to_not_active_member', lang)},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -761,7 +769,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
             _blacklist_user_tokens(target)
 
         return Response(
-            {'detail': 'User removed from company', 'tasks_reassigned': tasks_count},
+            {'detail': translate('company.user_removed_from_company', lang), 'tasks_reassigned': tasks_count},
             status=status.HTTP_200_OK,
         )
 
@@ -822,7 +830,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
     def _get_company_for_onboarding(self, request, pk):
         """Resolve company and enforce cross-company access for company_admin."""
         if request.user.role == 'company_admin' and request.user.company_id != int(pk):
-            raise PermissionDenied('You can only manage onboarding for your own company.')
+            lang = get_lang(request)
+            raise PermissionDenied(translate('company.onboarding_own_company_only', lang))
         return get_object_or_404(Company, pk=pk)
 
     @staticmethod
@@ -853,9 +862,7 @@ class CompanyViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         if request.query_params.get('confirm') != 'true':
-            raise ValidationError(
-                'Confirmation required. Pass ?confirm=true to proceed.'
-            )
+            raise_validation_error('non_field_errors', 'company.confirm_required')
         return super().destroy(request, *args, **kwargs)
 
 
@@ -913,12 +920,12 @@ class InvitationViewSet(viewsets.ModelViewSet):
             return True
         if normalized in ('false', '0'):
             return False
-        raise ValidationError({field_name: 'Must be a boolean: true/false.'})
+        raise_validation_error(field_name, 'company.param_must_be_bool')
 
     def _get_company(self):
         company_id = self.kwargs.get('company_id')
         if company_id is None:
-            raise ValidationError({'company': 'company_id is required in URL.'})
+            raise_validation_error('company', 'company.company_id_required')
 
         base_qs = Company.objects.all()
         if self.request.user.role != 'superadmin':
@@ -957,7 +964,11 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         company = self.get_serializer_context()['company']
         if company.employee_count >= company.max_employees:
-            return Response({'detail': 'Employee limit reached'}, status=status.HTTP_400_BAD_REQUEST)
+            raise LocalizedError(
+                code='COMPANY_MEMBER_LIMIT_EXCEEDED',
+                i18n_key='company.member_limit_exceeded',
+                http_status=400,
+            )
         return super().create(request, *args, **kwargs)
 
     @extend_schema(
@@ -973,11 +984,12 @@ class InvitationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='revoke')
     def revoke(self, request, *args, **kwargs):
+        lang = get_lang(request)
         invitation = self.get_object()
         invitation.is_used = True
         invitation.used_at = timezone.now()
         invitation.save(update_fields=['is_used', 'used_at'])
-        return Response({'detail': 'Invitation revoked'})
+        return Response({'detail': translate('company.invite_revoked', lang)})
 
     @extend_schema(
         tags=['Companies'],
@@ -992,9 +1004,10 @@ class InvitationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='resend')
     def resend(self, request, *args, **kwargs):
+        lang = get_lang(request)
         old_invitation = self.get_object()
         if old_invitation.is_used:
-            raise ValidationError({'detail': 'Used/revoked invitation cannot be resent.'})
+            raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():
             old_invitation.is_used = True
@@ -1010,7 +1023,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
             )
 
         send_invitation_email.delay(new_invitation.id)
-        return Response({'detail': 'Invitation resent'})
+        return Response({'detail': translate('company.invite_resent', lang)})
 
 
 @extend_schema(
@@ -1068,7 +1081,8 @@ class CompanyDirectoryView(GenericAPIView):
         company_qs = Company.objects.all()
         if request.user.role in ('company_admin', 'employee'):
             if request.user.company_id != company_id:
-                raise PermissionDenied('You can only view directory of your own company.')
+                lang = get_lang(request)
+                raise PermissionDenied(translate('company.catalog_own_company_only', lang))
             company_qs = company_qs.filter(id=request.user.company_id)
         return get_object_or_404(company_qs, id=company_id)
 
@@ -1119,7 +1133,8 @@ class CompanyDirectoryProfileView(APIView):
         company_qs = Company.objects.all()
         if request.user.role in ('company_admin', 'employee'):
             if request.user.company_id != company_id:
-                raise PermissionDenied('You can only view directory of your own company.')
+                lang = get_lang(request)
+                raise PermissionDenied(translate('company.catalog_own_company_only', lang))
             company_qs = company_qs.filter(id=request.user.company_id)
         return get_object_or_404(company_qs, id=company_id)
 
@@ -1173,7 +1188,8 @@ class CompanyMemberActivityView(APIView):
         company_qs = Company.objects.all()
         if request.user.role == 'company_admin':
             if request.user.company_id != company_id:
-                raise PermissionDenied('You can only view members of your own company.')
+                lang = get_lang(request)
+                raise PermissionDenied(translate('company.members_own_company_only', lang))
             company_qs = company_qs.filter(id=request.user.company_id)
 
         company = get_object_or_404(company_qs, id=company_id)
@@ -1219,18 +1235,21 @@ class CompanyCalendarView(APIView):
         date_from = _parse_date_query_param(request.query_params.get('date_from'), 'date_from')
         date_to = _parse_date_query_param(request.query_params.get('date_to'), 'date_to')
         if date_from > date_to:
-            raise ValidationError({'detail': 'date_from must be less than or equal to date_to.'})
+            raise_validation_error('detail', 'company.date_from_after_date_to')
 
         user_id = request.query_params.get('user_id')
         if user_id not in (None, ''):
             try:
                 user_id = int(user_id)
-            except (TypeError, ValueError) as exc:
-                raise ValidationError({'user_id': 'Must be an integer.'}) from exc
+            except (TypeError, ValueError):
+                raise_validation_error('user_id', 'company.user_id_must_be_integer')
 
         event_type = request.query_params.get('event_type')
         if event_type and event_type not in CALENDAR_EVENT_TYPES:
-            raise ValidationError({'event_type': f'Unsupported value. Use one of: {sorted(CALENDAR_EVENT_TYPES)}'})
+            raise_validation_error(
+                'event_type', 'company.event_type_invalid',
+                {'choices': str(sorted(CALENDAR_EVENT_TYPES))},
+            )
 
         my_only = _parse_bool_query_param(request.query_params.get('my'), 'my')
         if my_only:
@@ -1258,14 +1277,14 @@ class CompanyCalendarBusyView(APIView):
         company = _resolve_calendar_company(request, company_id)
         user_id_raw = request.query_params.get('user_id')
         if user_id_raw in (None, ''):
-            raise ValidationError({'user_id': 'This query parameter is required.'})
+            raise_validation_error('user_id', 'company.user_id_required')
         try:
             user_id = int(user_id_raw)
-        except (TypeError, ValueError) as exc:
-            raise ValidationError({'user_id': 'Must be an integer.'}) from exc
+        except (TypeError, ValueError):
+            raise_validation_error('user_id', 'company.user_id_must_be_integer')
 
         if not User.objects.filter(id=user_id, company_id=company.id).exists():
-            raise ValidationError({'user_id': 'User not found in this company.'})
+            raise_validation_error('user_id', 'company.user_not_in_company')
 
         target_date = _parse_date_query_param(request.query_params.get('date'), 'date')
         events = _build_company_calendar_events(

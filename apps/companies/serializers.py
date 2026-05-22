@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from apps.users.models import User
 from apps.notifications.utils import create_notification
+from apps.core.exceptions import raise_validation_error
 
 from .invite_policy import email_blocks_new_company_invitation
 from .limits import notify_company_admins_limit_thresholds
@@ -110,13 +111,12 @@ class WorkingHoursSerializer(serializers.Serializer):
     def validate(self, attrs):
         if attrs['start'] >= attrs['end']:
             raise serializers.ValidationError(
-                'working_hours.start must be earlier than working_hours.end.'
+                [{'_i18n': True, 'key': 'company.working_hours_start_after_end', 'params': {}}]
             )
         return attrs
 
 
 HEX_COLOR_REGEX = r'^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})$'
-HEX_COLOR_ERROR = 'Must be a valid hex color, e.g. #RGB or #RRGGBB.'
 
 
 class CompanySettingsSerializer(serializers.ModelSerializer):
@@ -135,12 +135,10 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
     )
     vacation_days_per_year = serializers.IntegerField(min_value=0, required=False)
     onboarding_enabled = serializers.BooleanField(required=False)
-    brand_primary_color = serializers.RegexField(
-        regex=HEX_COLOR_REGEX,
+    brand_primary_color = serializers.CharField(
         required=False,
         allow_null=True,
         allow_blank=True,
-        error_messages={'invalid': HEX_COLOR_ERROR},
     )
     working_hours = serializers.SerializerMethodField()
 
@@ -159,19 +157,29 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
             'end': company.working_hours_end.strftime('%H:%M') if company.working_hours_end else None,
         }
 
+    def validate_brand_primary_color(self, value):
+        import re
+        if value and not re.match(HEX_COLOR_REGEX, value):
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.hex_color_invalid', 'params': {}}]
+            )
+        return value
+
     def validate_custom_labels(self, value):
         """Validate each label has {name: str, color: valid hex}."""
         import re
         hex_re = re.compile(HEX_COLOR_REGEX)
         errors = {}
+        _field_required = {'_i18n': True, 'key': 'services.field_required', 'params': {}}
+        _hex_invalid = {'_i18n': True, 'key': 'company.hex_color_invalid', 'params': {}}
         for idx, item in enumerate(value):
             item_errors = {}
             if 'name' not in item or not isinstance(item.get('name'), str) or not item['name']:
-                item_errors['name'] = 'This field is required.'
+                item_errors['name'] = _field_required
             if 'color' not in item:
-                item_errors['color'] = 'This field is required.'
+                item_errors['color'] = _field_required
             elif not hex_re.match(str(item['color'])):
-                item_errors['color'] = HEX_COLOR_ERROR
+                item_errors['color'] = _hex_invalid
             if item_errors:
                 errors[idx] = item_errors
         if errors:
@@ -250,14 +258,18 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             expires_at__gt=timezone.now(),
         ).exists()
         if has_active_invitation:
-            raise serializers.ValidationError('Active invitation for this email already exists.')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.invite_active_for_email', 'params': {}}]
+            )
 
         return email
 
     def validate_role(self, value):
         request = self.context['request']
         if value in ('company_admin', 'reception') and request.user.role != 'superadmin':
-            raise serializers.ValidationError(f'Only superadmin can invite {value}.')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.role_superadmin_only', 'params': {'role': value}}]
+            )
         return value
 
     def validate(self, attrs):
@@ -266,7 +278,9 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         email = attrs['email'].strip()
 
         if company.employee_count >= company.max_employees:
-            raise serializers.ValidationError('Employee limit reached')
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.member_limit_exceeded', 'params': {}}]
+            )
 
         active_exists = Invitation.objects.filter(
             company=company,
@@ -275,15 +289,11 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             expires_at__gte=timezone.now(),
         ).exists()
         if active_exists:
-            raise serializers.ValidationError(
-                {'email': 'An active invitation already exists for this email.'},
-            )
+            raise_validation_error('email', 'company.invite_active_for_email')
 
         role = attrs.get('role', 'employee')
         if request.user.role == 'company_admin' and role in ('company_admin', 'reception'):
-            raise serializers.ValidationError(
-                {'role': f'Company admins cannot invite {role}.'},
-            )
+            raise_validation_error('role', 'company.admin_cannot_invite_role', {'role': role})
 
         return attrs
 

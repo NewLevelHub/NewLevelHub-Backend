@@ -102,7 +102,7 @@ class TestSuperadminAnalyticsExportAC:
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(
             SUPERADMIN_EXPORT_URL,
-            {'format': 'csv', 'period': '30d'},
+            {'format': 'csv', 'period': '30d', 'lang': 'en'},
         )
         _assert_csv_attachment_response(response)
         text = _decode_csv_body(response)
@@ -111,10 +111,10 @@ class TestSuperadminAnalyticsExportAC:
         rows = list(reader)
         assert len(rows) >= 2
         header = rows[0]
-        assert 'period' in header
-        assert 'total_companies' in header
+        assert 'Period' in header
+        assert 'Total Companies' in header
         data_row = rows[1]
-        assert data_row[header.index('period')] == '30d'
+        assert data_row[header.index('Period')] == '30d'
 
     def test_company_admin_forbidden(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
@@ -136,15 +136,15 @@ class TestSuperadminAnalyticsExportAC:
 class TestCompanyAnalyticsExportAC:
     def test_company_admin_csv_export_ok(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
-        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'csv'})
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'csv', 'lang': 'en'})
         _assert_csv_attachment_response(response)
         text = _decode_csv_body(response)
         assert text.strip()
         reader = csv.reader(io.StringIO(text))
         rows = list(reader)
         assert len(rows) >= 2
-        assert 'total_employees' in rows[0]
-        assert 'guest_visits_month' in rows[0]
+        assert 'Total Employees' in rows[0]
+        assert 'Guest Visits This Month' in rows[0]
 
     def test_superadmin_csv_export_ok(self, api_client, superadmin, company):
         """Same access model as GET /analytics/company/ (IsCompanyAdmin includes superadmin)."""
@@ -192,7 +192,7 @@ class TestAnalyticsExportVsDashboardConsistency:
         api_client.force_authenticate(user=superadmin)
         dash = api_client.get('/api/v1/analytics/superadmin/', {'period': '30d'})
         assert dash.status_code == status.HTTP_200_OK
-        csv_resp = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'csv', 'period': '30d'})
+        csv_resp = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'csv', 'period': '30d', 'lang': 'en'})
         assert csv_resp.status_code == status.HTTP_200_OK
         text = _decode_csv_body(csv_resp)
         reader = csv.DictReader(io.StringIO(text))
@@ -200,14 +200,14 @@ class TestAnalyticsExportVsDashboardConsistency:
         assert len(rows) == 1
         row = rows[0]
         ov = dash.json()['overview']
-        assert int(row['total_companies']) == ov['total_companies']
-        assert int(row['active_users_7d']) == ov['active_users_7d']
+        assert int(row['Total Companies']) == ov['total_companies']
+        assert int(row['Active Users (7 days)']) == ov['active_users_7d']
 
     def test_company_csv_numbers_match_dashboard(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
         dash = api_client.get('/api/v1/analytics/company/')
         assert dash.status_code == status.HTTP_200_OK
-        csv_resp = api_client.get(COMPANY_EXPORT_URL, {'format': 'csv'})
+        csv_resp = api_client.get(COMPANY_EXPORT_URL, {'format': 'csv', 'lang': 'en'})
         assert csv_resp.status_code == status.HTTP_200_OK
         text = _decode_csv_body(csv_resp)
         reader = csv.reader(io.StringIO(text))
@@ -216,8 +216,8 @@ class TestAnalyticsExportVsDashboardConsistency:
         summary_vals = rows[1]
         summary = dict(zip(summary_headers, summary_vals))
         dj = dash.json()
-        assert int(summary['total_employees']) == dj['total_employees']
-        assert int(summary['bookings_month']) == dj['bookings_month']
-        assert int(summary['guest_visits_month']) == dj['guest_visits_month']
-        assert int(summary['crm_total']) == dj['active_crm_tasks']['total']
-        assert int(summary['crm_other']) == dj['active_crm_tasks']['other']
+        assert int(summary['Total Employees']) == dj['total_employees']
+        assert int(summary['Bookings This Month']) == dj['bookings_month']
+        assert int(summary['Guest Visits This Month']) == dj['guest_visits_month']
+        assert int(summary['CRM Total']) == dj['active_crm_tasks']['total']
+        assert int(summary['CRM: Other']) == dj['active_crm_tasks']['other']

@@ -6,6 +6,7 @@ from django.core.files.base import ContentFile
 from django.utils import timezone
 import qrcode
 
+from apps.core.exceptions import raise_validation_error
 from .models import GuestPass, AccessLog
 from . import tasks
 from apps.users.models import User
@@ -38,22 +39,20 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
         # Only reject if explicitly more than 60 seconds in the past (handles minor clock drift)
         if valid_from < now - timedelta(seconds=60):
-            raise serializers.ValidationError({'valid_from': 'Cannot be more than 60 seconds in the past.'})
+            raise_validation_error('valid_from', 'access.valid_from_in_past')
 
         if valid_until <= valid_from:
-            raise serializers.ValidationError({'valid_until': 'Must be later than valid_from.'})
+            raise_validation_error('valid_until', 'access.valid_until_before_valid_from')
 
         if valid_until > valid_from + timedelta(days=30):
-            raise serializers.ValidationError({'valid_until': 'Cannot be more than 30 days from valid_from.'})
+            raise_validation_error('valid_until', 'access.valid_until_too_far')
 
         if attrs['guest_email'].strip().lower() == user.email.strip().lower():
-            raise serializers.ValidationError({'guest_email': 'Cannot create a guest pass for yourself.'})
+            raise_validation_error('guest_email', 'access.cannot_create_for_self')
 
         existing_user = User.objects.filter(email__iexact=attrs['guest_email'].strip()).first()
         if existing_user and existing_user.role != 'guest':
-            raise serializers.ValidationError(
-                {'guest_email': 'Cannot create a guest pass for company member accounts.'}
-            )
+            raise_validation_error('guest_email', 'access.cannot_create_for_employee')
 
         active_count = GuestPass.objects.filter(
             company=user.company,
@@ -61,10 +60,10 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
             status='active',
         ).count()
         if active_count >= 2:
-            raise serializers.ValidationError({'guest_email': 'Guest can have at most 2 active passes.'})
+            raise_validation_error('guest_email', 'access.guest_max_passes_reached')
 
         if user.role == 'guest':
-            raise serializers.ValidationError('Guests cannot create passes.')
+            raise_validation_error('non_field_errors', 'access.guests_cannot_create_passes')
 
         return attrs
 

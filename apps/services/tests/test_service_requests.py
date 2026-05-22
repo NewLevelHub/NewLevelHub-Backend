@@ -195,7 +195,7 @@ def test_create_service_request_missing_required_fields(api_client, employee):
     payload = {'request_type': 'cleaning'}
     response = api_client.post(BASE_URL, payload, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    data = response.json()['detail']
+    data = response.json()['error']['details']
     assert 'floor' in data
     assert 'location' in data
     assert 'description' in data

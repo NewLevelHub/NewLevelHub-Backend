@@ -2,6 +2,9 @@ from datetime import timedelta
 
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError as DRFValidationError
+
+from apps.core.exceptions import raise_validation_error
 
 from apps.companies.models import Company
 from apps.bookings.models import Booking, ResourceBlock
@@ -160,18 +163,14 @@ class MapPointSerializer(serializers.ModelSerializer):
         y = attrs.get('y', getattr(instance, 'y', None))
 
         if x is not None and not (0.0 <= x <= 100.0):
-            raise serializers.ValidationError({'x': 'Must be between 0.0 and 100.0.'})
+            raise_validation_error('x', 'services.coordinate_out_of_range')
         if y is not None and not (0.0 <= y <= 100.0):
-            raise serializers.ValidationError({'y': 'Must be between 0.0 and 100.0.'})
+            raise_validation_error('y', 'services.coordinate_out_of_range')
 
         if point_type in _RESOURCE_POINT_TYPES and resource is None:
-            raise serializers.ValidationError(
-                {'resource': f'resource is required for point_type "{point_type}".'}
-            )
+            raise_validation_error('resource', 'services.resource_required_for_type', {'point_type': point_type})
         if point_type == 'office' and company is None:
-            raise serializers.ValidationError(
-                {'company': 'company is required for point_type "office".'}
-            )
+            raise_validation_error('company', 'services.company_required_for_office')
 
         return attrs
 
@@ -247,9 +246,9 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
             for field in required_fields:
                 value = self.initial_data.get(field, None)
                 if value in (None, ''):
-                    errors[field] = 'This field is required.'
+                    errors[field] = [{'_i18n': True, 'key': 'services.field_required', 'params': {}}]
             if errors:
-                raise serializers.ValidationError(errors)
+                raise DRFValidationError(errors)
         return attrs
 
 
@@ -270,9 +269,10 @@ class ServiceRequestStatusSerializer(serializers.ModelSerializer):
             }
             allowed_next = _transitions.get(instance.status)
             if value != allowed_next:
-                raise serializers.ValidationError(
-                    f'Invalid status transition: {instance.status} → {value}. '
-                    f'Expected next status: {allowed_next}.'
+                raise_validation_error(
+                    'status',
+                    'services.invalid_status_transition',
+                    {'current': instance.status, 'next_status': value, 'expected': allowed_next},
                 )
         return value
 

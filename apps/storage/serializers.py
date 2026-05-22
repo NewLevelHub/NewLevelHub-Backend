@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from apps.core.exceptions import raise_validation_error
 from .models import Folder, File, FileShare
 
 
@@ -91,13 +92,13 @@ class FileShareSerializer(serializers.ModelSerializer):
         shared_with = attrs.get('shared_with') or getattr(self.instance, 'shared_with', None)
 
         if file_obj and self.instance is None and file_obj.owner_id != request.user.id:
-            raise serializers.ValidationError({'file': 'Only the file owner can share this file.'})
+            raise_validation_error('file', 'storage.share_owner_only')
 
         if shared_with and shared_with.company_id != request.user.company_id:
-            raise serializers.ValidationError({'shared_with': 'User must belong to your company.'})
+            raise_validation_error('shared_with', 'storage.share_wrong_company')
 
         if file_obj and shared_with and file_obj.company_id != shared_with.company_id:
-            raise serializers.ValidationError({'shared_with': 'User must belong to the same company as file owner.'})
+            raise_validation_error('shared_with', 'storage.share_cross_company')
 
         return attrs
 

@@ -345,7 +345,7 @@ class TestUserBlockUnblock:
             format='json',
         )
         assert login_again.status_code == status.HTTP_403_FORBIDDEN
-        assert login_again.data['detail']['detail'] == 'Account is blocked'
+        assert login_again.data['error']['details']['detail'] == 'Аккаунт заблокирован.'
 
         token_client = APIClient()
         token_client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')

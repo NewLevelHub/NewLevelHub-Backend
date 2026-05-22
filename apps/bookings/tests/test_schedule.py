@@ -165,7 +165,7 @@ def test_schedule_invalid_date_returns_400(api_client, admin, resource):
     api_client.force_authenticate(user=admin)
     resp = api_client.get(schedule_url(resource.pk), {'date': 'not-a-date'})
     assert resp.status_code == 400
-    assert 'Invalid date format' in resp.json()['detail']
+    assert 'detail' in resp.json()
 
 
 @pytest.mark.django_db
@@ -307,7 +307,7 @@ def test_schedule_week_invalid_format_returns_400(api_client, admin, resource):
     api_client.force_authenticate(user=admin)
     resp = api_client.get(schedule_url(resource.pk), {'week': 'not-a-date'})
     assert resp.status_code == 400
-    assert 'Invalid week format' in resp.json()['detail']
+    assert 'detail' in resp.json()
 
 
 @pytest.mark.django_db

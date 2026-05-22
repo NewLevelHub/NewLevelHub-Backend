@@ -17,6 +17,8 @@ Authentication contract:
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
+from apps.core.i18n import get_lang, translate
+
 
 class _AuthenticatedPermission(BasePermission):
     """
@@ -79,13 +81,11 @@ class IsCompanyMember(_AuthenticatedPermission):
             return True
         if user.role in ('company_admin', 'employee'):
             if user.company_id is None:
+                lang = get_lang(request)
                 raise PermissionDenied(
                     detail={
                         'code': 'company_not_assigned',
-                        'message': (
-                            'Your account is not assigned to a company. '
-                            'Ask your administrator to add you to an organization.'
-                        ),
+                        'message': translate('company.not_assigned', lang),
                     }
                 )
             return True
@@ -116,13 +116,13 @@ class IsEmailVerifiedOrSuperAdmin(_AuthenticatedPermission):
     Superadmin is always allowed.
     """
 
-    message = 'Email not verified'
-
     def _has_role_permission(self, request, view):
         user = request.user
         if user.role == 'superadmin':
             return True
-        return bool(user.is_email_verified)
+        if not user.is_email_verified:
+            raise PermissionDenied(translate('auth.email_not_verified_short', get_lang(request)))
+        return True
 
 
 class IsOwnerOrAdmin(_AuthenticatedPermission):

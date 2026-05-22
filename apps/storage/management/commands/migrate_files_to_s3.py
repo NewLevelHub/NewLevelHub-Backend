@@ -73,8 +73,8 @@ class Command(BaseCommand):
 
             with legacy.open(old_name, 'rb') as src:
                 data = src.read()
-            default_storage.save(dest_name, ContentFile(data))
-            file_obj.file.name = dest_name
+            actual_name = default_storage.save(dest_name, ContentFile(data))
+            file_obj.file.name = actual_name
             file_obj.save(update_fields=['file', 'updated_at'])
             migrated_files += 1
 
@@ -104,8 +104,8 @@ class Command(BaseCommand):
 
             with legacy.open(old_name, 'rb') as src:
                 data = src.read()
-            default_storage.save(dest_name, ContentFile(data))
-            att.file.name = dest_name
+            actual_name = default_storage.save(dest_name, ContentFile(data))
+            att.file.name = actual_name
             att.save(update_fields=['file', 'updated_at'])
             migrated_attachments += 1
 

@@ -196,6 +196,26 @@ class TestInvitationCreate:
         assert invitation.role == 'company_admin'
         mock_delay.assert_called_once_with(invitation.id)
 
+    def test_company_invite_rejects_service_manager_role(self, api_client, superadmin, company):
+        # service_manager is a building-staff role and must be invited via
+        # POST /api/v1/companies/building-invites/, not the company-scoped endpoint.
+        auth(api_client, superadmin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': 'svc-manager@example.com', 'role': 'service_manager'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_company_invite_rejects_reception_role(self, api_client, superadmin, company):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            invitations_url(company.id),
+            {'email': 'reception@example.com', 'role': 'reception'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
     @patch('apps.companies.views.send_invitation_email.delay')
     def test_employee_limit_reached_returns_400(self, _mock_delay, api_client, company_admin, company):
         company.max_employees = 2
@@ -358,3 +378,210 @@ class TestInvitationListAndActions:
         auth(api_client, company_admin)
         response = api_client.get(invitations_url(other_company.id))
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ── /api/v1/companies/building-invites/ ────────────────────────────────
+
+BUILDING_INVITES_URL = '/api/v1/companies/building-invites/'
+
+
+def building_invite_revoke_url(invitation_id):
+    return f'/api/v1/companies/building-invites/{invitation_id}/revoke/'
+
+
+def building_invite_resend_url(invitation_id):
+    return f'/api/v1/companies/building-invites/{invitation_id}/resend/'
+
+
+@pytest.mark.django_db
+class TestBuildingInvitations:
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_superadmin_can_invite_service_manager(self, mock_delay, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'svc-manager@example.com', 'role': 'service_manager'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        invitation = Invitation.objects.get(email='svc-manager@example.com')
+        assert invitation.company_id is None
+        assert invitation.role == 'service_manager'
+        mock_delay.assert_called_once_with(invitation.id)
+
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_superadmin_can_invite_reception(self, mock_delay, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'reception@example.com', 'role': 'reception'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+        invitation = Invitation.objects.get(email='reception@example.com')
+        assert invitation.company_id is None
+        assert invitation.role == 'reception'
+        mock_delay.assert_called_once_with(invitation.id)
+
+    def test_employee_role_rejected(self, api_client, superadmin):
+        auth(api_client, superadmin)
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'employee@example.com', 'role': 'employee'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_company_admin_forbidden(self, api_client, company_admin):
+        auth(api_client, company_admin)
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'svc@example.com', 'role': 'service_manager'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unauthenticated_returns_401(self, api_client):
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'svc@example.com', 'role': 'service_manager'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_list_returns_only_building_invites(
+        self, _mock_delay, api_client, superadmin, company, company_admin,
+    ):
+        # Company-scoped invite — should NOT appear in the building-invites list.
+        Invitation.objects.create(
+            company=company,
+            email='employee@example.com',
+            invited_by=company_admin,
+            role='employee',
+        )
+        # Building-staff invite — should appear.
+        Invitation.objects.create(
+            company=None,
+            email='svc@example.com',
+            invited_by=superadmin,
+            role='service_manager',
+        )
+        auth(api_client, superadmin)
+        response = api_client.get(BUILDING_INVITES_URL)
+        assert response.status_code == status.HTTP_200_OK
+        emails = {row['email'] for row in response.json()['results']}
+        # building-staff invite included, company-scoped invite excluded
+        assert 'svc@example.com' in emails
+        assert 'employee@example.com' not in emails
+
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_revoke(self, _mock_delay, api_client, superadmin):
+        invitation = Invitation.objects.create(
+            company=None,
+            email='svc@example.com',
+            invited_by=superadmin,
+            role='service_manager',
+        )
+        auth(api_client, superadmin)
+        response = api_client.post(building_invite_revoke_url(invitation.id))
+        assert response.status_code == status.HTTP_200_OK
+        invitation.refresh_from_db()
+        assert invitation.is_used is True
+
+    @patch('apps.companies.serializers.send_invitation_email.delay')
+    def test_resend_creates_new_invitation(self, mock_delay, api_client, superadmin):
+        old = Invitation.objects.create(
+            company=None,
+            email='svc@example.com',
+            invited_by=superadmin,
+            role='service_manager',
+        )
+        auth(api_client, superadmin)
+        response = api_client.post(building_invite_resend_url(old.id))
+        assert response.status_code == status.HTTP_200_OK
+        old.refresh_from_db()
+        assert old.is_used is True
+        new = Invitation.objects.filter(
+            company__isnull=True, email='svc@example.com', is_used=False,
+        ).first()
+        assert new is not None
+        assert new.id != old.id
+        mock_delay.assert_called_once_with(new.id)
+
+    def test_duplicate_active_invite_rejected(self, api_client, superadmin):
+        Invitation.objects.create(
+            company=None,
+            email='svc@example.com',
+            invited_by=superadmin,
+            role='service_manager',
+            expires_at=timezone.now() + timedelta(hours=24),
+        )
+        auth(api_client, superadmin)
+        response = api_client.post(
+            BUILDING_INVITES_URL,
+            {'email': 'svc@example.com', 'role': 'service_manager'},
+            format='json',
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# ── /api/v1/companies/building-staff/ ──────────────────────────────────
+
+BUILDING_STAFF_URL = '/api/v1/companies/building-staff/'
+
+
+@pytest.mark.django_db
+class TestBuildingStaffList:
+    def _make_staff(self, role, email):
+        return User.objects.create_user(
+            email=email,
+            password='pass',
+            first_name=role.replace('_', ' ').title(),
+            last_name='Staff',
+            role=role,
+            is_email_verified=True,
+        )
+
+    def test_superadmin_sees_only_building_roles(
+        self, api_client, superadmin, company_admin, employee,
+    ):
+        svc = self._make_staff('service_manager', 'svc-list@nlh.test')
+        rec = self._make_staff('reception', 'rec-list@nlh.test')
+        auth(api_client, superadmin)
+        response = api_client.get(BUILDING_STAFF_URL)
+        assert response.status_code == status.HTTP_200_OK
+        rows = response.json()['results']
+        ids = {row['id'] for row in rows}
+        assert svc.id in ids
+        assert rec.id in ids
+        assert company_admin.id not in ids
+        assert employee.id not in ids
+
+    def test_filter_by_role(self, api_client, superadmin):
+        svc = self._make_staff('service_manager', 'svc-only@nlh.test')
+        self._make_staff('reception', 'rec-skip@nlh.test')
+        auth(api_client, superadmin)
+        response = api_client.get(BUILDING_STAFF_URL, {'role': 'service_manager'})
+        assert response.status_code == status.HTTP_200_OK
+        roles = {row['role'] for row in response.json()['results']}
+        assert roles == {'service_manager'}
+        ids = {row['id'] for row in response.json()['results']}
+        assert svc.id in ids
+
+    def test_search_by_email(self, api_client, superadmin):
+        target = self._make_staff('service_manager', 'unique-svc-search@nlh.test')
+        auth(api_client, superadmin)
+        response = api_client.get(BUILDING_STAFF_URL, {'search': 'unique-svc-search'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = {row['id'] for row in response.json()['results']}
+        assert ids == {target.id}
+
+    def test_company_admin_forbidden(self, api_client, company_admin):
+        auth(api_client, company_admin)
+        response = api_client.get(BUILDING_STAFF_URL)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unauthenticated_returns_401(self, api_client):
+        response = api_client.get(BUILDING_STAFF_URL)
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED

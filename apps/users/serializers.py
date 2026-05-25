@@ -137,7 +137,9 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
             err = existing_user_cannot_accept_invite_error(existing, invitation)
             if err:
                 raise serializers.ValidationError({'email': err})
-        if invitation.company.is_employee_limit_reached:
+        # Building-staff invites (reception, service_manager) have no company and
+        # therefore bypass the employee-count limit check.
+        if invitation.company_id and invitation.company.is_employee_limit_reached:
             raise serializers.ValidationError(
                 [{'_i18n': True, 'key': 'company.member_limit_exceeded', 'params': {}}]
             )
@@ -150,12 +152,20 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
         invitation = validated_data.pop('invitation')
         validated_data.pop('token', None)
         with transaction.atomic():
-            invitation = Invitation.objects.select_for_update().select_related('company').get(pk=invitation.pk)
+            # Lock only the Invitation row; ``select_related('company')`` joins via
+            # an OUTER JOIN now that the FK is nullable, and Postgres rejects
+            # FOR UPDATE on the nullable side of an outer join.
+            invitation = (
+                Invitation.objects
+                .select_for_update(of=('self',))
+                .select_related('company')
+                .get(pk=invitation.pk)
+            )
             if invitation.is_used:
                 raise_validation_error('token', 'company.invite_already_used')
             if invitation.is_expired:
                 raise_validation_error('token', 'company.invite_expired')
-            if invitation.company.is_employee_limit_reached:
+            if invitation.company_id and invitation.company.is_employee_limit_reached:
                 raise serializers.ValidationError(
                     [{'_i18n': True, 'key': 'company.member_limit_exceeded', 'params': {}}]
                 )

@@ -15,6 +15,15 @@ invitation_list = views.InvitationViewSet.as_view(
 invitation_revoke = views.InvitationViewSet.as_view({'post': 'revoke'})
 invitation_resend = views.InvitationViewSet.as_view({'post': 'resend'})
 
+building_invitation_list = views.BuildingInvitationViewSet.as_view(
+    {
+        'get': 'list',
+        'post': 'create',
+    }
+)
+building_invitation_revoke = views.BuildingInvitationViewSet.as_view({'post': 'revoke'})
+building_invitation_resend = views.BuildingInvitationViewSet.as_view({'post': 'resend'})
+
 urlpatterns = [
     path(
         '<int:company_id>/calendar/',
@@ -46,6 +55,20 @@ urlpatterns = [
         '<int:company_id>/invitations/<int:id>/resend/',
         invitation_resend,
         name='company-invitation-resend',
+    ),
+    # Building-staff users (reception / service_manager) — read-only list for superadmin.
+    path('building-staff/', views.BuildingStaffListView.as_view(), name='building-staff'),
+    # Building-staff invites (reception / service_manager) — no company in URL.
+    path('building-invites/', building_invitation_list, name='building-invitations'),
+    path(
+        'building-invites/<int:id>/revoke/',
+        building_invitation_revoke,
+        name='building-invitation-revoke',
+    ),
+    path(
+        'building-invites/<int:id>/resend/',
+        building_invitation_resend,
+        name='building-invitation-resend',
     ),
     path(
         '<int:company_id>/members/<int:user_id>/activity/',

@@ -281,6 +281,47 @@ class ServiceRequestRateSerializer(serializers.Serializer):
     rating = serializers.IntegerField(min_value=1, max_value=5)
 
 
+class ServiceRequestAssignSerializer(serializers.ModelSerializer):
+    """Назначение/смена исполнителя сервисной заявки."""
+
+    class Meta:
+        model = ServiceRequest
+        fields = ['assigned_to']
+        extra_kwargs = {
+            'assigned_to': {'allow_null': True, 'required': True},
+        }
+
+    def validate_assigned_to(self, value):
+        if value is None:
+            # Service managers cannot unassign a request once taken
+            requester = self.context['request'].user
+            if requester.role == 'service_manager':
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'services.service_manager_cannot_unassign', 'params': {}}]
+                )
+            return value
+        if not value.is_active:
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.assignee_inactive', 'params': {}}]
+            )
+        if value.role == 'guest':
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.assignee_invalid_role', 'params': {}}]
+            )
+        # Service managers cannot take over a request that is already assigned to someone else
+        requester = self.context['request'].user
+        if (
+            requester.role == 'service_manager'
+            and self.instance is not None
+            and self.instance.assigned_to_id is not None
+            and self.instance.assigned_to_id != value.pk
+        ):
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.service_manager_request_already_taken', 'params': {}}]
+            )
+        return value
+
+
 class ServiceRequestUpdateSerializer(serializers.ModelSerializer):
     """Для суперадмина: смена статуса, назначение исполнителя."""
 

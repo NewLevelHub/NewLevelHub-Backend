@@ -237,7 +237,9 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
 
 
 class InvitationCreateSerializer(serializers.ModelSerializer):
-    role = serializers.ChoiceField(choices=['employee', 'company_admin', 'reception'])
+    # Company-scoped invites — only roles that belong to a company. Building-staff
+    # roles (reception, service_manager) go through BuildingInvitationCreateSerializer.
+    role = serializers.ChoiceField(choices=['employee', 'company_admin'])
 
     class Meta:
         model = Invitation
@@ -266,7 +268,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
     def validate_role(self, value):
         request = self.context['request']
-        if value in ('company_admin', 'reception') and request.user.role != 'superadmin':
+        if value == 'company_admin' and request.user.role != 'superadmin':
             raise serializers.ValidationError(
                 [{'_i18n': True, 'key': 'company.role_superadmin_only', 'params': {'role': value}}]
             )
@@ -292,7 +294,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             raise_validation_error('email', 'company.invite_active_for_email')
 
         role = attrs.get('role', 'employee')
-        if request.user.role == 'company_admin' and role in ('company_admin', 'reception'):
+        if request.user.role == 'company_admin' and role == 'company_admin':
             raise_validation_error('role', 'company.admin_cannot_invite_role', {'role': role})
 
         return attrs
@@ -329,6 +331,47 @@ class InvitationListSerializer(serializers.ModelSerializer):
             'id', 'email', 'role', 'token', 'invited_by_name',
             'is_used', 'is_expired', 'is_valid', 'expires_at', 'created_at',
         ]
+
+
+class BuildingInvitationCreateSerializer(serializers.ModelSerializer):
+    """
+    Invite a building-staff user (reception or service_manager) without tying
+    them to any company. Superadmin-only — gated at the view level.
+    """
+
+    role = serializers.ChoiceField(choices=['reception', 'service_manager'])
+
+    class Meta:
+        model = Invitation
+        fields = ['email', 'role']
+
+    def validate_email(self, value):
+        email = value.strip().lower()
+        has_active_invitation = Invitation.objects.filter(
+            company__isnull=True,
+            email__iexact=email,
+            is_used=False,
+            expires_at__gt=timezone.now(),
+        ).exists()
+        if has_active_invitation:
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.invite_active_for_email', 'params': {}}]
+            )
+        return email
+
+    def create(self, validated_data):
+        validated_data['company'] = None
+        validated_data['invited_by'] = self.context['request'].user
+        invitation = super().create(validated_data)
+        create_notification(
+            user=invitation.invited_by,
+            notification_type='invitation',
+            title='Приглашение отправлено',
+            message=f'На адрес {invitation.email} отправлено приглашение сотрудника здания.',
+            link='/team/manage',
+        )
+        send_invitation_email.delay(invitation.id)
+        return invitation
 
 
 class CompanyMemberSerializer(serializers.ModelSerializer):

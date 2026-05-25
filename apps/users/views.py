@@ -182,7 +182,7 @@ def register_by_invite(request):
 
         return Response(
             {
-                'company_name': invitation.company.name,
+                'company_name': invitation.company.name if invitation.company_id else None,
                 'email': invitation.email,
                 'role': invitation.role,
                 'is_guest_upgrade': is_guest_upgrade,

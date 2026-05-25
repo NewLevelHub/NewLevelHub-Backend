@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
@@ -41,6 +41,7 @@ from .serializers import (
     CompanySettingsSerializer,
     InvitationCreateSerializer,
     InvitationListSerializer,
+    BuildingInvitationCreateSerializer,
     CompanyMemberSerializer,
     CompanyDirectoryListSerializer,
     CompanyDirectoryDetailSerializer,
@@ -1024,6 +1025,188 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
         send_invitation_email.delay(new_invitation.id)
         return Response({'detail': translate('company.invite_resent', lang)})
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Companies'],
+        summary='List building-staff invitations (no company)',
+        description='Lists invitations sent for building-wide roles (reception, service_manager). '
+                    'Superadmin only.',
+        responses={200: InvitationListSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Companies'],
+        summary='Invite a building-staff user (reception or service_manager)',
+        description='Creates an invitation that is not tied to any company. Superadmin only.',
+        request=BuildingInvitationCreateSerializer,
+        responses={
+            201: InvitationListSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    ),
+)
+class BuildingInvitationViewSet(viewsets.ModelViewSet):
+    """Building-wide staff invitations (no company association)."""
+
+    permission_classes = [IsSuperAdmin]
+    filter_backends = []
+    http_method_names = ['get', 'post']
+    lookup_url_kwarg = 'id'
+    queryset = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return BuildingInvitationCreateSerializer
+        return InvitationListSerializer
+
+    def get_queryset(self):
+        qs = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
+
+        is_used = InvitationViewSet._parse_bool_param(
+            self.request.query_params.get('is_used'), 'is_used',
+        )
+        if is_used is not None:
+            qs = qs.filter(is_used=is_used)
+
+        is_expired = InvitationViewSet._parse_bool_param(
+            self.request.query_params.get('is_expired'), 'is_expired',
+        )
+        if is_expired is not None:
+            if is_expired:
+                qs = qs.filter(expires_at__lte=timezone.now())
+            else:
+                qs = qs.filter(expires_at__gt=timezone.now())
+        return qs.order_by('-created_at')
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invitation = serializer.save()
+        return Response(
+            InvitationListSerializer(invitation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Revoke building-staff invitation',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Invitation revoked'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Invitation not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='revoke')
+    def revoke(self, request, *args, **kwargs):
+        lang = get_lang(request)
+        invitation = self.get_object()
+        invitation.is_used = True
+        invitation.used_at = timezone.now()
+        invitation.save(update_fields=['is_used', 'used_at'])
+        return Response({'detail': translate('company.invite_revoked', lang)})
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Resend building-staff invitation email',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Invitation email resent'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Invitation not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='resend')
+    def resend(self, request, *args, **kwargs):
+        lang = get_lang(request)
+        old_invitation = self.get_object()
+        if old_invitation.is_used:
+            raise_validation_error('detail', 'company.invite_cannot_resend')
+
+        with transaction.atomic():
+            old_invitation.is_used = True
+            old_invitation.used_at = timezone.now()
+            old_invitation.expires_at = timezone.now()
+            old_invitation.save(update_fields=['is_used', 'used_at', 'expires_at'])
+
+            new_invitation = Invitation.objects.create(
+                company=None,
+                email=old_invitation.email,
+                invited_by=request.user,
+                role=old_invitation.role,
+            )
+
+        send_invitation_email.delay(new_invitation.id)
+        return Response({'detail': translate('company.invite_resent', lang)})
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='List building-staff users',
+    description=(
+        'Returns users with building-wide roles (reception, service_manager) — they are '
+        'not tied to any company. Superadmin only. Supports ``search`` (by name/email) '
+        'and ``role`` (exact) query parameters.'
+    ),
+    parameters=[
+        OpenApiParameter(
+            name='search', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY, required=False,
+            description='Substring match against email, first_name or last_name.',
+        ),
+        OpenApiParameter(
+            name='role', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY, required=False,
+            description='Filter by exact role (reception | service_manager).',
+        ),
+        OpenApiParameter(
+            name='is_active', type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY, required=False,
+            description='Filter by activation status.',
+        ),
+    ],
+    responses={200: CompanyMemberSerializer(many=True)},
+)
+class BuildingStaffListView(GenericAPIView):
+    """List of users with building-staff roles (reception, service_manager)."""
+
+    permission_classes = [IsSuperAdmin]
+    serializer_class = CompanyMemberSerializer
+
+    def get_queryset(self):
+        qs = User.objects.filter(role__in=('reception', 'service_manager'))
+
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(
+                models.Q(email__icontains=search)
+                | models.Q(first_name__icontains=search)
+                | models.Q(last_name__icontains=search)
+            )
+
+        role = (self.request.query_params.get('role') or '').strip()
+        if role:
+            qs = qs.filter(role=role)
+
+        is_active_raw = self.request.query_params.get('is_active')
+        if is_active_raw is not None:
+            normalized = str(is_active_raw).strip().lower()
+            if normalized in ('true', '1'):
+                qs = qs.filter(is_active=True)
+            elif normalized in ('false', '0'):
+                qs = qs.filter(is_active=False)
+
+        return qs.order_by('-date_joined')
+
+    def get(self, request, *args, **kwargs):
+        qs = self.get_queryset()
+        page = self.paginate_queryset(qs)
+        serializer = self.get_serializer(page if page is not None else qs, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 @extend_schema(

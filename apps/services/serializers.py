@@ -319,6 +319,17 @@ class ServiceRequestAssignSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 [{'_i18n': True, 'key': 'services.service_manager_request_already_taken', 'params': {}}]
             )
+        # Service managers can only have one active (non-completed) request at a time
+        if value.role == 'service_manager':
+            qs = ServiceRequest.objects.filter(
+                assigned_to=value,
+            ).exclude(status='completed')
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'services.service_manager_already_active', 'params': {}}]
+                )
         return value
 
 

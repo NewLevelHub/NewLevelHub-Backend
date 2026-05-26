@@ -34,9 +34,15 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             return 24
 
     def validate(self, attrs):
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        leave_type = attrs.get('leave_type')
+        # For partial updates, fall back to instance values for fields not in attrs
+        if self.instance:
+            start_date = attrs.get('start_date', self.instance.start_date)
+            end_date = attrs.get('end_date', self.instance.end_date)
+            leave_type = attrs.get('leave_type', self.instance.leave_type)
+        else:
+            start_date = attrs.get('start_date')
+            end_date = attrs.get('end_date')
+            leave_type = attrs.get('leave_type')
 
         if start_date and end_date and start_date > end_date:
             raise_validation_error('start_date', 'hr.start_date_after_end_date')

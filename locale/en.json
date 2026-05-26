@@ -197,6 +197,8 @@
   "hr.year_out_of_range": "Year must be between 1900 and 3000.",
   "hr.leave_approve_overlap": "Cannot approve leave on dates overlapping with already approved leave.",
   "hr.leave_approve_balance_insufficient": "Not enough leave balance to approve this request.",
+  "hr.leave_edit_own_only": "You can only edit your own leave requests.",
+  "hr.leave_edit_pending_only": "Only pending leave requests can be edited or cancelled.",
   "services.coordinate_out_of_range": "Value must be between 0.0 and 100.0.",
   "services.resource_required_for_type": "Resource is required for point_type \"{point_type}\".",
   "services.company_required_for_office": "Company is required for point_type \"office\".",

@@ -197,6 +197,8 @@
   "hr.year_out_of_range": "Год должен быть в диапазоне от 1900 до 3000.",
   "hr.leave_approve_overlap": "Нельзя одобрить отпуск на даты, пересекающиеся с уже одобренным.",
   "hr.leave_approve_balance_insufficient": "Недостаточно дней отпуска для одобрения этой заявки.",
+  "hr.leave_edit_own_only": "Вы можете редактировать только свои заявки.",
+  "hr.leave_edit_pending_only": "Редактировать или отменить можно только заявку со статусом 'На рассмотрении'.",
   "services.coordinate_out_of_range": "Значение должно быть от 0.0 до 100.0.",
   "services.resource_required_for_type": "Ресурс обязателен для типа точки \"{point_type}\".",
   "services.company_required_for_office": "Компания обязательна для типа точки \"office\".",

@@ -51,7 +51,7 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsCompanyMember]
     queryset = LeaveRequest.objects.select_related('user', 'reviewed_by').order_by('-created_at')
-    http_method_names = ['get', 'post']
+    http_method_names = ['get', 'post', 'patch']
     filterset_fields = ['status', 'leave_type', 'user']
 
     def get_queryset(self):
@@ -116,6 +116,45 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
         if parsed_year < 1900 or parsed_year > 3000:
             raise_validation_error('year', 'hr.year_out_of_range')
         return parsed_year
+
+    def partial_update(self, request, *args, **kwargs):
+        lang = get_lang(request)
+        leave = self.get_object()
+
+        if leave.user != request.user:
+            raise PermissionDenied(translate('hr.leave_edit_own_only', lang))
+        if leave.status != 'pending':
+            raise PermissionDenied(translate('hr.leave_edit_pending_only', lang))
+
+        ser = LeaveRequestSerializer(
+            leave, data=request.data, partial=True, context={'request': request}
+        )
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(ser.data)
+
+    @extend_schema(
+        tags=['HR'],
+        summary='Cancel own pending leave request',
+        responses={
+            200: LeaveRequestSerializer,
+            403: OpenApiResponse(description='Not owner or not pending'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='cancel', permission_classes=[IsCompanyMember])
+    def cancel(self, request, pk=None):
+        lang = get_lang(request)
+        leave = self.get_object()
+
+        if leave.user != request.user:
+            raise PermissionDenied(translate('hr.leave_edit_own_only', lang))
+        if leave.status != 'pending':
+            raise PermissionDenied(translate('hr.leave_edit_pending_only', lang))
+
+        leave.status = 'cancelled'
+        leave.save(update_fields=['status', 'updated_at'])
+        return Response(LeaveRequestSerializer(leave).data)
 
     def _default_total_days_for_user(self, user):
         if not user.company_id:

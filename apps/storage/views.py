@@ -216,22 +216,18 @@ class FileViewSet(viewsets.ModelViewSet):
             company_files = File.objects.filter(company=user.company, folder__scope='company')
             company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
-            # Personal scope is visible only to the owner, plus explicitly shared files.
+            # Personal scope: only files owned by this user.
+            # Files shared *with* the user are intentionally excluded here so they
+            # don't pollute the personal files list; they are surfaced exclusively
+            # through the FileShare "shared-with-me" endpoint.
             personal_owned = File.objects.filter(owner=user, folder__scope='personal')
-            personal_shared = File.objects.filter(shares__shared_with=user, folder__scope='personal')
-
-            # Keep compatibility for legacy rows without folder:
-            # owner keeps access; non-owners must use explicit sharing.
             legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
-            legacy_shared = File.objects.filter(shares__shared_with=user, folder__isnull=True)
 
             queryset = (
                 company_files
                 | company_root_files
                 | personal_owned
-                | personal_shared
                 | legacy_owned
-                | legacy_shared
             ).distinct()
 
         scope = self.request.query_params.get('scope')
@@ -292,11 +288,13 @@ class FileViewSet(viewsets.ModelViewSet):
             return
 
         folder = getattr(file_obj, 'folder', None)
-        if (
-            folder is not None
-            and folder.scope == 'company'
-            and user.company_id is not None
+        is_company_file = (
+            user.company_id is not None
             and file_obj.company_id == user.company_id
+            and (folder is None or folder.scope == 'company')
+        )
+        if (
+            is_company_file
             and (
                 required_permission in ('view', 'download')
                 or (required_permission == 'full' and user.role == 'company_admin')
@@ -400,9 +398,29 @@ class FileViewSet(viewsets.ModelViewSet):
         self._ensure_file_permission(file_obj, 'download')
         if not file_obj.file:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
-        url, expires_in = presigned_get_url_for_fieldfile(file_obj.file)
+        url, expires_in = presigned_get_url_for_fieldfile(file_obj.file, filename=file_obj.name)
         if not url:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
+        # For local (non-S3) storage presigned_get_url_for_fieldfile returns a
+        # plain media URL without a Content-Disposition header.  Stream the file
+        # directly so the browser always receives the correct original filename.
+        try:
+            from storages.backends.s3boto3 import S3Boto3Storage as _S3
+            is_s3 = isinstance(file_obj.file.storage, _S3)
+        except ImportError:
+            is_s3 = False
+        if not is_s3:
+            import mimetypes
+            from django.http import FileResponse
+            import urllib.parse
+            fh = file_obj.file.open('rb')
+            content_type = mimetypes.guess_type(file_obj.name)[0] or 'application/octet-stream'
+            encoded_name = urllib.parse.quote(file_obj.name, safe='')
+            resp = FileResponse(fh, content_type=content_type, as_attachment=False)
+            resp['Content-Disposition'] = (
+                f'attachment; filename="{file_obj.name}"; filename*=UTF-8\'\'{encoded_name}'
+            )
+            return resp
         return Response({'url': url, 'expires_in': expires_in})
 
     @extend_schema(
@@ -483,14 +501,18 @@ class FileShareViewSet(viewsets.ModelViewSet):
         shared_with_me = str(self.request.query_params.get('shared_with_me', '')).lower() in ('1', 'true', 'yes', 'on')
 
         if shared_with_me:
-            return FileShare.objects.filter(shared_with=user).order_by('-created_at')
+            return FileShare.objects.filter(
+                shared_with=user, file__is_deleted=False,
+            ).order_by('-created_at')
 
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return FileShare.objects.filter(shared_by=user).order_by('-created_at')
+            return FileShare.objects.filter(
+                shared_by=user, file__is_deleted=False,
+            ).order_by('-created_at')
 
         return (
-            FileShare.objects.filter(shared_by=user)
-            | FileShare.objects.filter(shared_with=user)
+            FileShare.objects.filter(shared_by=user, file__is_deleted=False)
+            | FileShare.objects.filter(shared_with=user, file__is_deleted=False)
         ).order_by('-created_at')
 
     def perform_create(self, serializer):

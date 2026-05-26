@@ -9,8 +9,8 @@ class FolderSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Folder
-        fields = ['id', 'name', 'scope', 'parent', 'children_count', 'files_count', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'scope', 'parent', 'owner', 'children_count', 'files_count', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'owner', 'created_at', 'updated_at']
 
 
 class FileSerializer(serializers.ModelSerializer):
@@ -68,6 +68,7 @@ class FileShareSerializer(serializers.ModelSerializer):
             'file_owner_id',
             'file_owner_name',
             'permission',
+            'comment',
             'created_at',
         ]
         read_only_fields = ['id', 'shared_by', 'created_at']
@@ -97,8 +98,11 @@ class FileShareSerializer(serializers.ModelSerializer):
         if shared_with and shared_with.company_id != request.user.company_id:
             raise_validation_error('shared_with', 'storage.share_wrong_company')
 
-        if file_obj and shared_with and file_obj.company_id != shared_with.company_id:
-            raise_validation_error('shared_with', 'storage.share_cross_company')
+        if file_obj and shared_with:
+            # Personal files have company_id=None; use the owner's company for the check.
+            file_company_id = file_obj.company_id if file_obj.company_id is not None else request.user.company_id
+            if file_company_id != shared_with.company_id:
+                raise_validation_error('shared_with', 'storage.share_cross_company')
 
         return attrs
 

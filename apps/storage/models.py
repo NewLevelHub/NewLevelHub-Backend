@@ -57,6 +57,7 @@ class FileShare(TimeStampedModel):
     shared_with = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='shared_files')
     shared_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_shares')
     permission = models.CharField(max_length=10, choices=PERMISSION_CHOICES, default='view')
+    comment = models.TextField(blank=True, default='')
 
     class Meta:
         db_table = 'storage_file_shares'

@@ -1,6 +1,8 @@
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 
 from django.db import connection
+from django.db.models import Case, IntegerField, Q, When
+
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
@@ -17,7 +19,7 @@ from apps.core.permissions import IsCompanyMember
 from apps.crm.models import Task
 from apps.hr.models import LeaveRequest
 from apps.notifications.models import Notification
-from apps.services.models import Announcement
+from apps.services.models import Announcement, Floor, MapPoint, ServiceRequest
 from apps.users.models import User
 
 
@@ -153,6 +155,27 @@ def _local_day_bounds_today():
     return start, end
 
 
+def _local_day_bounds_offset(days):
+    """Return (start, end) UTC-aware datetimes for localdate() + days offset."""
+    tz = timezone.get_current_timezone()
+    target_date = timezone.localdate() + timedelta(days=days)
+    start = timezone.make_aware(datetime.combine(target_date, dt_time.min), tz)
+    end = timezone.make_aware(datetime.combine(target_date, dt_time.max), tz)
+    return start, end
+
+
+def _serialize_booking_recent(b):
+    return {
+        'id': b.id,
+        'resource_name': b.resource.name,
+        'user_name': b.user.full_name,
+        'company_name': b.company.name if b.company else None,
+        'start_time': b.start_time,
+        'end_time': b.end_time,
+        'status': b.status,
+    }
+
+
 def _serialize_user(user):
     return {
         'id': user.id,
@@ -172,14 +195,82 @@ def _serialize_announcement(ann):
     }
 
 
+def _floor_load():
+    now = timezone.now()
+    floors = Floor.objects.order_by('number')
+    result = []
+    for floor in floors:
+        resource_ids = list(
+            MapPoint.objects
+            .filter(floor=floor, resource__isnull=False, resource__is_active=True)
+            .values_list('resource_id', flat=True)
+            .distinct()
+        )
+        total = len(resource_ids)
+        if total == 0:
+            result.append({
+                'floor_number': floor.number,
+                'floor_name': floor.name or f'Этаж {floor.number}',
+                'occupancy_pct': 0,
+            })
+            continue
+        occupied = (
+            Booking.objects
+            .filter(
+                resource_id__in=resource_ids,
+                status='confirmed',
+                start_time__lte=now,
+                end_time__gte=now,
+            )
+            .values('resource_id')
+            .distinct()
+            .count()
+        )
+        result.append({
+            'floor_number': floor.number,
+            'floor_name': floor.name or f'Этаж {floor.number}',
+            'occupancy_pct': round(occupied / total * 100),
+        })
+    return result
+
+
 def _superadmin_widgets():
+    now = timezone.now()
     today_start, today_end = _local_day_bounds_today()
+    today_local = timezone.localdate()
 
     bookings_today_qs = Booking.objects.filter(
         start_time__gte=today_start,
         start_time__lte=today_end,
         status='confirmed',
     )
+    bookings_today_count = bookings_today_qs.count()
+
+    week_ago_start, week_ago_end = _local_day_bounds_offset(days=-7)
+    bookings_same_weekday_7d_ago_count = Booking.objects.filter(
+        start_time__gte=week_ago_start,
+        start_time__lte=week_ago_end,
+        status='confirmed',
+    ).count()
+    bookings_week_delta = bookings_today_count - bookings_same_weekday_7d_ago_count
+
+    total_resources = Resource.objects.filter(is_active=True).count()
+    occupied_resources = Booking.objects.filter(
+        start_time__lte=now,
+        end_time__gte=now,
+        status__in=['confirmed', 'checked_in'],
+    ).values('resource').distinct().count()
+    space_load_pct = round(occupied_resources / total_resources * 100) if total_resources > 0 else 0
+
+    open_service_requests = ServiceRequest.objects.exclude(status='completed').count()
+    service_requests_closed_today = ServiceRequest.objects.filter(
+        status='completed',
+        updated_at__date=today_local,
+    ).count()
+
+    new_companies_last_7d = Company.objects.filter(
+        created_at__gte=now - timedelta(days=7),
+    ).count()
 
     recent_bookings = (
         Booking.objects
@@ -197,10 +288,33 @@ def _superadmin_widgets():
         for b in recent_bookings
     ]
 
+    bookings_recent_qs = (
+        Booking.objects
+        .filter(start_time__gte=today_start, start_time__lte=today_end)
+        .select_related('user', 'resource', 'company')
+        .order_by('start_time')[:5]
+    )
+    bookings_recent = [_serialize_booking_recent(b) for b in bookings_recent_qs]
+
+    announcements_recent_qs = (
+        Announcement.objects
+        .filter(company__isnull=True)
+        .order_by('-created_at')[:3]
+    )
+    announcements_recent = [
+        {
+            'id': a.id,
+            'title': a.title,
+            'text': a.body,
+            'created_at': a.created_at,
+        }
+        for a in announcements_recent_qs
+    ]
+
     return {
         'total_companies': Company.objects.count(),
         'total_users': User.objects.filter(is_active=True).count(),
-        'bookings_today': bookings_today_qs.count(),
+        'bookings_today': bookings_today_count,
         'recent_events': recent_events,
         'quick_actions': [
             'invite_user',
@@ -209,10 +323,42 @@ def _superadmin_widgets():
             'view_analytics',
             'manage_companies',
         ],
+        'bookings_recent': bookings_recent,
+        'announcements_recent': announcements_recent,
+        'bookings_week_delta': bookings_week_delta,
+        'space_load_pct': space_load_pct,
+        'open_service_requests': open_service_requests,
+        'service_requests_closed_today': service_requests_closed_today,
+        'new_companies_last_7d': new_companies_last_7d,
+        'floor_load': _floor_load(),
     }
 
 
+def _initials(user):
+    parts = [user.first_name[:1], user.last_name[:1]]
+    return ''.join(p for p in parts if p).upper()
+
+
+def _my_tasks_for_user(user, now, limit=5):
+    today = timezone.localdate()
+    return list(
+        Task.objects
+        .select_related('column__board')
+        .filter(
+            assignee=user,
+            is_archived=False,
+            is_deleted=False,
+        )
+        .filter(Q(deadline__isnull=True) | Q(deadline__date=today))
+        .order_by(
+            Case(When(deadline__isnull=True, then=1), default=0, output_field=IntegerField()),
+            'deadline',
+        )[:limit]
+    )
+
+
 def _company_admin_widgets(user):
+    now = timezone.now()
     today_start, today_end = _local_day_bounds_today()
     company = user.company
 
@@ -233,12 +379,83 @@ def _company_admin_widgets(user):
 
     announcements = (
         Announcement.objects
-        .filter(company=company)
+        .filter(Q(company=company) | Q(company__isnull=True))
         .order_by('-is_pinned', '-created_at')[:5]
     )
 
     pending_leaves = LeaveRequest.objects.filter(company=company, status='pending').count()
     active_guest_passes = GuestPass.objects.filter(company=company, status='active').count()
+
+    bookings_recent_qs = (
+        Booking.objects
+        .filter(company=company, start_time__gte=today_start, start_time__lte=today_end)
+        .select_related('user', 'resource', 'company')
+        .order_by('start_time')[:5]
+    )
+    bookings_recent = [_serialize_booking_recent(b) for b in bookings_recent_qs]
+
+    busy_ids = Booking.objects.filter(
+        company=company,
+        status='confirmed',
+        start_time__lte=now,
+        end_time__gte=now,
+    ).values_list('resource_id', flat=True)
+    free_resources_now = (
+        Resource.objects
+        .filter(is_active=True)
+        .exclude(id__in=busy_ids)
+        .count()
+    )
+
+    team_bookings_qs = (
+        Booking.objects
+        .select_related('user', 'resource')
+        .filter(company=company, start_time__gte=today_start, start_time__lte=today_end)
+        .order_by('start_time')[:10]
+    )
+    team_bookings_today = [
+        {
+            'user_full_name': b.user.full_name,
+            'user_initials': _initials(b.user),
+            'resource_name': b.resource.name,
+            'start_time': b.start_time,
+            'end_time': b.end_time,
+            'status': b.status,
+        }
+        for b in team_bookings_qs
+    ]
+
+    today = timezone.localdate()
+    company_user_ids = (
+        User.objects
+        .filter(company=company, is_active=True)
+        .values_list('id', flat=True)
+    )
+    my_tasks_qs = (
+        Task.objects
+        .select_related('column__board')
+        .filter(
+            assignee_id__in=company_user_ids,
+            is_archived=False,
+            is_deleted=False,
+        )
+        .filter(Q(deadline__isnull=True) | Q(deadline__date=today))
+        .order_by(
+            Case(When(deadline__isnull=True, then=1), default=0, output_field=IntegerField()),
+            'deadline',
+        )[:5]
+    )
+    my_tasks = [
+        {
+            'id': t.id,
+            'title': t.title,
+            'due_date': t.deadline.date().isoformat() if t.deadline else None,
+            'due_time': t.deadline.strftime('%H:%M') if t.deadline else None,
+            'priority': t.priority,
+            'is_overdue': t.deadline < now if t.deadline else False,
+        }
+        for t in my_tasks_qs
+    ]
 
     return {
         'employee_count': employee_count,
@@ -249,10 +466,15 @@ def _company_admin_widgets(user):
             'leaves': pending_leaves,
             'guest_passes': active_guest_passes,
         },
+        'bookings_recent': bookings_recent,
+        'free_resources_now': free_resources_now,
+        'team_bookings_today': team_bookings_today,
+        'my_tasks': my_tasks,
     }
 
 
 def _employee_widgets(user):
+    now = timezone.now()
     today_start, today_end = _local_day_bounds_today()
     today = timezone.localdate()
 
@@ -272,17 +494,65 @@ def _employee_widgets(user):
 
     announcements = (
         Announcement.objects
-        .filter(company=user.company)
+        .filter(Q(company=user.company) | Q(company__isnull=True))
         .order_by('-is_pinned', '-created_at')[:5]
     )
 
     unread_count = Notification.objects.filter(user=user, is_read=False).count()
+
+    bookings_recent_qs = (
+        Booking.objects
+        .filter(user=user, start_time__gte=today_start, start_time__lte=today_end)
+        .select_related('user', 'resource', 'company')
+        .order_by('start_time')[:5]
+    )
+    bookings_recent = [_serialize_booking_recent(b) for b in bookings_recent_qs]
+
+    upcoming_qs = (
+        Booking.objects
+        .select_related('resource')
+        .filter(user=user, status='confirmed', start_time__gte=today_start, start_time__lte=today_end)
+        .order_by('start_time')[:5]
+    )
+    my_upcoming_bookings = [
+        {
+            'id': b.id,
+            'resource_name': b.resource.name,
+            'resource_type': b.resource.resource_type,
+            'resource_capacity': b.resource.capacity,
+            'resource_row': None,
+            'start_time': b.start_time,
+            'end_time': b.end_time,
+            'is_all_day': False,
+            'status': b.status,
+        }
+        for b in upcoming_qs
+    ]
+
+    my_tasks_qs = _my_tasks_for_user(user, now)
+    my_tasks_list = [
+        {
+            'id': t.id,
+            'title': t.title,
+            'board_name': t.column.board.name,
+            'due_date': t.deadline.date().isoformat() if t.deadline else None,
+            'priority': t.priority,
+            'is_overdue': t.deadline < now if t.deadline else False,
+        }
+        for t in my_tasks_qs
+    ]
+
+    my_tasks_boards_count = len({t['board_name'] for t in my_tasks_list})
 
     return {
         'my_tasks_today': my_tasks_today,
         'my_bookings_today': my_bookings_today,
         'announcement_feed': [_serialize_announcement(a) for a in announcements],
         'unread_notifications_count': unread_count,
+        'bookings_recent': bookings_recent,
+        'my_upcoming_bookings': my_upcoming_bookings,
+        'my_tasks': my_tasks_list,
+        'my_tasks_boards_count': my_tasks_boards_count,
     }
 
 

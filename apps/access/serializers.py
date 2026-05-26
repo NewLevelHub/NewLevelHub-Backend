@@ -105,6 +105,9 @@ class GuestPassSerializer(serializers.ModelSerializer):
     purpose = serializers.CharField(source='visit_purpose', read_only=True)
     is_single_use = serializers.SerializerMethodField()
     qr_image = serializers.ImageField(read_only=True)
+    last_validated_at = serializers.SerializerMethodField()
+    last_validated_by = serializers.SerializerMethodField()
+    last_method = serializers.SerializerMethodField()
 
     class Meta:
         model = GuestPass
@@ -114,11 +117,32 @@ class GuestPassSerializer(serializers.ModelSerializer):
             'qr_code', 'qr_image', 'status', 'usage_type', 'is_single_use', 'times_used',
             'valid_from', 'valid_until', 'is_valid',
             'created_at',
+            'last_validated_at', 'last_validated_by', 'last_method',
         ]
         read_only_fields = ['id', 'created_by', 'company', 'qr_code', 'qr_image', 'times_used', 'created_at']
 
     def get_is_single_use(self, obj):
         return obj.usage_type == 'single'
+
+    def _last_log(self, obj):
+        logs = getattr(obj, 'prefetched_logs', None)
+        if logs is not None:
+            return logs[0] if logs else None
+        return obj.access_logs.select_related('checked_by').order_by('-created_at').first()
+
+    def get_last_validated_at(self, obj):
+        log = self._last_log(obj)
+        return log.created_at.isoformat() if log else None
+
+    def get_last_validated_by(self, obj):
+        log = self._last_log(obj)
+        if log and log.checked_by:
+            return log.checked_by.full_name
+        return None
+
+    def get_last_method(self, obj):
+        log = self._last_log(obj)
+        return log.method if log else None
 
 
 class GuestPassValidateSerializer(serializers.Serializer):

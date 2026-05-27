@@ -212,6 +212,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
         return skipped_dates
 
     validator = BookingCreateSerializer(context={})
+    now = timezone.now()
 
     with transaction.atomic():
         resource = Resource.objects.select_for_update().get(pk=recurring_booking.resource_id)
@@ -222,6 +223,9 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
         ):
             start_time = _combine_aware(booking_date, recurring_booking.start_time)
             end_time = _combine_aware(booking_date, recurring_booking.end_time)
+            if end_time <= now:
+                skipped_dates.append(booking_date.isoformat())
+                continue
             try:
                 validator._ensure_no_conflicts(
                     resource=resource,

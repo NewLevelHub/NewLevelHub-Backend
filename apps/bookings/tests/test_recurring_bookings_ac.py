@@ -261,6 +261,74 @@ class TestRecurringBookingCreateAC:
         second = api_client.post(RECURRING_URL, payload, format='json')
         assert second.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_today_weekday_included_when_time_in_future(
+        self, api_client, employee, desk_resource
+    ):
+        today = timezone.localdate()
+        now_local = timezone.localtime()
+        start_dt = (now_local + timedelta(minutes=30)).replace(second=0, microsecond=0)
+        end_dt = start_dt + timedelta(hours=1)
+        if start_dt.date() != today or end_dt.date() != today:
+            pytest.skip('Test would span midnight')
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.post(
+            RECURRING_URL,
+            {
+                'resource_id': desk_resource.id,
+                'day_of_week': today.weekday(),
+                'start_time': start_dt.strftime('%H:%M'),
+                'end_time': end_dt.strftime('%H:%M'),
+                'repeat_until': (today + timedelta(days=14)).isoformat(),
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED, response.json()
+        payload = response.json()
+        assert payload['valid_from'] == today.isoformat()
+        assert today.isoformat() not in payload['skipped_dates']
+
+        series_dates = [
+            timezone.localtime(b.start_time).date()
+            for b in Booking.objects.filter(recurring_booking_id=payload['id']).order_by('start_time')
+        ]
+        assert today in series_dates
+
+    def test_today_weekday_skipped_when_end_time_already_passed(
+        self, api_client, employee, desk_resource
+    ):
+        today = timezone.localdate()
+        now_local = timezone.localtime()
+        end_dt = (now_local - timedelta(minutes=5)).replace(second=0, microsecond=0)
+        start_dt = end_dt - timedelta(minutes=30)
+        if start_dt.date() != today or end_dt.date() != today or start_dt >= end_dt:
+            pytest.skip('Cannot pick a past time window today')
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.post(
+            RECURRING_URL,
+            {
+                'resource_id': desk_resource.id,
+                'day_of_week': today.weekday(),
+                'start_time': start_dt.strftime('%H:%M'),
+                'end_time': end_dt.strftime('%H:%M'),
+                'repeat_until': (today + timedelta(days=14)).isoformat(),
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED, response.json()
+        payload = response.json()
+        assert payload['valid_from'] == today.isoformat()
+        assert today.isoformat() in payload['skipped_dates']
+
+        series_dates = [
+            timezone.localtime(b.start_time).date()
+            for b in Booking.objects.filter(recurring_booking_id=payload['id']).order_by('start_time')
+        ]
+        assert today not in series_dates
+
     def test_guest_cannot_create_recurring_booking(self, api_client, guest_user, desk_resource):
         monday = _next_weekday_date(0)
         api_client.force_authenticate(user=guest_user)

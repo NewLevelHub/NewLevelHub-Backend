@@ -260,6 +260,7 @@ def _employee_widgets(user):
         assignee=user,
         is_archived=False,
         is_deleted=False,
+        column__board__is_archived=False,
         deadline__date=today,
     ).count()
 

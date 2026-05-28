@@ -982,8 +982,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             bookings = Booking.objects.filter(
                 resource=resource,
                 status='confirmed',
-                start_time__gte=local_start,
                 start_time__lt=local_end,
+                end_time__gt=local_start,
             ).order_by('start_time')
 
         result = []

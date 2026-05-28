@@ -1,6 +1,6 @@
 """Integration tests for GET /api/v1/analytics/resources/ (per-resource usage)."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest

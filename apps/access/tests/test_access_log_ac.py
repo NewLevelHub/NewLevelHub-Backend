@@ -280,14 +280,17 @@ class TestAccessLogFiltersAC:
         assert log_b.id not in ids
 
     def test_filter_by_date_from_excludes_earlier_logs(self, api_client, superadmin, admin_a, reception_a, pass_a):
-        yesterday = timezone.now() - timedelta(days=1)
+        # Use 2-day gap so "yesterday" is always a different local date regardless of UTC offset.
+        yesterday = timezone.now() - timedelta(days=2)
         today = timezone.now()
 
         old_log = _make_log(pass_a, reception_a, created_at=yesterday)
         new_log = _make_log(pass_a, reception_a, created_at=today)
 
         api_client.force_authenticate(user=superadmin)
-        date_from = today.date().isoformat()
+        # date__gte/lte extracts the date in the server's local timezone (Asia/Almaty),
+        # so we must compare using the local date, not the UTC date.
+        date_from = timezone.localtime(today).date().isoformat()
         response = api_client.get(LOGS_URL, {'date_from': date_from})
         assert response.status_code == status.HTTP_200_OK
         ids = {r['id'] for r in response.data.get('results', response.data)}
@@ -295,14 +298,14 @@ class TestAccessLogFiltersAC:
         assert old_log.id not in ids
 
     def test_filter_by_date_to_excludes_later_logs(self, api_client, superadmin, admin_a, reception_a, pass_a):
-        yesterday = timezone.now() - timedelta(days=1)
+        yesterday = timezone.now() - timedelta(days=2)
         today = timezone.now()
 
         old_log = _make_log(pass_a, reception_a, created_at=yesterday)
         new_log = _make_log(pass_a, reception_a, created_at=today)
 
         api_client.force_authenticate(user=superadmin)
-        date_to = yesterday.date().isoformat()
+        date_to = timezone.localtime(yesterday).date().isoformat()
         response = api_client.get(LOGS_URL, {'date_to': date_to})
         assert response.status_code == status.HTTP_200_OK
         ids = {r['id'] for r in response.data.get('results', response.data)}

@@ -886,13 +886,6 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
         sr = self.get_object()
 
-        # Service managers may only update status of requests assigned to themselves
-        if request.user.role == 'service_manager' and sr.assigned_to_id != request.user.pk:
-            return Response(
-                [{'_i18n': True, 'key': 'services.service_manager_not_executor', 'params': {}}],
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
         previous_status = sr.status
         serializer = ServiceRequestStatusSerializer(sr, data=request.data)
         serializer.is_valid(raise_exception=True)

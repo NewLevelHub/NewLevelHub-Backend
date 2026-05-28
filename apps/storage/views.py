@@ -217,17 +217,18 @@ class FileViewSet(viewsets.ModelViewSet):
             company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
             # Personal scope: only files owned by this user.
-            # Files shared *with* the user are intentionally excluded here so they
-            # don't pollute the personal files list; they are surfaced exclusively
-            # through the FileShare "shared-with-me" endpoint.
             personal_owned = File.objects.filter(owner=user, folder__scope='personal')
             legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
+
+            # Files explicitly shared with this user (e.g. personal files from another user).
+            explicitly_shared = File.objects.filter(shares__shared_with=user)
 
             queryset = (
                 company_files
                 | company_root_files
                 | personal_owned
                 | legacy_owned
+                | explicitly_shared
             ).distinct()
 
         scope = self.request.query_params.get('scope')
@@ -287,6 +288,18 @@ class FileViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin' or file_obj.owner_id == user.id:
             return
 
+        # An explicit FileShare always takes precedence over company-level defaults.
+        # This lets owners grant view-only access to a file that would otherwise be
+        # downloadable by any company member.
+        share = self._get_share_for_user(file_obj, user)
+        if share is not None:
+            share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
+            required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
+            if share_level < required_level:
+                lang = get_lang(self.request)
+                raise PermissionDenied(translate('storage.file_action_forbidden', lang))
+            return
+
         folder = getattr(file_obj, 'folder', None)
         is_company_file = (
             user.company_id is not None
@@ -302,16 +315,8 @@ class FileViewSet(viewsets.ModelViewSet):
         ):
             return
 
-        share = self._get_share_for_user(file_obj, user)
-        if share is None:
-            lang = get_lang(self.request)
-            raise PermissionDenied(translate('storage.file_access_denied', lang))
-
-        share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
-        required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
-        if share_level < required_level:
-            lang = get_lang(self.request)
-            raise PermissionDenied(translate('storage.file_action_forbidden', lang))
+        lang = get_lang(self.request)
+        raise PermissionDenied(translate('storage.file_access_denied', lang))
 
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get('file')
@@ -401,26 +406,6 @@ class FileViewSet(viewsets.ModelViewSet):
         url, expires_in = presigned_get_url_for_fieldfile(file_obj.file, filename=file_obj.name)
         if not url:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
-        # For local (non-S3) storage presigned_get_url_for_fieldfile returns a
-        # plain media URL without a Content-Disposition header.  Stream the file
-        # directly so the browser always receives the correct original filename.
-        try:
-            from storages.backends.s3boto3 import S3Boto3Storage as _S3
-            is_s3 = isinstance(file_obj.file.storage, _S3)
-        except ImportError:
-            is_s3 = False
-        if not is_s3:
-            import mimetypes
-            from django.http import FileResponse
-            import urllib.parse
-            fh = file_obj.file.open('rb')
-            content_type = mimetypes.guess_type(file_obj.name)[0] or 'application/octet-stream'
-            encoded_name = urllib.parse.quote(file_obj.name, safe='')
-            resp = FileResponse(fh, content_type=content_type, as_attachment=False)
-            resp['Content-Disposition'] = (
-                f'attachment; filename="{file_obj.name}"; filename*=UTF-8\'\'{encoded_name}'
-            )
-            return resp
         return Response({'url': url, 'expires_in': expires_in})
 
     @extend_schema(

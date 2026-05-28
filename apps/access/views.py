@@ -129,7 +129,10 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         ])
         for p in qs.iterator():
             logs = getattr(p, 'prefetched_logs', None)
-            last = (logs[0] if logs else None) if logs is not None else p.access_logs.select_related('checked_by').order_by('-created_at').first()
+            if logs is not None:
+                last = logs[0] if logs else None
+            else:
+                last = p.access_logs.select_related('checked_by').order_by('-created_at').first()
             writer.writerow([
                 p.pk,
                 p.guest_name,

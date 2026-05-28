@@ -293,12 +293,6 @@ class ServiceRequestAssignSerializer(serializers.ModelSerializer):
 
     def validate_assigned_to(self, value):
         if value is None:
-            # Service managers cannot unassign a request once taken
-            requester = self.context['request'].user
-            if requester.role == 'service_manager':
-                raise serializers.ValidationError(
-                    [{'_i18n': True, 'key': 'services.service_manager_cannot_unassign', 'params': {}}]
-                )
             return value
         if not value.is_active:
             raise serializers.ValidationError(

@@ -47,6 +47,9 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         if valid_until > valid_from + timedelta(days=30):
             raise_validation_error('valid_until', 'access.valid_until_too_far')
 
+        if not attrs['is_single_use'] and valid_until > valid_from + timedelta(days=1):
+            raise_validation_error('valid_until', 'access.multi_use_max_one_day')
+
         if attrs['guest_email'].strip().lower() == user.email.strip().lower():
             raise_validation_error('guest_email', 'access.cannot_create_for_self')
 
@@ -147,6 +150,19 @@ class GuestPassSerializer(serializers.ModelSerializer):
 
 class GuestPassValidateSerializer(serializers.Serializer):
     qr_code = serializers.UUIDField()
+
+
+class GuestPassValidationLogSerializer(serializers.ModelSerializer):
+    validated_at = serializers.DateTimeField(source='created_at', read_only=True)
+    validated_by = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccessLog
+        fields = ['id', 'validated_at', 'validated_by', 'method', 'entry_point']
+        read_only_fields = fields
+
+    def get_validated_by(self, obj):
+        return obj.checked_by.full_name if obj.checked_by else None
 
 
 class AccessLogSerializer(serializers.ModelSerializer):

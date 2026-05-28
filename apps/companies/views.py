@@ -205,10 +205,13 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
             })
 
     if event_type in (None, 'guest_visit'):
+        # Anchor the calendar event on `valid_from` (the planned visit moment).
+        # `valid_until` is QR expiry (up to 30 days), not visit duration — using it
+        # for overlap filtering would show every pass on every day in its window.
         guest_passes = GuestPass.objects.filter(
             company_id=company.id,
+            valid_from__gte=range_start,
             valid_from__lt=range_end,
-            valid_until__gt=range_start,
         ).select_related('created_by')
         if user_id is not None:
             guest_passes = guest_passes.filter(created_by_id=user_id)

@@ -30,6 +30,7 @@ from . import tasks
 from .tasks import notify_pass_creator_on_entry
 from .serializers import (
     AccessLogSerializer, GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer,
+    GuestPassValidationLogSerializer,
 )
 
 
@@ -84,7 +85,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     filterset_class = GuestPassFilter
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'create'):
+        if self.action in ('list', 'retrieve', 'create', 'validations'):
             return [IsCompanyMember()]
         return [permission() for permission in self.permission_classes]
 
@@ -233,6 +234,29 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
 
         tasks.send_guest_pass_email.delay(guest_pass.id)
         return Response({'detail': translate('access.qr_resent', get_lang(request))})
+
+    @extend_schema(
+        tags=['Access'],
+        summary='List validations for a guest pass',
+        responses={
+            200: inline_serializer(
+                name='GuestPassValidations',
+                fields={
+                    'total': fields.IntegerField(),
+                    'results': GuestPassValidationLogSerializer(many=True),
+                },
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='validations')
+    def validations(self, request, pk=None):
+        guest_pass = self.get_object()
+        logs = guest_pass.access_logs.select_related('checked_by').order_by('-created_at')
+        serializer = GuestPassValidationLogSerializer(logs, many=True)
+        return Response({'total': guest_pass.times_used, 'results': serializer.data})
 
 
 @extend_schema(

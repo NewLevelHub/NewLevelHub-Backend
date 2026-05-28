@@ -1410,7 +1410,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     queryset = Booking.objects.all()
     filterset_class = BookingFilter
     ordering_fields = ['start_time', 'created_at']
-    ordering = ['start_time', 'id']
+    ordering = ['-created_at']
     http_method_names = ['get', 'post', 'patch', 'delete']
 
     def get_serializer_class(self):
@@ -1513,13 +1513,13 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         qs = super().get_queryset()
         user = self.request.user
         if user.role == 'superadmin' or not user.company_id:
-            return qs.order_by('-start_time', '-id')
+            return qs.order_by('-created_at', '-id')
         participant_booking_ids = BookingParticipant.objects.filter(
             user=user,
         ).values_list('booking_id', flat=True)
         return (
             Booking.objects.filter(Q(pk__in=qs) | Q(pk__in=participant_booking_ids))
-            .order_by('-start_time', '-id')
+            .order_by('-created_at', '-id')
         )
 
     @extend_schema(
@@ -2180,11 +2180,17 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             base_date=timezone.localdate(),
         )
 
+        resource = serializer.validated_data['resource']
+        company = request.user.company or resource.assigned_company
+        # company may be None when a superadmin books a shared (unassigned) resource — allowed.
+        if company is None and not request.user.is_superadmin():
+            raise_validation_error('resource_id', 'booking.resource_wrong_company')
+
         with transaction.atomic():
             recurring_booking = RecurringBooking.objects.create(
-                resource=serializer.validated_data['resource'],
+                resource=resource,
                 user=request.user,
-                company=request.user.company,
+                company=company,
                 day_of_week=serializer.validated_data['day_of_week'],
                 start_time=serializer.validated_data['start_time'],
                 end_time=serializer.validated_data['end_time'],

@@ -452,7 +452,7 @@ def _company_admin_widgets(user):
             'due_date': t.deadline.date().isoformat() if t.deadline else None,
             'due_time': t.deadline.strftime('%H:%M') if t.deadline else None,
             'priority': t.priority,
-            'is_overdue': t.deadline < now if t.deadline else False,
+            'is_overdue': t.deadline.date() < today if t.deadline else False,
         }
         for t in my_tasks_qs
     ]
@@ -537,7 +537,7 @@ def _employee_widgets(user):
             'board_name': t.column.board.name,
             'due_date': t.deadline.date().isoformat() if t.deadline else None,
             'priority': t.priority,
-            'is_overdue': t.deadline < now if t.deadline else False,
+            'is_overdue': t.deadline.date() < today if t.deadline else False,
         }
         for t in my_tasks_qs
     ]

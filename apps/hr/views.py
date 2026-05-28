@@ -74,16 +74,19 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
     def perform_create(self, serializer):
         leave_request = serializer.save(user=self.request.user, company=self.request.user.company)
 
-        # Notify company admins that a leave request needs review
+        # Notify either the explicitly assigned reviewer, or all company admins.
         from apps.notifications.tasks import send_notification_email
         employee = self.request.user
         company = employee.company
         if company:
-            admins = User.objects.filter(
-                company=company,
-                role='company_admin',
-                is_active=True,
-            )
+            if leave_request.assigned_reviewer_id:
+                admins = User.objects.filter(pk=leave_request.assigned_reviewer_id, is_active=True)
+            else:
+                admins = User.objects.filter(
+                    company=company,
+                    role='company_admin',
+                    is_active=True,
+                ).exclude(pk=employee.pk)
             for admin in admins:
                 create_notification(
                     user=admin,
@@ -205,6 +208,16 @@ class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewse
             )
             if leave is None:
                 raise NotFound()
+
+            lang = get_lang(request)
+            if leave.user_id == request.user.id:
+                raise PermissionDenied(translate('hr.leave_review_self_forbidden', lang))
+            if (
+                leave.assigned_reviewer_id is not None
+                and leave.assigned_reviewer_id != request.user.id
+            ):
+                raise PermissionDenied(translate('hr.leave_review_not_assigned', lang))
+
             old_status = leave.status
 
             if new_status == 'approved':

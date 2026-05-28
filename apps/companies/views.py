@@ -24,6 +24,7 @@ from apps.bookings.models import Booking
 from apps.access.models import GuestPass
 from apps.companies.limits import get_company_storage_used_bytes
 from apps.core.exceptions import raise_validation_error, LocalizedError
+from apps.core import error_codes
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
@@ -67,6 +68,32 @@ def _blacklist_user_tokens(user):
         [BlacklistedToken(token=t) for t in outstanding],
         ignore_conflicts=True,
     )
+
+
+def _settle_pending_leaves_on_reviewer_loss(target, company):
+    """
+    Handle pending leave requests whose assigned_reviewer is *target* losing access
+    to the company (deactivate or remove).
+
+    For each such leave: if any other active company_admin in *company* could step in
+    (someone other than the target and other than the request author), release the FK
+    so they can review. Otherwise cancel the leave so it doesn't dangle as 'pending'
+    forever with no one allowed to act on it.
+    """
+    pending = LeaveRequest.objects.select_for_update().filter(
+        assigned_reviewer=target, company=company, status='pending',
+    )
+    for leave in pending:
+        has_stand_in = User.objects.filter(
+            company=company, role='company_admin', is_active=True,
+        ).exclude(pk__in=[target.pk, leave.user_id]).exists()
+        if has_stand_in:
+            leave.assigned_reviewer = None
+            leave.save(update_fields=['assigned_reviewer', 'updated_at'])
+        else:
+            leave.status = 'cancelled'
+            leave.assigned_reviewer = None
+            leave.save(update_fields=['status', 'assigned_reviewer', 'updated_at'])
 
 
 def _parse_bool_query_param(raw_value, field_name):
@@ -626,14 +653,15 @@ class CompanyViewSet(viewsets.ModelViewSet):
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
-            return Response(
-                {'detail': translate('company.cannot_deactivate_self', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_DEACTIVATE_SELF,
+                i18n_key='company.cannot_deactivate_self',
             )
 
         with transaction.atomic():
             target.is_active = False
             target.save(update_fields=['is_active'])
+            _settle_pending_leaves_on_reviewer_loss(target, company)
             _blacklist_user_tokens(target)
 
         return Response({'detail': translate('company.user_deactivated', lang)}, status=status.HTTP_200_OK)
@@ -720,16 +748,16 @@ class CompanyViewSet(viewsets.ModelViewSet):
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
-            return Response(
-                {'detail': translate('company.cannot_remove_self', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_REMOVE_SELF,
+                i18n_key='company.cannot_remove_self',
             )
 
         # Only superadmin may remove a company_admin.
         if target.role == 'company_admin' and request.user.role != 'superadmin':
-            return Response(
-                {'detail': translate('company.cannot_remove_admin', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_REMOVE_ADMIN,
+                i18n_key='company.cannot_remove_admin',
             )
 
         # Validate optional reassign_to parameter.
@@ -739,17 +767,17 @@ class CompanyViewSet(viewsets.ModelViewSet):
             try:
                 reassign_to_id = int(reassign_to_id)
             except (ValueError, TypeError):
-                return Response(
-                    {'detail': translate('company.reassign_to_invalid_id', lang)},
-                    status=status.HTTP_400_BAD_REQUEST,
+                raise LocalizedError(
+                    code=error_codes.COMPANY_REASSIGN_TO_INVALID,
+                    i18n_key='company.reassign_to_invalid_id',
                 )
             reassign_to_user = User.objects.filter(
                 pk=reassign_to_id, company=company, is_active=True,
             ).first()
             if reassign_to_user is None:
-                return Response(
-                    {'detail': translate('company.reassign_to_not_active_member', lang)},
-                    status=status.HTTP_400_BAD_REQUEST,
+                raise LocalizedError(
+                    code=error_codes.COMPANY_REASSIGN_TO_NOT_ACTIVE,
+                    i18n_key='company.reassign_to_not_active_member',
                 )
 
         with transaction.atomic():
@@ -760,6 +788,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             )
             tasks_count = tasks_qs.count()
             tasks_qs.update(assignee=reassign_to_user)
+
+            _settle_pending_leaves_on_reviewer_loss(target, company)
 
             # Strip the user from the company.
             target.company = None

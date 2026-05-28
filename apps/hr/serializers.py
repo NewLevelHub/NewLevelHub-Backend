@@ -11,12 +11,16 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.full_name', read_only=True)
     duration_days = serializers.IntegerField(read_only=True)
     reviewer = serializers.PrimaryKeyRelatedField(source='reviewed_by', read_only=True)
+    assigned_reviewer_name = serializers.CharField(
+        source='assigned_reviewer.full_name', read_only=True, default=None,
+    )
 
     class Meta:
         model = LeaveRequest
         fields = [
             'id', 'user', 'user_name', 'company', 'leave_type', 'status',
             'start_date', 'end_date', 'duration_days', 'comment',
+            'assigned_reviewer', 'assigned_reviewer_name',
             'reviewed_by', 'reviewer', 'review_comment', 'reviewed_at',
             'created_at',
         ]
@@ -44,6 +48,41 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             end_date = attrs.get('end_date')
             leave_type = attrs.get('leave_type')
 
+        author = self.instance.user if self.instance else self.context['request'].user
+        assigned_reviewer = attrs.get(
+            'assigned_reviewer',
+            self.instance.assigned_reviewer if self.instance else None,
+        )
+
+        if author.role == 'company_admin':
+            other_admins_qs = User.objects.filter(
+                company_id=author.company_id,
+                role='company_admin',
+                is_active=True,
+            ).exclude(pk=author.pk)
+            if not other_admins_qs.exists():
+                raise DRFValidationError(
+                    {'non_field_errors': [{'_i18n': True, 'key': 'hr.leave_no_other_admin', 'params': {}}]}
+                )
+            if assigned_reviewer is None:
+                raise DRFValidationError(
+                    {'assigned_reviewer': [{'_i18n': True, 'key': 'hr.leave_reviewer_required', 'params': {}}]}
+                )
+
+        if assigned_reviewer is not None:
+            if assigned_reviewer.pk == author.pk:
+                raise DRFValidationError(
+                    {'assigned_reviewer': [{'_i18n': True, 'key': 'hr.leave_reviewer_is_author', 'params': {}}]}
+                )
+            if (
+                assigned_reviewer.role != 'company_admin'
+                or assigned_reviewer.company_id != author.company_id
+                or not assigned_reviewer.is_active
+            ):
+                raise DRFValidationError(
+                    {'assigned_reviewer': [{'_i18n': True, 'key': 'hr.leave_reviewer_invalid', 'params': {}}]}
+                )
+
         if start_date and end_date and start_date > end_date:
             raise_validation_error('start_date', 'hr.start_date_after_end_date')
 
@@ -51,7 +90,7 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             raise_validation_error('start_date', 'hr.start_date_in_past')
 
         if start_date and end_date:
-            user = self.instance.user if self.instance else self.context['request'].user
+            user = author
             overlap_qs = LeaveRequest.objects.filter(
                 user=user,
                 status='approved',

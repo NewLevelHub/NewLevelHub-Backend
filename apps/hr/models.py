@@ -32,6 +32,10 @@ class LeaveRequest(TimeStampedModel):
     end_date = models.DateField()
     comment = models.TextField(blank=True, default='')
 
+    assigned_reviewer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='assigned_leave_reviews',
+    )
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
         null=True, blank=True, related_name='reviewed_leave_requests',

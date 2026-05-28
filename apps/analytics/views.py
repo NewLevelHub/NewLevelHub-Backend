@@ -202,7 +202,7 @@ def build_superadmin_dashboard_payload(request):
     active_users_7d = user_qs.filter(last_login__gte=week_ago).count()
 
     bookings_qs = Booking.objects.filter(
-        status='confirmed',
+        status__in=('confirmed', 'completed'),
         start_time__gte=day_start,
         start_time__lte=day_end,
     )
@@ -237,7 +237,7 @@ def build_superadmin_dashboard_payload(request):
     }
 
     bookings_in_period = Booking.objects.filter(
-        status='confirmed',
+        status__in=('confirmed', 'completed'),
         start_time__gte=period_start,
         start_time__lte=period_end,
     )
@@ -770,7 +770,7 @@ def resource_usage(request):
         raise NotFound()
 
     bookings_qs = Booking.objects.filter(
-        status='confirmed',
+        status__in=('confirmed', 'completed'),
         start_time__gte=period_start,
         start_time__lte=period_end,
     )
@@ -797,12 +797,24 @@ def resource_usage(request):
         .order_by('-total_bookings', 'resource_id')
     )
 
+    tz = timezone.get_current_timezone()
+    peak_by_resource = {}
+    for res_id, start_time in bookings_qs.values_list('resource_id', 'start_time'):
+        hour = timezone.localtime(start_time, tz).hour
+        buckets = peak_by_resource.setdefault(res_id, {})
+        buckets[hour] = buckets.get(hour, 0) + 1
+
     results = []
     for row in stats:
         avg_duration = row['avg_duration']
         total_duration = row['total_duration']
         avg_minutes = round(avg_duration.total_seconds() / 60, 2) if avg_duration else 0.0
         total_minutes = round(total_duration.total_seconds() / 60, 2) if total_duration else 0.0
+        buckets = peak_by_resource.get(row['resource_id']) or {}
+        if buckets:
+            peak_hour, peak_count = max(buckets.items(), key=lambda kv: (kv[1], -kv[0]))
+        else:
+            peak_hour, peak_count = None, 0
         results.append({
             'resource_id': row['resource_id'],
             'resource_name': row['resource__name'],
@@ -811,6 +823,8 @@ def resource_usage(request):
             'total_bookings': row['total_bookings'],
             'avg_duration_minutes': avg_minutes,
             'total_booked_minutes': total_minutes,
+            'peak_hour': peak_hour,
+            'peak_hour_bookings': peak_count,
         })
 
     payload = {

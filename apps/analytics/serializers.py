@@ -129,6 +129,8 @@ class ResourceUsageRowSerializer(serializers.Serializer):
     total_bookings = serializers.IntegerField()
     avg_duration_minutes = serializers.FloatField()
     total_booked_minutes = serializers.FloatField()
+    peak_hour = serializers.IntegerField(allow_null=True)
+    peak_hour_bookings = serializers.IntegerField()
 
 
 class ResourceUsageSerializer(serializers.Serializer):

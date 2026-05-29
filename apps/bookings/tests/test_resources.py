@@ -1115,3 +1115,207 @@ class TestResourceFilterByCompany:
         assert r.status_code == status.HTTP_200_OK
         ids = {x['id'] for x in _list_results(r)}
         assert assigned_id not in ids
+
+
+@pytest.mark.django_db
+class TestResourceAvailabilityDaysAndHoursFilter:
+    """
+    Tests for the available_days and available_from/available_until filters
+    inside filter_free_interval().
+
+    All request datetimes use UTC ('Z').  TIME_ZONE = 'Asia/Almaty' (UTC+5),
+    so '2030-06-15T05:00:00Z' == '2030-06-15 10:00 Almaty local'.
+
+    2030-06-15 is a Saturday (weekday=5).
+    2030-06-16 is a Sunday  (weekday=6).
+    2030-06-17 is a Monday  (weekday=0).
+    """
+
+    # ------------------------------------------------------------------ #
+    # Helpers                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _create_resource(self, api_client, superadmin, name, available_days,
+                         available_from='08:00:00', available_until='22:00:00'):
+        r = api_client.post(
+            RESOURCES_URL,
+            {
+                'type': 'desk',
+                'name': name,
+                'floor': 1,
+                'availability_days': available_days,
+                'availability_start': available_from,
+                'availability_end': available_until,
+            },
+            format='json',
+        )
+        assert r.status_code == status.HTTP_201_CREATED, r.json()
+        return r.json()['id']
+
+    # ------------------------------------------------------------------ #
+    # available_days tests                                                 #
+    # ------------------------------------------------------------------ #
+
+    def test_filter_excludes_resource_unavailable_day(self, api_client, superadmin, employee):
+        """Resource available Mon–Fri only must be excluded for a Saturday request."""
+        api_client.force_authenticate(user=superadmin)
+        # Weekdays only: Mon=0 … Fri=4
+        rid = self._create_resource(api_client, superadmin, 'WeekdayOnly', [0, 1, 2, 3, 4])
+
+        api_client.force_authenticate(user=employee)
+        # 2030-06-15 is Saturday → weekday=5, not in [0,1,2,3,4]
+        # UTC 05:00–07:00 == Almaty 10:00–12:00 (within operating hours)
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-15T05:00:00Z',
+                'available_to': '2030-06-15T07:00:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+    def test_filter_excludes_resource_partial_day_coverage(self, api_client, superadmin, employee):
+        """Resource available Mon–Sat must be excluded when the request spans Sat+Sun (Sun is not covered)."""
+        api_client.force_authenticate(user=superadmin)
+        # Mon=0 … Sat=5, no Sunday (6)
+        rid = self._create_resource(api_client, superadmin, 'MonToSat', [0, 1, 2, 3, 4, 5])
+
+        api_client.force_authenticate(user=employee)
+        # 2030-06-15 is Saturday (weekday=5), 2030-06-16 is Sunday (weekday=6).
+        # requested_days = {5, 6}; resource covers {0..5} → 6 is missing → EXCLUDED.
+        # UTC 19:00 on 2030-06-15 == Almaty 00:00 on 2030-06-16, so the range spans
+        # both Sat and Sun in local time.
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-15T05:00:00Z',   # Almaty: 2030-06-15 (Sat) 10:00
+                'available_to': '2030-06-16T05:00:00Z',     # Almaty: 2030-06-16 (Sun) 10:00
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+    def test_filter_includes_resource_available_day(self, api_client, superadmin, employee):
+        """Same weekdays-only resource IS returned for a Monday request."""
+        api_client.force_authenticate(user=superadmin)
+        rid = self._create_resource(api_client, superadmin, 'WeekdayOnly2', [0, 1, 2, 3, 4])
+
+        api_client.force_authenticate(user=employee)
+        # 2030-06-17 is Monday → weekday=0, in [0,1,2,3,4]
+        # UTC 05:00–07:00 == Almaty 10:00–12:00 (within operating hours)
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-17T05:00:00Z',
+                'available_to': '2030-06-17T07:00:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid in ids
+
+    def test_filter_empty_available_days_means_every_day(self, api_client, superadmin, employee):
+        """A resource with available_days=[] (no restriction) appears on any day."""
+        api_client.force_authenticate(user=superadmin)
+        rid = self._create_resource(api_client, superadmin, 'AnyDay', [])
+
+        api_client.force_authenticate(user=employee)
+        # Saturday request — should still be included because [] means "every day"
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-15T05:00:00Z',
+                'available_to': '2030-06-15T07:00:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid in ids
+
+    # ------------------------------------------------------------------ #
+    # available hours tests (single-day only)                             #
+    # ------------------------------------------------------------------ #
+
+    def test_filter_excludes_resource_outside_hours(self, api_client, superadmin, employee):
+        """Request that starts before available_from or ends after available_until excludes resource."""
+        api_client.force_authenticate(user=superadmin)
+        # Resource is open 09:00–18:00 Almaty local
+        rid = self._create_resource(
+            api_client, superadmin, 'NineToSix', [],
+            available_from='09:00:00',
+            available_until='18:00:00',
+        )
+
+        api_client.force_authenticate(user=employee)
+        # Request: 2030-06-17 (Monday) 03:00–14:00 UTC == 08:00–19:00 Almaty local.
+        # 08:00 < resource.available_from (09:00) → excluded.
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-17T03:00:00Z',
+                'available_to': '2030-06-17T14:00:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid not in ids
+
+    def test_filter_includes_resource_within_hours(self, api_client, superadmin, employee):
+        """Request within the resource operating hours includes the resource."""
+        api_client.force_authenticate(user=superadmin)
+        rid = self._create_resource(
+            api_client, superadmin, 'NineToSix2', [],
+            available_from='09:00:00',
+            available_until='18:00:00',
+        )
+
+        api_client.force_authenticate(user=employee)
+        # Request: 2030-06-17 (Monday) 05:00–12:00 UTC == 10:00–17:00 Almaty local.
+        # 10:00 >= available_from (09:00) AND 17:00 <= available_until (18:00) → included.
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-17T05:00:00Z',
+                'available_to': '2030-06-17T12:00:00Z',
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid in ids
+
+    def test_filter_skips_hours_check_for_multi_day_range(self, api_client, superadmin, employee):
+        """For multi-day ranges the hours check is skipped; only days filter applies.
+
+        A resource open 09:00–18:00 would normally fail an 08:00–19:00 single-day
+        request, but for a range that spans two different local dates the hours
+        check is bypassed entirely.
+        """
+        api_client.force_authenticate(user=superadmin)
+        # Resource open 09:00–18:00 Mon–Sun (every day)
+        rid = self._create_resource(
+            api_client, superadmin, 'MultiDayRes', [],
+            available_from='09:00:00',
+            available_until='18:00:00',
+        )
+
+        api_client.force_authenticate(user=employee)
+        # Two-day local range: 2030-06-17 (Monday) and 2030-06-18 (Tuesday) in Almaty.
+        # UTC 19:00 on 2030-06-17 == Almaty 00:00 on 2030-06-18, so:
+        #   local dt_from = 2030-06-17 10:00 (UTC 05:00)
+        #   local dt_to   = 2030-06-18 10:00 (UTC 05:00 next day)
+        # Both days are weekdays (Mon=0, Tue=1) so days filter passes.
+        # The time portion spans midnight, which would fail a 09:00–18:00 hours check
+        # on a single-day request, but the hours check is skipped for multi-day ranges.
+        r = api_client.get(
+            RESOURCES_URL,
+            {
+                'available_from': '2030-06-17T05:00:00Z',  # Almaty: 2030-06-17 10:00
+                'available_to': '2030-06-18T05:00:00Z',    # Almaty: 2030-06-18 10:00
+            },
+        )
+        assert r.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(r)}
+        assert rid in ids

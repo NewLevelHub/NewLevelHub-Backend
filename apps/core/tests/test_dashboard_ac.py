@@ -608,7 +608,10 @@ class TestCompanyAdminDashboard:
         assert resp.status_code == status.HTTP_200_OK
         my_tasks = resp.data['my_tasks']
         assert len(my_tasks) >= 1
-        assert my_tasks[0]['is_overdue'] is False
+        item = my_tasks[0]
+        assert item['is_overdue'] is False
+        assert 'board_name' in item
+        assert item['board_name'] == 'Admin Board'
 
     def test_my_tasks_excludes_overdue(
         self, api_client, company_admin, employee, company,
@@ -807,6 +810,9 @@ class TestEmployeeDashboard:
         assert len(my_tasks) >= 1
         titles = [t['title'] for t in my_tasks]
         assert 'Task Due Today' in titles
+        item = next(t for t in my_tasks if t['title'] == 'Task Due Today')
+        assert 'board_name' in item
+        assert item['board_name'] == 'Emp Task Board'
 
     def test_my_tasks_boards_count(
         self, api_client, employee, company, company_admin,

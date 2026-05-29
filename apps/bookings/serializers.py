@@ -417,7 +417,11 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             raise_validation_error('resource_id', 'booking.resource_not_found')
 
     def _validate_access(self, *, resource, user):
-        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+        if (
+            not user.is_superadmin()
+            and resource.assigned_company_id
+            and resource.assigned_company_id != user.company_id
+        ):
             raise_validation_error('resource_id', 'booking.resource_wrong_company')
 
     def _validate_availability_window(self, *, resource, start_time, end_time):
@@ -664,7 +668,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             validated_data['resource'] = resource
             validated_data['user'] = user
-            validated_data['company'] = user.company
+            validated_data['company'] = user.company or resource.assigned_company
             booking = super().create(validated_data)
 
             # In-app confirmation for the booking owner (preferences + DND via helper)
@@ -809,7 +813,11 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         if attrs['repeat_until'] < today:
             raise_validation_error('repeat_until', 'booking.repeat_until_in_past')
 
-        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+        if (
+            not user.is_superadmin()
+            and resource.assigned_company_id
+            and resource.assigned_company_id != user.company_id
+        ):
             raise_validation_error('resource_id', 'booking.resource_wrong_company')
 
         available_days = resource.available_days or list(range(7))

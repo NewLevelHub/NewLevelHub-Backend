@@ -1,9 +1,18 @@
+import re
+from datetime import timedelta
+
 import django_filters
 from django.db.models import Exists, OuterRef
+from django.utils import timezone as tz_utils
 from django.utils.dateparse import parse_datetime
 
 from .models import Resource, Booking, ResourceBlock
 from .serializers import _EQUIPMENT_KEYS
+
+# IsoDateTimeFilter skips calling the filter method entirely when the datetime
+# string cannot be parsed (e.g. literal '+' decoded as space by QueryDict).
+# Using CharFilter ensures the method is always called so we can do robust
+# parsing with the space→'+' fixup ourselves.
 
 
 class ResourceFilter(django_filters.FilterSet):
@@ -23,8 +32,11 @@ class ResourceFilter(django_filters.FilterSet):
     company_id = django_filters.NumberFilter(field_name='assigned_company_id')
     # Интервал свободности (datetime): без пересечений с подтверждёнными бронированиями и блокировками.
     # Имена параметров совпадают с полями модели по смыслу запроса, не с TimeField available_from.
-    available_from = django_filters.IsoDateTimeFilter(method='filter_free_interval')
-    available_to = django_filters.IsoDateTimeFilter(method='filter_free_interval')
+    # CharFilter (not IsoDateTimeFilter) so the method is called even when the raw
+    # string has a literal '+' decoded as space by Django's QueryDict — in that case
+    # IsoDateTimeFilter silently skips the method call, bypassing the whole filter.
+    available_from = django_filters.CharFilter(method='filter_free_interval')
+    available_to = django_filters.CharFilter(method='filter_free_interval')
 
     class Meta:
         model = Resource
@@ -44,6 +56,22 @@ class ResourceFilter(django_filters.FilterSet):
                 queryset = queryset.filter(**{field: True})
         return queryset
 
+    @staticmethod
+    def _fix_tz_plus(raw):
+        """
+        QueryDict decodes a literal '+' in query strings as a space.
+        ISO 8601 timezone offsets use '+', e.g. +05:00.  When the client
+        sends '+' un-encoded (without %2B), Django sees ' 05:00' instead of
+        '+05:00', and parse_datetime returns None.
+
+        Heuristic: if the string ends with ' HH:MM' at the timezone position,
+        restore it to '+HH:MM' so that parse_datetime can parse it correctly.
+        """
+        s = str(raw)
+        # Replace the last occurrence of space followed by HH:MM at end of string
+        # e.g. '2026-05-30T19:14:00 05:00' → '2026-05-30T19:14:00+05:00'
+        return re.sub(r' (\d{2}:\d{2})$', r'+\1', s)
+
     def _parse_interval_datetimes(self):
         data = self.data
         raw_from = data.get('available_from') if data is not None else None
@@ -54,8 +82,16 @@ class ResourceFilter(django_filters.FilterSet):
             raw_from = raw_from[0]
         if isinstance(raw_to, (list, tuple)):
             raw_to = raw_to[0]
-        dt_from = raw_from if hasattr(raw_from, 'utcoffset') else parse_datetime(str(raw_from))
-        dt_to = raw_to if hasattr(raw_to, 'utcoffset') else parse_datetime(str(raw_to))
+        if hasattr(raw_from, 'utcoffset'):
+            dt_from = raw_from
+        else:
+            s = self._fix_tz_plus(raw_from)
+            dt_from = parse_datetime(s)
+        if hasattr(raw_to, 'utcoffset'):
+            dt_to = raw_to
+        else:
+            s = self._fix_tz_plus(raw_to)
+            dt_to = parse_datetime(s)
         return dt_from, dt_to
 
     def filter_free_interval(self, queryset, name, value):
@@ -65,6 +101,7 @@ class ResourceFilter(django_filters.FilterSet):
         if dt_from >= dt_to:
             return queryset.none()
 
+        # 1. Exclude by booking conflicts (existing logic).
         booking_overlap = Booking.objects.filter(
             resource_id=OuterRef('pk'),
             status='confirmed',
@@ -77,7 +114,37 @@ class ResourceFilter(django_filters.FilterSet):
             end_time__gt=dt_from,
         )
         # Два вызова метода (по одному на параметр) — идемпотентный exclude(Exists(...)).
-        return queryset.exclude(Exists(booking_overlap)).exclude(Exists(block_overlap))
+        queryset = queryset.exclude(Exists(booking_overlap)).exclude(Exists(block_overlap))
+
+        # 2. Exclude by available_days.
+        # Collect all weekdays (Mon=0, Sun=6) spanned by the requested range.
+        requested_days = set()
+        current = tz_utils.localtime(dt_from).date()
+        end_date = tz_utils.localtime(dt_to).date()
+        while current <= end_date:
+            requested_days.add(current.weekday())
+            current += timedelta(days=1)
+
+        # available_days is a JSONField (Python list) — filter in Python.
+        # An empty available_days list means "available every day" (no restriction).
+        available_ids = [
+            r.id for r in queryset.only('id', 'available_days')
+            if not r.available_days or requested_days.issubset(set(r.available_days))
+        ]
+        queryset = queryset.filter(id__in=available_ids)
+
+        # 3. Exclude by available hours (single-day ranges only).
+        # For multi-day ranges the hours check is skipped — a resource cannot
+        # realistically be open 24 h, so we only enforce hours within one day.
+        if tz_utils.localtime(dt_from).date() == tz_utils.localtime(dt_to).date():
+            local_from = tz_utils.localtime(dt_from).time()
+            local_to = tz_utils.localtime(dt_to).time()
+            queryset = queryset.filter(
+                available_from__lte=local_from,
+                available_until__gte=local_to,
+            )
+
+        return queryset
 
 
 class _CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):

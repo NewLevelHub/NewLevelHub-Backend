@@ -41,6 +41,14 @@ class MapPoint(TimeStampedModel):
     label = models.CharField(max_length=255, blank=True, default='')
     x = models.FloatField(help_text='X coordinate on floor plan (0-100%)')
     y = models.FloatField(help_text='Y coordinate on floor plan (0-100%)')
+    width = models.FloatField(
+        null=True, blank=True,
+        help_text='Width of the map point rectangle as % of floor plan (0-100)',
+    )
+    height = models.FloatField(
+        null=True, blank=True,
+        help_text='Height of the map point rectangle as % of floor plan (0-100)',
+    )
 
     resource = models.ForeignKey(
         'bookings.Resource', on_delete=models.SET_NULL,

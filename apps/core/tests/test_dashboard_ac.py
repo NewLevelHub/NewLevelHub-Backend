@@ -586,8 +586,8 @@ class TestCompanyAdminDashboard:
     def test_my_tasks_company_admin_today(
         self, api_client, company_admin, employee, company,
     ):
-        # my_tasks for company_admin shows due-today tasks for ANY active
-        # company member — not just the admin themselves.
+        # my_tasks for company_admin shows tasks assigned to the admin only —
+        # tasks assigned to other members must not leak into the "My tasks" widget.
         today = timezone.localdate()
         tz = timezone.get_current_timezone()
         deadline_today = timezone.make_aware(
@@ -595,6 +595,13 @@ class TestCompanyAdminDashboard:
         )
         board = Board.objects.create(company=company, name='Admin Board', created_by=company_admin)
         col = Column.objects.create(board=board, name='Todo', position=1)
+        Task.objects.create(
+            column=col,
+            title='Due Today Task (admin)',
+            assignee=company_admin,
+            created_by=company_admin,
+            deadline=deadline_today,
+        )
         Task.objects.create(
             column=col,
             title='Due Today Task (employee)',
@@ -607,14 +614,15 @@ class TestCompanyAdminDashboard:
         resp = api_client.get(DASHBOARD_URL)
         assert resp.status_code == status.HTTP_200_OK
         my_tasks = resp.data['my_tasks']
-        assert len(my_tasks) >= 1
-        item = my_tasks[0]
-        assert item['is_overdue'] is False
-        assert 'board_name' in item
-        assert item['board_name'] == 'Admin Board'
+        titles = [t['title'] for t in my_tasks]
+        assert 'Due Today Task (admin)' in titles
+        assert 'Due Today Task (employee)' not in titles
+        admin_item = next(t for t in my_tasks if t['title'] == 'Due Today Task (admin)')
+        assert admin_item['is_overdue'] is False
+        assert admin_item['board_name'] == 'Admin Board'
 
     def test_my_tasks_excludes_overdue(
-        self, api_client, company_admin, employee, company,
+        self, api_client, company_admin, company,
     ):
         # Tasks with a deadline in the past must NOT appear in my_tasks.
         yesterday = timezone.now() - timedelta(days=1)
@@ -623,7 +631,7 @@ class TestCompanyAdminDashboard:
         Task.objects.create(
             column=col,
             title='Overdue Task',
-            assignee=employee,
+            assignee=company_admin,
             created_by=company_admin,
             deadline=yesterday,
         )

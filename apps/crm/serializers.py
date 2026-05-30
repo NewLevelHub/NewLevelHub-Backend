@@ -32,8 +32,8 @@ class BoardMinimalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Board
-        fields = ['id', 'name', 'description', 'is_archived', 'created_at']
-        read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at']
+        fields = ['id', 'name', 'description', 'is_archived', 'created_at', 'company']
+        read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at', 'company']
 
 
 class DeadlineDateTimeField(serializers.DateTimeField):
@@ -344,11 +344,20 @@ class TaskSerializer(serializers.ModelSerializer):
         # Validate assignee belongs to the board's company.
         # For regular users `company` is their own company; for superadmin it is None
         # so we fall back to the board's company stored in _board_company_id.
-        assignee = attrs.get('assignee')
-        if assignee is not None:
-            target_company_id = company.id if company is not None else getattr(self, '_board_company_id', None)
-            if target_company_id is not None and assignee.company_id != target_company_id:
-                raise_validation_error('assignee_id', 'crm.assignee_wrong_company')
+        # Also: only superadmin and company_admin may set/change the assignee —
+        # plain employees can read tasks but must not reassign them.
+        if 'assignee' in attrs:
+            if user and user.role not in ('superadmin', 'company_admin'):
+                current_assignee_id = instance.assignee_id if instance is not None else None
+                new_assignee = attrs.get('assignee')
+                new_assignee_id = new_assignee.id if new_assignee is not None else None
+                if new_assignee_id != current_assignee_id:
+                    raise PermissionDenied(translate('crm.assignee_change_forbidden', get_lang(request)))
+            assignee = attrs.get('assignee')
+            if assignee is not None:
+                target_company_id = company.id if company is not None else getattr(self, '_board_company_id', None)
+                if target_company_id is not None and assignee.company_id != target_company_id:
+                    raise_validation_error('assignee_id', 'crm.assignee_wrong_company')
 
         # Validate labels belong to the board's company.
         # Superadmin has company=None and is intentionally allowed to attach any label.

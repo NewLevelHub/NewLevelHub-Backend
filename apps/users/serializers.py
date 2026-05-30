@@ -361,7 +361,8 @@ class UserListSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'full_name',
-            'role', 'company', 'is_active', 'date_joined', 'last_login', 'avatar',
+            'role', 'company', 'is_active', 'is_email_verified',
+            'date_joined', 'last_login', 'avatar',
         ]
 
 

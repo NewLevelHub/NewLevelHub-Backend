@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
@@ -24,6 +24,7 @@ from apps.bookings.models import Booking
 from apps.access.models import GuestPass
 from apps.companies.limits import get_company_storage_used_bytes
 from apps.core.exceptions import raise_validation_error, LocalizedError
+from apps.core import error_codes
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsSuperAdmin, IsCompanyAdmin, IsCompanyMember
 from apps.crm.models import Board, Task
@@ -41,6 +42,7 @@ from .serializers import (
     CompanySettingsSerializer,
     InvitationCreateSerializer,
     InvitationListSerializer,
+    BuildingInvitationCreateSerializer,
     CompanyMemberSerializer,
     CompanyDirectoryListSerializer,
     CompanyDirectoryDetailSerializer,
@@ -66,6 +68,32 @@ def _blacklist_user_tokens(user):
         [BlacklistedToken(token=t) for t in outstanding],
         ignore_conflicts=True,
     )
+
+
+def _settle_pending_leaves_on_reviewer_loss(target, company):
+    """
+    Handle pending leave requests whose assigned_reviewer is *target* losing access
+    to the company (deactivate or remove).
+
+    For each such leave: if any other active company_admin in *company* could step in
+    (someone other than the target and other than the request author), release the FK
+    so they can review. Otherwise cancel the leave so it doesn't dangle as 'pending'
+    forever with no one allowed to act on it.
+    """
+    pending = LeaveRequest.objects.select_for_update().filter(
+        assigned_reviewer=target, company=company, status='pending',
+    )
+    for leave in pending:
+        has_stand_in = User.objects.filter(
+            company=company, role='company_admin', is_active=True,
+        ).exclude(pk__in=[target.pk, leave.user_id]).exists()
+        if has_stand_in:
+            leave.assigned_reviewer = None
+            leave.save(update_fields=['assigned_reviewer', 'updated_at'])
+        else:
+            leave.status = 'cancelled'
+            leave.assigned_reviewer = None
+            leave.save(update_fields=['status', 'assigned_reviewer', 'updated_at'])
 
 
 def _parse_bool_query_param(raw_value, field_name):
@@ -177,10 +205,13 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
             })
 
     if event_type in (None, 'guest_visit'):
+        # Anchor the calendar event on `valid_from` (the planned visit moment).
+        # `valid_until` is QR expiry (up to 30 days), not visit duration — using it
+        # for overlap filtering would show every pass on every day in its window.
         guest_passes = GuestPass.objects.filter(
             company_id=company.id,
+            valid_from__gte=range_start,
             valid_from__lt=range_end,
-            valid_until__gt=range_start,
         ).select_related('created_by')
         if user_id is not None:
             guest_passes = guest_passes.filter(created_by_id=user_id)
@@ -625,14 +656,15 @@ class CompanyViewSet(viewsets.ModelViewSet):
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
-            return Response(
-                {'detail': translate('company.cannot_deactivate_self', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_DEACTIVATE_SELF,
+                i18n_key='company.cannot_deactivate_self',
             )
 
         with transaction.atomic():
             target.is_active = False
             target.save(update_fields=['is_active'])
+            _settle_pending_leaves_on_reviewer_loss(target, company)
             _blacklist_user_tokens(target)
 
         return Response({'detail': translate('company.user_deactivated', lang)}, status=status.HTTP_200_OK)
@@ -719,16 +751,16 @@ class CompanyViewSet(viewsets.ModelViewSet):
         target = get_object_or_404(User, pk=user_id, company=company)
 
         if target.pk == request.user.pk:
-            return Response(
-                {'detail': translate('company.cannot_remove_self', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_REMOVE_SELF,
+                i18n_key='company.cannot_remove_self',
             )
 
         # Only superadmin may remove a company_admin.
         if target.role == 'company_admin' and request.user.role != 'superadmin':
-            return Response(
-                {'detail': translate('company.cannot_remove_admin', lang)},
-                status=status.HTTP_400_BAD_REQUEST,
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_REMOVE_ADMIN,
+                i18n_key='company.cannot_remove_admin',
             )
 
         # Validate optional reassign_to parameter.
@@ -738,17 +770,17 @@ class CompanyViewSet(viewsets.ModelViewSet):
             try:
                 reassign_to_id = int(reassign_to_id)
             except (ValueError, TypeError):
-                return Response(
-                    {'detail': translate('company.reassign_to_invalid_id', lang)},
-                    status=status.HTTP_400_BAD_REQUEST,
+                raise LocalizedError(
+                    code=error_codes.COMPANY_REASSIGN_TO_INVALID,
+                    i18n_key='company.reassign_to_invalid_id',
                 )
             reassign_to_user = User.objects.filter(
                 pk=reassign_to_id, company=company, is_active=True,
             ).first()
             if reassign_to_user is None:
-                return Response(
-                    {'detail': translate('company.reassign_to_not_active_member', lang)},
-                    status=status.HTTP_400_BAD_REQUEST,
+                raise LocalizedError(
+                    code=error_codes.COMPANY_REASSIGN_TO_NOT_ACTIVE,
+                    i18n_key='company.reassign_to_not_active_member',
                 )
 
         with transaction.atomic():
@@ -759,6 +791,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
             )
             tasks_count = tasks_qs.count()
             tasks_qs.update(assignee=reassign_to_user)
+
+            _settle_pending_leaves_on_reviewer_loss(target, company)
 
             # Strip the user from the company.
             target.company = None
@@ -1024,6 +1058,188 @@ class InvitationViewSet(viewsets.ModelViewSet):
 
         send_invitation_email.delay(new_invitation.id)
         return Response({'detail': translate('company.invite_resent', lang)})
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Companies'],
+        summary='List building-staff invitations (no company)',
+        description='Lists invitations sent for building-wide roles (reception, service_manager). '
+                    'Superadmin only.',
+        responses={200: InvitationListSerializer(many=True)},
+    ),
+    create=extend_schema(
+        tags=['Companies'],
+        summary='Invite a building-staff user (reception or service_manager)',
+        description='Creates an invitation that is not tied to any company. Superadmin only.',
+        request=BuildingInvitationCreateSerializer,
+        responses={
+            201: InvitationListSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+        },
+    ),
+)
+class BuildingInvitationViewSet(viewsets.ModelViewSet):
+    """Building-wide staff invitations (no company association)."""
+
+    permission_classes = [IsSuperAdmin]
+    filter_backends = []
+    http_method_names = ['get', 'post']
+    lookup_url_kwarg = 'id'
+    queryset = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return BuildingInvitationCreateSerializer
+        return InvitationListSerializer
+
+    def get_queryset(self):
+        qs = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
+
+        is_used = InvitationViewSet._parse_bool_param(
+            self.request.query_params.get('is_used'), 'is_used',
+        )
+        if is_used is not None:
+            qs = qs.filter(is_used=is_used)
+
+        is_expired = InvitationViewSet._parse_bool_param(
+            self.request.query_params.get('is_expired'), 'is_expired',
+        )
+        if is_expired is not None:
+            if is_expired:
+                qs = qs.filter(expires_at__lte=timezone.now())
+            else:
+                qs = qs.filter(expires_at__gt=timezone.now())
+        return qs.order_by('-created_at')
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        invitation = serializer.save()
+        return Response(
+            InvitationListSerializer(invitation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Revoke building-staff invitation',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Invitation revoked'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Invitation not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='revoke')
+    def revoke(self, request, *args, **kwargs):
+        lang = get_lang(request)
+        invitation = self.get_object()
+        invitation.is_used = True
+        invitation.used_at = timezone.now()
+        invitation.save(update_fields=['is_used', 'used_at'])
+        return Response({'detail': translate('company.invite_revoked', lang)})
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Resend building-staff invitation email',
+        request=None,
+        responses={
+            200: OpenApiResponse(description='Invitation email resent'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='Invitation not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='resend')
+    def resend(self, request, *args, **kwargs):
+        lang = get_lang(request)
+        old_invitation = self.get_object()
+        if old_invitation.is_used:
+            raise_validation_error('detail', 'company.invite_cannot_resend')
+
+        with transaction.atomic():
+            old_invitation.is_used = True
+            old_invitation.used_at = timezone.now()
+            old_invitation.expires_at = timezone.now()
+            old_invitation.save(update_fields=['is_used', 'used_at', 'expires_at'])
+
+            new_invitation = Invitation.objects.create(
+                company=None,
+                email=old_invitation.email,
+                invited_by=request.user,
+                role=old_invitation.role,
+            )
+
+        send_invitation_email.delay(new_invitation.id)
+        return Response({'detail': translate('company.invite_resent', lang)})
+
+
+@extend_schema(
+    tags=['Companies'],
+    summary='List building-staff users',
+    description=(
+        'Returns users with building-wide roles (reception, service_manager) — they are '
+        'not tied to any company. Superadmin only. Supports ``search`` (by name/email) '
+        'and ``role`` (exact) query parameters.'
+    ),
+    parameters=[
+        OpenApiParameter(
+            name='search', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY, required=False,
+            description='Substring match against email, first_name or last_name.',
+        ),
+        OpenApiParameter(
+            name='role', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY, required=False,
+            description='Filter by exact role (reception | service_manager).',
+        ),
+        OpenApiParameter(
+            name='is_active', type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY, required=False,
+            description='Filter by activation status.',
+        ),
+    ],
+    responses={200: CompanyMemberSerializer(many=True)},
+)
+class BuildingStaffListView(GenericAPIView):
+    """List of users with building-staff roles (reception, service_manager)."""
+
+    permission_classes = [IsSuperAdmin]
+    serializer_class = CompanyMemberSerializer
+
+    def get_queryset(self):
+        qs = User.objects.filter(role__in=('reception', 'service_manager'))
+
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(
+                models.Q(email__icontains=search)
+                | models.Q(first_name__icontains=search)
+                | models.Q(last_name__icontains=search)
+            )
+
+        role = (self.request.query_params.get('role') or '').strip()
+        if role:
+            qs = qs.filter(role=role)
+
+        is_active_raw = self.request.query_params.get('is_active')
+        if is_active_raw is not None:
+            normalized = str(is_active_raw).strip().lower()
+            if normalized in ('true', '1'):
+                qs = qs.filter(is_active=True)
+            elif normalized in ('false', '0'):
+                qs = qs.filter(is_active=False)
+
+        return qs.order_by('-date_joined')
+
+    def get(self, request, *args, **kwargs):
+        qs = self.get_queryset()
+        page = self.paginate_queryset(qs)
+        serializer = self.get_serializer(page if page is not None else qs, many=True)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 @extend_schema(

@@ -32,8 +32,8 @@ class BoardMinimalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Board
-        fields = ['id', 'name', 'description', 'is_archived', 'created_at']
-        read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at']
+        fields = ['id', 'name', 'description', 'is_archived', 'created_at', 'company']
+        read_only_fields = ['id', 'name', 'description', 'is_archived', 'created_at', 'company']
 
 
 class DeadlineDateTimeField(serializers.DateTimeField):

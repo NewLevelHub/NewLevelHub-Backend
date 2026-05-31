@@ -392,7 +392,8 @@ class TestRemoveMember:
             format='json',
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'reassign_to' in resp.data['detail']
+        assert resp.data['error']['code'] == 'COMPANY_REASSIGN_TO_NOT_ACTIVE'
+        assert 'reassign_to' in resp.data['error']['message']
 
     def test_reassign_to_user_from_another_company_returns_400(
         self, api_client, company_admin, employee, company, other_employee
@@ -403,7 +404,8 @@ class TestRemoveMember:
             format='json',
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
-        assert 'reassign_to' in resp.data['detail']
+        assert resp.data['error']['code'] == 'COMPANY_REASSIGN_TO_NOT_ACTIVE'
+        assert 'reassign_to' in resp.data['error']['message']
 
     def test_cannot_remove_member_of_different_company(
         self, api_client, company_admin, company, other_employee

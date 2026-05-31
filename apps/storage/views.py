@@ -216,22 +216,19 @@ class FileViewSet(viewsets.ModelViewSet):
             company_files = File.objects.filter(company=user.company, folder__scope='company')
             company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
-            # Personal scope is visible only to the owner, plus explicitly shared files.
+            # Personal scope: only files owned by this user.
             personal_owned = File.objects.filter(owner=user, folder__scope='personal')
-            personal_shared = File.objects.filter(shares__shared_with=user, folder__scope='personal')
-
-            # Keep compatibility for legacy rows without folder:
-            # owner keeps access; non-owners must use explicit sharing.
             legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
-            legacy_shared = File.objects.filter(shares__shared_with=user, folder__isnull=True)
+
+            # Files explicitly shared with this user (e.g. personal files from another user).
+            explicitly_shared = File.objects.filter(shares__shared_with=user)
 
             queryset = (
                 company_files
                 | company_root_files
                 | personal_owned
-                | personal_shared
                 | legacy_owned
-                | legacy_shared
+                | explicitly_shared
             ).distinct()
 
         scope = self.request.query_params.get('scope')
@@ -291,12 +288,26 @@ class FileViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin' or file_obj.owner_id == user.id:
             return
 
+        # An explicit FileShare always takes precedence over company-level defaults.
+        # This lets owners grant view-only access to a file that would otherwise be
+        # downloadable by any company member.
+        share = self._get_share_for_user(file_obj, user)
+        if share is not None:
+            share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
+            required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
+            if share_level < required_level:
+                lang = get_lang(self.request)
+                raise PermissionDenied(translate('storage.file_action_forbidden', lang))
+            return
+
         folder = getattr(file_obj, 'folder', None)
-        if (
-            folder is not None
-            and folder.scope == 'company'
-            and user.company_id is not None
+        is_company_file = (
+            user.company_id is not None
             and file_obj.company_id == user.company_id
+            and (folder is None or folder.scope == 'company')
+        )
+        if (
+            is_company_file
             and (
                 required_permission in ('view', 'download')
                 or (required_permission == 'full' and user.role == 'company_admin')
@@ -304,16 +315,8 @@ class FileViewSet(viewsets.ModelViewSet):
         ):
             return
 
-        share = self._get_share_for_user(file_obj, user)
-        if share is None:
-            lang = get_lang(self.request)
-            raise PermissionDenied(translate('storage.file_access_denied', lang))
-
-        share_level = self._PERMISSION_LEVELS.get(share.permission, 0)
-        required_level = self._PERMISSION_LEVELS.get(required_permission, 0)
-        if share_level < required_level:
-            lang = get_lang(self.request)
-            raise PermissionDenied(translate('storage.file_action_forbidden', lang))
+        lang = get_lang(self.request)
+        raise PermissionDenied(translate('storage.file_access_denied', lang))
 
     def create(self, request, *args, **kwargs):
         uploaded_file = request.FILES.get('file')
@@ -400,7 +403,7 @@ class FileViewSet(viewsets.ModelViewSet):
         self._ensure_file_permission(file_obj, 'download')
         if not file_obj.file:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
-        url, expires_in = presigned_get_url_for_fieldfile(file_obj.file)
+        url, expires_in = presigned_get_url_for_fieldfile(file_obj.file, filename=file_obj.name)
         if not url:
             return Response({'detail': 'File not found.'}, status=status.HTTP_404_NOT_FOUND)
         return Response({'url': url, 'expires_in': expires_in})
@@ -483,14 +486,18 @@ class FileShareViewSet(viewsets.ModelViewSet):
         shared_with_me = str(self.request.query_params.get('shared_with_me', '')).lower() in ('1', 'true', 'yes', 'on')
 
         if shared_with_me:
-            return FileShare.objects.filter(shared_with=user).order_by('-created_at')
+            return FileShare.objects.filter(
+                shared_with=user, file__is_deleted=False,
+            ).order_by('-created_at')
 
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return FileShare.objects.filter(shared_by=user).order_by('-created_at')
+            return FileShare.objects.filter(
+                shared_by=user, file__is_deleted=False,
+            ).order_by('-created_at')
 
         return (
-            FileShare.objects.filter(shared_by=user)
-            | FileShare.objects.filter(shared_with=user)
+            FileShare.objects.filter(shared_by=user, file__is_deleted=False)
+            | FileShare.objects.filter(shared_with=user, file__is_deleted=False)
         ).order_by('-created_at')
 
     def perform_create(self, serializer):

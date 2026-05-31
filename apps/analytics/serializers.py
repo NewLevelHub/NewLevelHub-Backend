@@ -121,10 +121,23 @@ class CompanyAnalyticsSerializer(serializers.Serializer):
     employee_activity = EmployeeActivitySerializer(many=True)
 
 
-class ResourceUsageSerializer(serializers.Serializer):
+class ResourceUsageRowSerializer(serializers.Serializer):
+    resource_id = serializers.IntegerField()
+    resource_name = serializers.CharField()
     resource_type = serializers.CharField()
+    floor = serializers.IntegerField()
     total_bookings = serializers.IntegerField()
     avg_duration_minutes = serializers.FloatField()
+    total_booked_minutes = serializers.FloatField()
+    peak_hour = serializers.IntegerField(allow_null=True)
+    peak_hour_bookings = serializers.IntegerField()
+
+
+class ResourceUsageSerializer(serializers.Serializer):
+    period = serializers.CharField()
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    results = ResourceUsageRowSerializer(many=True)
 
 
 class DateCountSerializer(serializers.Serializer):

@@ -202,7 +202,10 @@ class RecurringBooking(TimeStampedModel):
     """Шаблон рекуррентного бронирования (каждый пн 10:00-11:00)."""
     resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='recurring_bookings')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='recurring_bookings')
-    company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='recurring_bookings')
+    company = models.ForeignKey(
+        'companies.Company', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='recurring_bookings',
+    )
 
     day_of_week = models.PositiveIntegerField(help_text='0=Mon .. 6=Sun')
     start_time = models.TimeField()

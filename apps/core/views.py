@@ -426,25 +426,7 @@ def _company_admin_widgets(user):
     ]
 
     today = timezone.localdate()
-    company_user_ids = (
-        User.objects
-        .filter(company=company, is_active=True)
-        .values_list('id', flat=True)
-    )
-    my_tasks_qs = (
-        Task.objects
-        .select_related('column__board')
-        .filter(
-            assignee_id__in=company_user_ids,
-            is_archived=False,
-            is_deleted=False,
-        )
-        .filter(Q(deadline__isnull=True) | Q(deadline__date=today))
-        .order_by(
-            Case(When(deadline__isnull=True, then=1), default=0, output_field=IntegerField()),
-            'deadline',
-        )[:5]
-    )
+    my_tasks_qs = _my_tasks_for_user(user, now)
     my_tasks = [
         {
             'id': t.id,
@@ -482,6 +464,7 @@ def _employee_widgets(user):
         assignee=user,
         is_archived=False,
         is_deleted=False,
+        column__board__is_archived=False,
         deadline__date=today,
     ).count()
 

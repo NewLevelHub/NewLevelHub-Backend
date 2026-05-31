@@ -345,3 +345,53 @@ class TestCompanyCalendarBusyAC:
         for slot in slots:
             assert 'start' in slot
             assert 'end' in slot
+
+
+@pytest.mark.django_db
+class TestCompanyCalendarGuestPassAnchorAC:
+    """Guest pass appears on its valid_from day only, not on every day in the QR validity window."""
+
+    def test_pass_not_shown_outside_valid_from_day(self, api_client, company, employee):
+        visit_day = timezone.localdate() + timedelta(days=2)
+        GuestPass.objects.create(
+            created_by=employee,
+            company=company,
+            guest_name='Long Window Visitor',
+            guest_email='lw.visitor@test.local',
+            valid_from=_dt_for(visit_day, 11),
+            valid_until=_dt_for(visit_day + timedelta(days=29), 11),
+        )
+
+        api_client.force_authenticate(user=employee)
+        other_day = visit_day + timedelta(days=20)
+        response = api_client.get(
+            _calendar_url(company.id),
+            {'date_from': _iso_date(other_day), 'date_to': _iso_date(other_day)},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        events = _items(response)
+        assert not any(event['type'] == 'guest_visit' for event in events)
+
+    def test_pass_shown_on_valid_from_day(self, api_client, company, employee):
+        visit_day = timezone.localdate() + timedelta(days=2)
+        GuestPass.objects.create(
+            created_by=employee,
+            company=company,
+            guest_name='Scheduled Visitor',
+            guest_email='sched.visitor@test.local',
+            valid_from=_dt_for(visit_day, 11),
+            valid_until=_dt_for(visit_day + timedelta(days=29), 11),
+        )
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(
+            _calendar_url(company.id),
+            {'date_from': _iso_date(visit_day), 'date_to': _iso_date(visit_day)},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        events = _items(response)
+        guest_events = [event for event in events if event['type'] == 'guest_visit']
+        assert len(guest_events) == 1
+        assert guest_events[0]['title'] == 'Scheduled Visitor'

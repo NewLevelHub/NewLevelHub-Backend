@@ -68,8 +68,8 @@ def _guest_pass_payload():
         'guest_phone': '+70000000001',
         'purpose': 'Visit',
         'valid_from': now.isoformat(),
-        'valid_until': (now + timedelta(days=3)).isoformat(),
-        'is_single_use': False,
+        'valid_until': (now + timedelta(hours=23)).isoformat(),
+        'is_single_use': True,
     }
 
 
@@ -96,6 +96,9 @@ def test_ac_booking_create_emits_booking_confirmed(api_client):
         resource_type='meeting_room',
         capacity=4,
         is_active=True,
+        available_from='00:00',
+        available_until='23:59',
+        available_days=list(range(7)),
     )
     resource = Resource.objects.get(name='Room AC')
     start = timezone.now() + timedelta(days=1)

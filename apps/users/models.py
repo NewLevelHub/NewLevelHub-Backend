@@ -37,6 +37,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         ('company_admin', 'Company Admin'),
         ('employee', 'Employee'),
         ('reception', 'Reception'),
+        ('service_manager', 'Service Manager'),
         ('guest', 'Guest'),
     ]
 
@@ -107,6 +108,9 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
     def is_company_member(self):
         return self.role in ('company_admin', 'employee') and self.company_id is not None
+
+    def is_service_manager(self):
+        return self.role == 'service_manager'
 
 
 class EmailVerificationToken(TimeStampedModel):

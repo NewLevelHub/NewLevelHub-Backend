@@ -1100,12 +1100,13 @@ class TaskViewSet(viewsets.ModelViewSet):
         user = request.user
         TASK_LIMIT = 50
 
-        # Base queryset — assigned to me, not archived.
+        # Base queryset — assigned to me, not archived, board not archived.
         qs = Task.objects.select_related(
             'column__board', 'assignee', 'created_by',
         ).prefetch_related('labels', 'checklists__items').filter(
             assignee=user,
             is_archived=False,
+            column__board__is_archived=False,
         )
 
         if user.role != 'superadmin':

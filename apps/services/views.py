@@ -18,9 +18,10 @@ import rest_framework.fields as fields
 from apps.core.permissions import (
     IsSuperAdmin,
     IsCompanyMember,
-    IsCompanyAdmin,
     IsCompanyAdminOrReadOnly,
     IsOwnerOrSuperAdmin,
+    IsServiceManager,
+    IsServiceRequestManager,
 )
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
@@ -31,6 +32,7 @@ from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     MapPointSearchSerializer,
     ServiceRequestSerializer, ServiceRequestStatusSerializer, ServiceRequestRateSerializer,
+    ServiceRequestAssignSerializer,
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
 from .filters import ServiceRequestFilter
@@ -667,7 +669,8 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         base_qs = ServiceRequest.objects.select_related(
             'created_by', 'assigned_to', 'floor', 'company',
         ).order_by('-created_at')
-        if user.role == 'superadmin':
+        # superadmin and service_manager are building-wide and see everything.
+        if user.role in ('superadmin', 'service_manager'):
             return base_qs
         if user.role == 'company_admin' and user.company_id:
             # Company admins see all requests within their company
@@ -675,11 +678,40 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         # Regular employees see only their own requests
         return base_qs.filter(created_by=user)
 
+    def get_permissions(self):
+        # service_manager is a building-wide responsible role with no company FK,
+        # so IsCompanyMember rejects it. Allow it through for read actions; write
+        # actions (create) still require company membership. Action-level permission
+        # decorators (status/assign) handle the manage-level gates separately.
+        if self.action in ('list', 'retrieve'):
+            return [(IsCompanyMember | IsServiceManager)()]
+        return super().get_permissions()
+
     def perform_create(self, serializer):
-        serializer.save(
+        instance = serializer.save(
             created_by=self.request.user,
             company=self.request.user.company,
         )
+        self._notify_service_managers_new_request(instance)
+
+    def _notify_service_managers_new_request(self, instance):
+        from django.contrib.auth import get_user_model
+        from apps.notifications.utils import create_notification
+
+        User = get_user_model()
+        creator = instance.created_by
+        creator_name = (
+            f'{creator.first_name} {creator.last_name}'.strip() or creator.email
+        ) if creator else ''
+        service_managers = User.objects.filter(role='service_manager', is_active=True)
+        for manager in service_managers:
+            create_notification(
+                user=manager,
+                notification_type='service_request_update',
+                title='Новая сервисная заявка',
+                message=f'{creator_name} создал(а) новую заявку: {instance.get_request_type_display()}',
+                link='/service-requests',
+            )
 
     @extend_schema(
         tags=['Services'],
@@ -767,22 +799,26 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             location=request.data.get('location', ''),
             description=request.data.get('description', 'Quick cleaning request'),
         )
+        self._notify_service_managers_new_request(sr)
         serializer = ServiceRequestSerializer(sr, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         tags=['Services'],
-        summary='Update request status (company_admin or superadmin)',
+        summary='Update request status (superadmin or service_manager)',
         request=ServiceRequestStatusSerializer,
         responses={
             200: ServiceRequestSerializer,
             400: OpenApiResponse(description='Invalid status transition'),
             401: OpenApiResponse(description='Not authenticated'),
-            403: OpenApiResponse(description='Admin only'),
+            403: OpenApiResponse(description='superadmin or service_manager only'),
             404: OpenApiResponse(description='Not found'),
         },
     )
-    @action(detail=True, methods=['patch'], url_path='status', permission_classes=[IsCompanyAdmin])
+    @action(
+        detail=True, methods=['patch'], url_path='status',
+        permission_classes=[IsServiceRequestManager],
+    )
     def update_status(self, request, pk=None):
         return self._handle_status_update(request)
 
@@ -796,14 +832,50 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             200: ServiceRequestSerializer,
             400: OpenApiResponse(description='Invalid status transition'),
             401: OpenApiResponse(description='Not authenticated'),
-            403: OpenApiResponse(description='Admin only'),
+            403: OpenApiResponse(description='superadmin or service_manager only'),
             404: OpenApiResponse(description='Not found'),
         },
         deprecated=True,
     )
-    @action(detail=True, methods=['patch'], url_path='update-status', permission_classes=[IsCompanyAdmin])
+    @action(
+        detail=True, methods=['patch'], url_path='update-status',
+        permission_classes=[IsServiceRequestManager],
+    )
     def update_status_legacy(self, request, pk=None):
         return self._handle_status_update(request)
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Assign executor to a service request',
+        description=(
+            'Assign or reassign the executor of a service request. '
+            'Pass ``assigned_to: null`` to clear the assignment. '
+            'Available to superadmin and service_manager only.'
+        ),
+        request=ServiceRequestAssignSerializer,
+        responses={
+            200: ServiceRequestSerializer,
+            400: OpenApiResponse(description='Invalid assignee'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='superadmin or service_manager only'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(
+        detail=True, methods=['patch'], url_path='assign',
+        permission_classes=[IsServiceRequestManager],
+    )
+    def assign(self, request, pk=None):
+        sr = self.get_object()
+        serializer = ServiceRequestAssignSerializer(
+            sr, data=request.data, partial=True, context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        sr.refresh_from_db()
+        return Response(
+            ServiceRequestSerializer(sr, context={'request': request}).data,
+        )
 
     def _handle_status_update(self, request):
         if 'status' not in request.data:
@@ -813,6 +885,7 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             )
 
         sr = self.get_object()
+
         previous_status = sr.status
         serializer = ServiceRequestStatusSerializer(sr, data=request.data)
         serializer.is_valid(raise_exception=True)

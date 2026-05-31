@@ -161,6 +161,33 @@ class IsOwnerOrAdmin(_AuthenticatedPermission):
         return False
 
 
+class IsServiceManager(_AuthenticatedPermission):
+    """
+    Allows access only to users with role='service_manager'.
+
+    The service_manager is a building-wide role responsible for handling all
+    service requests across companies. It is not bound to a single company.
+    """
+
+    def _has_role_permission(self, request, view):
+        return request.user.role == 'service_manager'
+
+
+class IsServiceRequestManager(_AuthenticatedPermission):
+    """
+    Allows access only to roles that may manage service requests
+    (advance status, assign executors):
+      - superadmin (platform-level)
+      - service_manager (building-wide responsible person)
+
+    company_admin is intentionally excluded — they can create requests on
+    behalf of their company but cannot touch the service workflow.
+    """
+
+    def _has_role_permission(self, request, view):
+        return request.user.role in ('superadmin', 'service_manager')
+
+
 class IsSuperAdminOrReception(_AuthenticatedPermission):
     """
     Allows access only to superadmin and users with role='reception'.

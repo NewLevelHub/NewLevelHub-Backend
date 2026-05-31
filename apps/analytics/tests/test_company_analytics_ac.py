@@ -216,7 +216,10 @@ class TestCompanyAnalyticsAC:
         assert by_user_id[employee_b.id]['task_count_active'] == 0
         assert by_user_id[company_admin.id]['booking_count_30d'] == 0
         assert by_user_id[company_admin.id]['task_count_active'] == 0
-        assert by_user_id[employee_a.id]['last_login'].startswith(employee_a.last_login.date().isoformat())
+        # last_login is a UTC datetime; the API serialises it in the server's local timezone
+        # (Asia/Almaty, +05:00), so we must compare against the *local* date, not the UTC date.
+        local_last_login_date = timezone.localtime(employee_a.last_login).date().isoformat()
+        assert by_user_id[employee_a.id]['last_login'].startswith(local_last_login_date)
 
     def test_employee_is_forbidden(self, api_client, employee_a):
         api_client.force_authenticate(user=employee_a)

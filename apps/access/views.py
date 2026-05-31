@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Prefetch
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import (
@@ -29,6 +30,7 @@ from . import tasks
 from .tasks import notify_pass_creator_on_entry
 from .serializers import (
     AccessLogSerializer, GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer,
+    GuestPassValidationLogSerializer,
 )
 
 
@@ -72,12 +74,18 @@ class CSVPassthroughRenderer(renderers.BaseRenderer):
 class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = GuestPassSerializer
     permission_classes = [IsCompanyAdmin]
-    queryset = GuestPass.objects.select_related('created_by', 'company').order_by('-created_at')
+    queryset = GuestPass.objects.select_related('created_by', 'company').prefetch_related(
+        Prefetch(
+            'access_logs',
+            queryset=AccessLog.objects.select_related('checked_by').order_by('-created_at'),
+            to_attr='prefetched_logs',
+        )
+    ).order_by('-created_at')
     http_method_names = ['get', 'post']
     filterset_class = GuestPassFilter
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'create'):
+        if self.action in ('list', 'retrieve', 'create', 'validations'):
             return [IsCompanyMember()]
         return [permission() for permission in self.permission_classes]
 
@@ -102,6 +110,49 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         output_serializer = GuestPassSerializer(guest_pass, context=self.get_serializer_context())
         headers = self.get_success_headers(output_serializer.data)
         return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @extend_schema(
+        tags=['Access'],
+        summary='Export guest passes as CSV (admin/superadmin)',
+        responses={200: OpenApiResponse(description='CSV file')},
+    )
+    @action(detail=False, methods=['get'], url_path='export', permission_classes=[IsCompanyAdmin])
+    def export(self, request):
+        qs = self.filter_queryset(self.get_queryset())
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            'ID', 'Гость', 'Email гостя', 'Телефон', 'Цель',
+            'Пригласил', 'Компания', 'Статус',
+            'Действует с', 'Действует до', 'Использований',
+            'Проверил', 'Валидирован', 'Метод',
+        ])
+        for p in qs.iterator():
+            logs = getattr(p, 'prefetched_logs', None)
+            if logs is not None:
+                last = logs[0] if logs else None
+            else:
+                last = p.access_logs.select_related('checked_by').order_by('-created_at').first()
+            writer.writerow([
+                p.pk,
+                p.guest_name,
+                p.guest_email,
+                p.guest_phone,
+                p.visit_purpose,
+                p.created_by.full_name if p.created_by_id else '',
+                p.company.name if p.company_id else '',
+                p.status,
+                p.valid_from.strftime('%Y-%m-%d %H:%M') if p.valid_from else '',
+                p.valid_until.strftime('%Y-%m-%d %H:%M') if p.valid_until else '',
+                p.times_used,
+                last.checked_by.full_name if last and last.checked_by else '',
+                last.created_at.strftime('%Y-%m-%d %H:%M') if last else '',
+                last.method if last else '',
+            ])
+        stamp = timezone.now().strftime('%Y-%m-%d')
+        response = StreamingHttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="guest_passes_{stamp}.csv"'
+        return response
 
     @extend_schema(
         tags=['Access'],
@@ -186,6 +237,29 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
 
         tasks.send_guest_pass_email.delay(guest_pass.id)
         return Response({'detail': translate('access.qr_resent', get_lang(request))})
+
+    @extend_schema(
+        tags=['Access'],
+        summary='List validations for a guest pass',
+        responses={
+            200: inline_serializer(
+                name='GuestPassValidations',
+                fields={
+                    'total': fields.IntegerField(),
+                    'results': GuestPassValidationLogSerializer(many=True),
+                },
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['get'], url_path='validations')
+    def validations(self, request, pk=None):
+        guest_pass = self.get_object()
+        logs = guest_pass.access_logs.select_related('checked_by').order_by('-created_at')
+        serializer = GuestPassValidationLogSerializer(logs, many=True)
+        return Response({'total': guest_pass.times_used, 'results': serializer.data})
 
 
 @extend_schema(

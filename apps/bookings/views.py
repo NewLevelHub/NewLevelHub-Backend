@@ -982,8 +982,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             bookings = Booking.objects.filter(
                 resource=resource,
                 status='confirmed',
-                start_time__gte=local_start,
                 start_time__lt=local_end,
+                end_time__gt=local_start,
             ).order_by('start_time')
 
         result = []
@@ -2165,17 +2165,15 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         return queryset.filter(pk=pk, user_id=user.id).first()
 
     @staticmethod
-    def _next_matching_weekday(*, day_of_week, base_date):
-        """Return the next calendar date for weekday (strictly after base_date)."""
+    def _first_matching_weekday(*, day_of_week, base_date):
+        """Return the first calendar date for weekday on or after base_date."""
         days_ahead = (day_of_week - base_date.weekday()) % 7
-        if days_ahead == 0:
-            days_ahead = 7
         return base_date + timedelta(days=days_ahead)
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        valid_from = self._next_matching_weekday(
+        valid_from = self._first_matching_weekday(
             day_of_week=serializer.validated_data['day_of_week'],
             base_date=timezone.localdate(),
         )

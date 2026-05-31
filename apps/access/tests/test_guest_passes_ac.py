@@ -27,6 +27,10 @@ def pass_resend_url(pass_id):
     return f'/api/v1/access/passes/{pass_id}/resend/'
 
 
+def pass_validations_url(pass_id):
+    return f'/api/v1/access/passes/{pass_id}/validations/'
+
+
 @pytest.fixture
 def api_client():
     return APIClient()
@@ -201,6 +205,23 @@ class TestGuestPassesCreateAC:
         api_client.force_authenticate(user=company_admin)
         response = api_client.post(PASSES_URL, _payload(valid_until_days=31), format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_multi_use_pass_rejected_when_longer_than_one_day(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        payload = _payload(valid_until_days=2)
+        payload['is_single_use'] = False
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_multi_use_pass_accepted_when_one_day(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        now = timezone.now() + timedelta(minutes=5)
+        payload = _payload()
+        payload['is_single_use'] = False
+        payload['valid_from'] = now.isoformat()
+        payload['valid_until'] = (now + timedelta(hours=23, minutes=30)).isoformat()
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
 
     def test_create_generates_qr_file_reference(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
@@ -707,4 +728,84 @@ class TestExpireGuestPassesTask:
         response = api_client.get(PASSES_URL, {'status': 'expired'})
         assert response.status_code == status.HTTP_200_OK
         assert response.data['count'] >= 1
+
+
+@pytest.mark.django_db
+class TestGuestPassValidationsHistoryAC:
+    def _add_log(self, guest_pass, checked_by, method='qr'):
+        return AccessLog.objects.create(
+            guest_pass=guest_pass,
+            checked_by=checked_by,
+            method=method,
+        )
+
+    def test_returns_all_validations_ordered_desc(self, api_client, company_admin, superadmin):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        guest_pass.times_used = 2
+        guest_pass.save(update_fields=['times_used'])
+        first = self._add_log(guest_pass, superadmin, method='qr')
+        second = self._add_log(guest_pass, superadmin, method='manual')
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['total'] == 2
+        ids = [row['id'] for row in response.data['results']]
+        assert ids == [second.id, first.id]
+        assert response.data['results'][0]['validated_by'] == superadmin.full_name
+        assert response.data['results'][0]['method'] == 'manual'
+
+    def test_creator_employee_can_view_own_pass_validations(self, api_client, employee, superadmin):
+        guest_pass = _create_pass(creator=employee, usage_type='multi')
+        self._add_log(guest_pass, superadmin)
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data['results']) == 1
+
+    def test_superadmin_can_view_any_pass_validations(self, api_client, company_admin, superadmin):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        self._add_log(guest_pass, superadmin)
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data['results']) == 1
+
+    def test_other_employee_cannot_view_other_pass_validations(
+        self, api_client, company_admin, employee, superadmin,
+    ):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        self._add_log(guest_pass, superadmin)
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_other_company_cannot_view_validations(
+        self, api_client, company_admin, second_company_admin, superadmin,
+    ):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        self._add_log(guest_pass, superadmin)
+        api_client.force_authenticate(user=second_company_admin)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_unauthenticated_gets_401(self, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_guest_role_gets_403(self, api_client, company_admin, guest_user):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_empty_results_for_unvalidated_pass(self, api_client, company_admin):
+        guest_pass = _create_pass(creator=company_admin, usage_type='multi')
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(pass_validations_url(guest_pass.id))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['total'] == 0
+        assert response.data['results'] == []
         assert all(p['status'] == 'expired' for p in response.data['results'])

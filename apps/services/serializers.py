@@ -5,6 +5,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import get_lang, translate
 
 from apps.companies.models import Company
 from apps.bookings.models import Booking, ResourceBlock
@@ -181,6 +182,16 @@ class MapPointSerializer(serializers.ModelSerializer):
             raise_validation_error('resource', 'services.resource_required_for_type', {'point_type': point_type})
         if point_type == 'office' and company is None:
             raise_validation_error('company', 'services.company_required_for_office')
+
+        floor = attrs.get('floor', getattr(self.instance, 'floor', None))
+        if resource and floor:
+            if resource.floor_fk_id and resource.floor_fk_id != floor.id:
+                raise serializers.ValidationError({
+                    'resource': translate(
+                        'services.resource_floor_mismatch',
+                        get_lang(self.context.get('request')),
+                    )
+                })
 
         return attrs
 

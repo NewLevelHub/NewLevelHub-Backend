@@ -21,6 +21,7 @@ class ResourceFilter(django_filters.FilterSet):
     type = django_filters.CharFilter(field_name='resource_type')
     resource_type = django_filters.CharFilter()
     floor = django_filters.NumberFilter()
+    floor_id = django_filters.NumberFilter(field_name='floor_fk_id')
     capacity_min = django_filters.NumberFilter(field_name='capacity', lookup_expr='gte')
     capacity_max = django_filters.NumberFilter(field_name='capacity', lookup_expr='lte')
     equipment = django_filters.CharFilter(method='filter_equipment')
@@ -40,6 +41,9 @@ class ResourceFilter(django_filters.FilterSet):
 
     class Meta:
         model = Resource
+        # floor_id is declared explicitly above (field_name='floor_fk_id'), so it is
+        # intentionally omitted here — listing a non-model-field name in Meta.fields
+        # would cause django-filter to attempt auto-generation of a conflicting filter.
         fields = ['resource_type', 'floor', 'is_active', 'assigned_company', 'company_id']
 
     def filter_equipment(self, queryset, name, value):
@@ -127,8 +131,9 @@ class ResourceFilter(django_filters.FilterSet):
 
         # available_days is a JSONField (Python list) — filter in Python.
         # An empty available_days list means "available every day" (no restriction).
+        # Clear select_related to avoid conflict when combined with .only() deferred loading.
         available_ids = [
-            r.id for r in queryset.only('id', 'available_days')
+            r.id for r in queryset.select_related(None).only('id', 'available_days')
             if not r.available_days or requested_days.issubset(set(r.available_days))
         ]
         queryset = queryset.filter(id__in=available_ids)

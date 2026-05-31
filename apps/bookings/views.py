@@ -674,7 +674,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         return ctx
 
     def get_queryset(self):
-        qs = Resource.objects.all()
+        qs = Resource.objects.select_related('floor_fk')
         user = self.request.user
         if not user.is_authenticated:
             return Resource.objects.none()

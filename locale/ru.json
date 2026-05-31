@@ -202,6 +202,7 @@
   "services.company_required_for_office": "Компания обязательна для типа точки \"office\".",
   "services.field_required": "Это поле обязательно.",
   "services.invalid_status_transition": "Недопустимый переход статуса: {current} → {next_status}. Ожидается: {expected}.",
+  "services.resource_floor_mismatch": "Ресурс принадлежит другому этажу.",
   "analytics.must_be_integer": "Должно быть целым числом.",
   "analytics.invalid_period": "Недопустимый период. Допустимые значения: {choices}.",
   "analytics.custom_period_dates_required": "Для периода custom обязательны параметры date_from и date_to (YYYY-MM-DD).",

@@ -14,6 +14,13 @@ class Resource(TimeStampedModel):
     name = models.CharField(max_length=255)
     resource_type = models.CharField(max_length=20, choices=TYPE_CHOICES, db_index=True)
     floor = models.PositiveIntegerField(default=1)
+    floor_fk = models.ForeignKey(
+        'services.Floor',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resources',
+    )
     zone = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True, default='')
     photo = models.ImageField(upload_to='resources/', null=True, blank=True)

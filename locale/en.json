@@ -202,6 +202,7 @@
   "services.company_required_for_office": "Company is required for point_type \"office\".",
   "services.field_required": "This field is required.",
   "services.invalid_status_transition": "Invalid status transition: {current} → {next_status}. Expected: {expected}.",
+  "services.resource_floor_mismatch": "Resource belongs to a different floor.",
   "analytics.must_be_integer": "Must be a valid integer.",
   "analytics.invalid_period": "Invalid period. Must be one of: {choices}.",
   "analytics.custom_period_dates_required": "For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.",

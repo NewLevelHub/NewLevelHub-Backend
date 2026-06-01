@@ -321,13 +321,61 @@ class TestRecurringBookingCreateAC:
         assert response.status_code == status.HTTP_201_CREATED, response.json()
         payload = response.json()
         assert payload['valid_from'] == today.isoformat()
-        assert today.isoformat() in payload['skipped_dates']
+        assert today.isoformat() not in payload['skipped_dates']
 
         series_dates = [
             timezone.localtime(b.start_time).date()
             for b in Booking.objects.filter(recurring_booking_id=payload['id']).order_by('start_time')
         ]
         assert today not in series_dates
+
+    def test_past_weekday_in_range_not_reported_as_conflict(
+        self, api_client, employee, company, desk_resource
+    ):
+        """Past occurrences are skipped silently; skipped_dates lists only real overlaps."""
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
+
+        # Sunday 2026-06-07 12:00 local — Monday 10:00-11:00 slot already passed for prior weeks
+        fixed_now = timezone.make_aware(
+            datetime(2026, 6, 7, 12, 0, 0),
+            ZoneInfo('Asia/Almaty'),
+        )
+        monday = date(2026, 6, 8)
+        past_monday = date(2026, 6, 1)
+        Booking.objects.create(
+            resource=desk_resource,
+            user=employee,
+            company=company,
+            start_time=_local_aware(past_monday, time(10, 0)),
+            end_time=_local_aware(past_monday, time(11, 0)),
+            status='confirmed',
+        )
+
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed_now):
+            response = api_client.post(
+                RECURRING_URL,
+                {
+                    'resource_id': desk_resource.id,
+                    'day_of_week': 0,
+                    'start_time': '10:00',
+                    'end_time': '11:00',
+                    'repeat_until': monday.isoformat(),
+                },
+                format='json',
+            )
+
+        assert response.status_code == status.HTTP_201_CREATED, response.json()
+        payload = response.json()
+        assert payload['skipped_dates'] == []
+        assert payload['valid_from'] == monday.isoformat()
+
+        series_dates = [
+            timezone.localtime(b.start_time).date()
+            for b in Booking.objects.filter(recurring_booking_id=payload['id']).order_by('start_time')
+        ]
+        assert series_dates == [monday]
 
     def test_guest_cannot_create_recurring_booking(self, api_client, guest_user, desk_resource):
         monday = _next_weekday_date(0)

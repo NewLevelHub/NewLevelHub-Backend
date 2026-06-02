@@ -1,0 +1,304 @@
+\documentclass[12pt,a4paper]{article}
+
+% Compile with XeLaTeX for best font rendering.
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setdefaultlanguage{russian}
+\setotherlanguage{english}
+\setmainfont{Inter}
+\setsansfont{Inter}
+\setmonofont{JetBrains Mono}
+
+\usepackage[a4paper,margin=2.1cm]{geometry}
+\usepackage{microtype}
+\usepackage{setspace}
+\setstretch{1.22}
+\usepackage{parskip}
+\setlength{\parindent}{0pt}
+
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\setlist[itemize]{leftmargin=1.1em,itemsep=4pt,topsep=4pt}
+\setlist[enumerate]{leftmargin=1.3em,itemsep=4pt,topsep=4pt}
+
+\usepackage[table]{xcolor}
+\definecolor{Navy}{HTML}{17324D}
+\definecolor{Sky}{HTML}{2E86DE}
+\definecolor{Emerald}{HTML}{1E9E66}
+\definecolor{Amber}{HTML}{E0A106}
+\definecolor{Crimson}{HTML}{C0392B}
+\definecolor{Paper}{HTML}{F7FAFC}
+\definecolor{Line}{HTML}{D9E2EC}
+\definecolor{Muted}{HTML}{6B7785}
+
+\usepackage{hyperref}
+\usepackage{xurl}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=Sky,
+  urlcolor=Sky,
+  citecolor=Sky,
+  pdftitle={MVP Audit Report -- New Level Hub},
+  pdfauthor={New Level Hub Team}
+}
+
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries\color{Navy}}{}{0em}{}
+\titleformat{\subsection}{\large\bfseries\color{Sky}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{Navy}}{}{0em}{}
+
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{Navy}{\textbf{New Level Hub}}}
+\rhead{\textcolor{Muted}{MVP Audit}}
+\cfoot{\textcolor{Muted}{\thepage}}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{Line}\leaders\hrule height \headrulewidth\hfill}}
+
+\usepackage[most]{tcolorbox}
+\tcbset{
+  arc=2mm,
+  boxrule=0.4pt,
+  colframe=Line,
+  colback=Paper
+}
+
+\newtcolorbox{introbox}{
+  colframe=Sky,
+  colback=Sky!4
+}
+\newtcolorbox{riskbox}{
+  colframe=Crimson,
+  colback=Crimson!4
+}
+
+\newcommand{\done}{\textcolor{Emerald}{\textbf{[DONE]}}}
+\newcommand{\partly}{\textcolor{Amber}{\textbf{[PARTIAL]}}}
+\newcommand{\todoitem}{\textcolor{Crimson}{\textbf{[NOT DONE]}}}
+
+\begin{document}
+\sloppy
+
+\begin{titlepage}
+  \vspace*{1.6cm}
+  {\Huge\bfseries\color{Navy} Итоговый статус реализации MVP\par}
+  \vspace{0.2cm}
+  {\LARGE\bfseries\color{Sky} New Level Hub\par}
+  \vspace{1.2cm}
+
+  \begin{tcolorbox}[colframe=Sky,colback=Sky!5]
+    \textbf{Дата аудита:} 02.06.2026
+  \end{tcolorbox}
+
+  \vfill
+  {\large\color{Muted} Technical documentation report}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Как выполнен анализ}
+\begin{tcolorbox}[colframe=Navy,colback=Paper,title=\textbf{Паспорт аудита},breakable]
+\textbf{Период проведения:} 02.06.2026, примерно 13:13--13:31 (UTC+5).\\
+\textbf{Исполнитель:} ИИ-агент Codex 5.3 (Cursor IDE).\\
+\textbf{Формат проверки:} по чеклисту \texttt{mvp-audit.md}, с верификацией backend + frontend кодовой базы.\\
+\textbf{Правило оценки:} \done = модель + API + UI; \partly = частично; \todoitem = не найдено.\\
+\textbf{Исходный запрос:} ``Используй скилл \path|@NewLevelHub-Backend/.claude/agents/mvp-audit.md| и проведи полный аудит реализации платформы New Level Hub. Пройди по всем шагам скилла: 1) изучи структуру проекта, 2) пройди по каждому пункту чеклиста, 3) сформируй итоговый отчёт в указанном формате.''\\
+\textbf{Референс-документ:} \path|@NewLevelHub-Backend/NewLevelHub-MVP.md|.
+\end{tcolorbox}
+
+\section{Итоговый статус реализации MVP — New Level Hub}
+\textbf{Дата аудита:} 02.06.2026
+
+\begin{introbox}
+Аудит выполнен по вашему \texttt{mvp-audit.md}: сначала просмотрена структура backend/frontend, затем пройден чеклист блоков 1--7 с правилом оценки \done = модель + API + UI, \partly = частично, \todoitem = не найдено.
+\end{introbox}
+
+\subsection{Карта реализации (шаг 1)}
+\begin{itemize}
+  \item \textbf{Backend (Django apps):}
+  \path|users|, \path|companies|, \path|bookings|, \path|crm|, \path|storage|, \path|hr|, \path|access|, \path|services|, \path|notifications|, \path|analytics|, \path|core|.\\
+  Примеры опорных файлов: \path|NewLevelHub-Backend/apps/users/models.py|, \path|.../views.py|, \path|.../serializers.py|, \path|.../urls.py| в каждом модуле.
+  \item \textbf{Frontend (pages/components/api):}
+  Основной роутинг в \path|NewLevelHub-Web-Frontend/src/app/router.tsx|, API-слой в \path|src/shared/api/endpoints.ts| и \path|src/shared/api/client.ts|, страницы по блокам находятся в \path|src/pages/**|.
+\end{itemize}
+
+\subsection{Сводная таблица по блокам}
+\rowcolors{2}{white}{Paper}
+\begin{center}
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}X c c c c c}
+\toprule
+\textbf{Блок} & \textbf{Всего} & \textbf{\done} & \textbf{\partly} & \textbf{\todoitem} & \textbf{\% готовности} \\
+\midrule
+Блок 1. Пользователи и роли & 25 & 16 & 8 & 1 & 80\% \\
+Блок 2. Компании & 23 & 17 & 6 & 0 & 87\% \\
+Блок 3. Бронирование & 31 & 28 & 3 & 0 & 95\% \\
+Блок 4. Корпоративный портал & 32 & 30 & 2 & 0 & 97\% \\
+Блок 5. Доступ и пропуска & 14 & 12 & 2 & 0 & 93\% \\
+Блок 6. Сервисы здания & 17 & 13 & 4 & 0 & 88\% \\
+Блок 7. Уведомления и аналитика & 13 & 9 & 4 & 0 & 85\% \\
+\midrule
+\textbf{ИТОГО} & \textbf{155} & \textbf{125} & \textbf{29} & \textbf{1} & \textbf{90\%} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textit{`\% готовности` рассчитан как \texttt{(DONE + 0.5 * PARTIAL) / N}.}
+
+\section{Детализация по блокам}
+
+\subsection{Блок 1. Система пользователей и ролей}
+\textbf{\done}
+\begin{itemize}
+  \item Регистрация (включая invite-flow), логин, remember me, reset password (\path|apps/users/views.py|, \path|apps/users/serializers.py|, \path|src/pages/auth/**|).
+  \item Email verification (\path|apps/users/models.py| \path|EmailVerificationToken|, \path|src/pages/auth/VerifyEmailPage.tsx|).
+  \item Профиль: редактирование данных, аватар, роль/компания, настройки уведомлений (\path|src/pages/profile/ProfilePage.tsx|, \path|src/pages/notifications/NotificationPreferencesPage.tsx|).
+  \item Роли и права (4 роли + role-based dashboard) (\path|apps/core/permissions.py|, \path|src/pages/dashboard/**|, \path|src/app/router.tsx|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item Создание админа компании суперадмином: через инвайты реализовано, отдельного явного UX ``создать админа компании'' нет (\path|apps/companies/...|, \path|src/pages/companies/CompanyMembersPage.tsx|).
+  \item Ограничение доступа до подтверждения email: backend проверяет, frontend-guard неполный.
+  \item Смена пароля: API есть, отдельной полноценной UI-формы в профиле нет.
+  \item История действий пользователя: разрозненные данные есть, единого экрана/эндпоинта истории нет.
+  \item Ролевые дашборды покрыты, но часть product-виджетов неполная.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Автовыход при неактивности (idle timeout) -- в коде не найден.
+\end{itemize}
+
+\subsection{Блок 2. Управление компаниями (мультитенанси)}
+\textbf{\done}
+\begin{itemize}
+  \item CRUD компании, деактивация/активация, удаление с подтверждением (\path|apps/companies/views.py|, \path|src/pages/companies/CompanyListPage.tsx|).
+  \item План/лимиты (employees/storage/boards) на уровне модели/API.
+  \item Управление сотрудниками: список, инвайты, деактивация, удаление с переназначением задач (\path|apps/companies/views.py|, \path|src/pages/team/TeamManagePage.tsx|).
+  \item Настройки компании: профиль, рабочие часы, инвайты, лимиты (\path|apps/companies/models.py| \path|CompanySettings|, \path|src/pages/companies/CompanySettingsPage.tsx|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item Лимиты тарифов в UI отображаются, но не в полном ``продуктовом'' виде по всем сценариям.
+  \item Онбординг компании покрыт API/частично UI, но нет полного выделенного пошагового wizard-потока после создания компании.
+  \item Usage-метрики лимитов на фронте частично разнесены по экранам.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\subsection{Блок 3. Система бронирования ресурсов}
+\textbf{\done}
+\begin{itemize}
+  \item Ресурсы, расписания, слоты, участники, описание, подтверждение, ``мои бронирования'' (\path|apps/bookings/**|, \path|src/pages/bookings/**|).
+  \item Управление бронированиями (отмена, перенос, участники, admin/superadmin сценарии).
+  \item Автоматизации: reminders, no-show, conflict-control, лимиты активных бронирований, recurring (\path|apps/bookings/tasks.py|, \path|apps/bookings/views.py|, \path|src/pages/bookings/RecurringBookingsPage.tsx|).
+  \item Управление ресурсами суперадмином, включая bulk create (\path|src/pages/resources/**|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item Режим ``каталог: карточки/на карте'' реализован как близкие, но раздельные UX-потоки.
+  \item Пункт ``появление в календаре'' работает через общую интеграцию календаря, но не как отдельный явный связанный UX-шаг.
+  \item Отдельные продуктовые детали по капсулам/QR в UI неполные.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\subsection{Блок 4. Корпоративный портал (CRM + workspace)}
+\textbf{\done}
+\begin{itemize}
+  \item CRM Kanban почти полностью: доски, колонки, задачи, labels, drag\&drop, checklist, comments, attachments, history, filters, my tasks, archive (\path|apps/crm/**|, \path|src/pages/crm/**|).
+  \item Справочник команды (\path|src/pages/team/TeamDirectoryPage.tsx|).
+  \item Календарь команды (агрегация + day/week/month + фильтры) (\path|src/pages/calendar/CalendarPage.tsx|).
+  \item Файловое хранилище: папки, upload/download, sharing, search/sort, usage/quota (\path|apps/storage/**|, \path|src/pages/storage/FileBrowserPage.tsx|).
+  \item Leave requests + onboarding (\path|apps/hr/**|, \path|src/pages/hr/**|, \path|src/pages/onboarding/**|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item Клик по слоту календаря в действие ``создать бронь/задачу'' неполный.
+  \item Attach ``из хранилища в задачу без дублирования'' поддержан в backend-модели, но frontend-flow не полностью явный.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\subsection{Блок 5. Система доступа и гостевые пропуска}
+\textbf{\done}
+\begin{itemize}
+  \item CRUD пропусков, QR-валидация, revoke/resend, журналы доступа, фильтры, CSV export (\path|apps/access/**|, \path|src/pages/access/**|).
+  \item Веб-валидация для ресепшн (\path|src/pages/access/PassValidatePage.tsx|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item ``Любой сотрудник/гость коворкинга'' -- для guest роль ограничена.
+  \item Отправка QR при создании покрыта не полностью как guaranteed UX-цепочка (основной акцент на resend/detail).
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\subsection{Блок 6. Сервисы здания}
+\textbf{\done}
+\begin{itemize}
+  \item Карта этажей, точки, поиск, floor switching, CRUD точек/этажей (\path|apps/services/**|, \path|src/pages/map/**|).
+  \item Сервисные заявки: типы, статусы, assign, rating, quick cleaning (\path|src/pages/service-requests/**|).
+  \item Объявления БЦ/компаний, read-state (\path|apps/services/models.py| \path|AnnouncementRead|, \path|src/pages/announcements/**|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item Клик по ресурсу карты в прямой booking-flow неполный.
+  \item Статусная визуализация точек (по всем продуктовым ожиданиям) частично.
+  \item \path|MapManagePage| на фронте заглушка; часть управления перенесена в основной map UI.
+  \item Email-рассылка важных объявлений есть в backend, frontend-контролы частичные.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\subsection{Блок 7. Уведомления и аналитика}
+\textbf{\done}
+\begin{itemize}
+  \item Центр уведомлений, read/read-all, preferences, DND (\path|apps/notifications/**|, \path|src/pages/notifications/**|).
+  \item Аналитика superadmin/company admin + CSV export (\path|apps/analytics/views.py|, \path|src/pages/analytics/**|).
+\end{itemize}
+\textbf{\partly}
+\begin{itemize}
+  \item ``Колокольчик + бейдж'' и часть UX-интеграции в глобальном хедере покрыты неполно.
+  \item Heatmap пиковых часов выражена неполно в UI.
+  \item Export в PDF не найден (есть CSV).
+  \item HTML email templates как полноценный шаблонный пакет явно не прослеживаются end-to-end.
+\end{itemize}
+\textbf{\todoitem}
+\begin{itemize}
+  \item Нет.
+\end{itemize}
+
+\section{Ключевые риски и наблюдения}
+\begin{riskbox}
+\begin{itemize}
+  \item \textbf{Единственный явный [NOT DONE]:} idle auto-logout отсутствует -- это gap безопасности и соответствия продукту.
+  \item \textbf{Критичный UX-долг:} ряд backend-фич уже есть, но frontend-слой частично не доведен (password change UI, action history, map manage UX, calendar slot actions).
+  \item \textbf{Роутинг/доступность экранов:} есть реализованные экраны, не полностью подключенные в навигации (например лог доступа).
+  \item \textbf{Аналитика:} функционально сильная, но не закрывает полный продуктовый набор визуализаций и PDF export.
+\end{itemize}
+\end{riskbox}
+
+\section{Рекомендуемые следующие шаги}
+\begin{enumerate}
+  \item Закрыть Block 1 технический долг: \texttt{idle timeout}, полноценный \texttt{change password} UI, единый \texttt{user activity history}.
+  \item Довести frontend-паритет с backend в блоках 5--7: map manage, access log routing, notification bell UX.
+  \item Закрыть аналитические gaps: heatmap и PDF export.
+  \item Для ``PARTIAL'' пунктов ввести Definition of Done ``модель + API + UI + e2e smoke test'' и пройтись итеративно блоками 1$\rightarrow$7.
+  \item После доработок сделать повторный аудит по тому же шаблону и зафиксировать delta-отчет.
+\end{enumerate}
+
+\end{document}

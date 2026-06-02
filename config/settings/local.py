@@ -25,9 +25,8 @@ if DEBUG:
         'rest_framework.renderers.BrowsableAPIRenderer',
     ]
 
-# Email backend for development — reads from .env, falls back to console
-# Email backend for development (configurable via .env)
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+# Email backend for development — uses logging so output appears in Celery worker logs
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'apps.core.email_backends.LoggingEmailBackend')
 
 # Celery — broker and worker run via docker-compose (redis + celery_worker services)
 CELERY_TASK_ALWAYS_EAGER = False

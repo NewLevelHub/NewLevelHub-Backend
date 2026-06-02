@@ -3,6 +3,7 @@ import logging
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
+from django.template.loader import render_to_string
 
 logger = logging.getLogger(__name__)
 
@@ -32,35 +33,46 @@ def send_announcement_emails(announcement_id):
         send_bulk_email.delay(announcement_id)
         return
 
-    recipients = list(User.objects.filter(is_active=True, is_email_verified=True).values_list('email', flat=True))
-    if not recipients:
+    recipients = User.objects.filter(is_active=True, is_email_verified=True)
+    if not recipients.exists():
         return
 
     subject = f'[NewLevelHub] {announcement.title}'
-    message = (
+    plain_message = (
         f'{announcement.title}\n\n'
         f'{announcement.body}\n\n'
         f'— {announcement.author.full_name if announcement.author else "NewLevelHub"}'
     )
+    author_name = announcement.author.full_name if announcement.author else 'NewLevelHub'
 
-    for email in recipients:
+    html_message = render_to_string('emails/announcement.html', {
+        'announcement_title': announcement.title,
+        'announcement_body': announcement.body,
+        'author_name': author_name,
+        'frontend_url': settings.FRONTEND_URL,
+    })
+
+    sent_count = 0
+    for user in recipients.iterator(chunk_size=100):
         try:
             send_mail(
                 subject=subject,
-                message=message,
+                message=plain_message,
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
+                recipient_list=[user.email],
+                html_message=html_message,
                 fail_silently=True,
             )
+            sent_count += 1
         except Exception as exc:
             logger.error(
                 'send_announcement_emails: failed to send to %s (announcement_id=%s): %s',
-                email, announcement_id, exc,
+                user.email, announcement_id, exc,
             )
 
     logger.info(
         'send_announcement_emails: sent to %d recipients for announcement_id=%s',
-        len(recipients), announcement_id,
+        sent_count, announcement_id,
     )
 
 

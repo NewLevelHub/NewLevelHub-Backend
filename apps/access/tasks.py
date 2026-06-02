@@ -1,9 +1,11 @@
 from datetime import timedelta
+from email.mime.image import MIMEImage
 from io import BytesIO
 
 import qrcode
 from celery import shared_task
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 from apps.notifications.models import Notification
@@ -34,8 +36,13 @@ def send_guest_pass_email(guest_pass_id):
         f'Created by: {guest_pass.created_by.full_name}\n\n'
         f'Please present the attached QR code at reception.'
     )
-    email = EmailMessage(subject=subject, body=body, to=[guest_pass.guest_email])
-
+    html_body = render_to_string('emails/guest_pass.html', {
+        'guest_name': guest_pass.guest_name,
+        'visit_purpose': guest_pass.visit_purpose,
+        'valid_from': guest_pass.valid_from,
+        'valid_until': guest_pass.valid_until,
+        'created_by_name': guest_pass.created_by.full_name,
+    })
     # Build QR PNG in-memory to avoid worker dependency on shared media volume.
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(str(guest_pass.qr_code))
@@ -43,8 +50,17 @@ def send_guest_pass_email(guest_pass_id):
     qr_image = qr.make_image(fill_color='black', back_color='white')
     buffer = BytesIO()
     qr_image.save(buffer, format='PNG')
-    buffer.seek(0)
-    email.attach(f'guest-pass-{guest_pass.qr_code}.png', buffer.read(), 'image/png')
+    qr_bytes = buffer.getvalue()
+
+    email = EmailMultiAlternatives(subject=subject, body=body, to=[guest_pass.guest_email])
+    email.mixed_subtype = 'related'
+    email.attach_alternative(html_body, 'text/html')
+
+    # Embed QR inline so HTML can reference it via cid:qr_code
+    mime_img = MIMEImage(qr_bytes)
+    mime_img.add_header('Content-ID', '<qr_code>')
+    mime_img.add_header('Content-Disposition', 'inline', filename=f'guest-pass-{guest_pass.qr_code}.png')
+    email.attach(mime_img)
 
     email.send(fail_silently=True)
 

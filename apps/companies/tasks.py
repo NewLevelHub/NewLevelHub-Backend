@@ -1,6 +1,7 @@
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
+from django.template.loader import render_to_string
 
 from .models import Invitation
 
@@ -27,6 +28,13 @@ def send_invitation_email(invitation_id):
             f'в роли {invitation.role}.'
         )
 
+    html_message = render_to_string('emails/company_invitation.html', {
+        'inviter_name': inviter_name,
+        'role': invitation.role,
+        'invite_url': invite_url,
+        'target': invitation.company.name if invitation.company_id else None,
+        'is_company_invite': bool(invitation.company_id),
+    })
     send_mail(
         subject=subject,
         message=(
@@ -37,6 +45,7 @@ def send_invitation_email(invitation_id):
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[invitation.email],
+        html_message=html_message,
         fail_silently=False,
     )
 

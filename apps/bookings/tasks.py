@@ -5,6 +5,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 from apps.core.exceptions import LocalizedError
@@ -67,6 +68,13 @@ def send_booking_reminders():
 
         if email_enabled and user.email:
             try:
+                html_message = render_to_string('emails/booking_reminder.html', {
+                    'recipient_name': user.full_name,
+                    'resource_name': resource_name,
+                    'start_time': f'{start_local:%H:%M}',
+                    'reminder_minutes': reminder_minutes,
+                    'frontend_url': settings.FRONTEND_URL,
+                })
                 send_mail(
                     subject=f'Напоминание о бронировании: {resource_name}',
                     message=(
@@ -77,6 +85,7 @@ def send_booking_reminders():
                     ),
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[user.email],
+                    html_message=html_message,
                     fail_silently=True,
                 )
             except Exception:

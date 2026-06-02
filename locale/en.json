@@ -61,6 +61,7 @@
   "booking.datetime_must_be_timezone_aware": "Date and time must include timezone information (e.g. 2025-04-16T10:00:00+05:00).",
   "booking.start_time_must_be_future": "Booking start time must be in the future.",
   "booking.recurring_slot_conflict": "An active recurring series already exists for this slot.",
+  "booking.recurring_no_creatable_dates": "No bookable dates in the selected range: all slots are already in the past. Extend repeat-until to the next week or choose a later time.",
   "crm.board_unarchive_limit": "Cannot unarchive: board limit reached for your plan.",
   "crm.board_access_denied": "You do not have access to this board.",
   "crm.label_color_invalid": "Must be a valid 6-digit HEX color, e.g. #ff00aa.",

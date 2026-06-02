@@ -5,7 +5,7 @@ from datetime import timedelta
 from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Prefetch
-from django.http import StreamingHttpResponse
+from django.http import FileResponse, Http404, StreamingHttpResponse
 from django.utils import timezone
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -17,6 +17,7 @@ from drf_spectacular.utils import (
 import rest_framework.fields as fields
 from rest_framework import renderers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from apps.core.exceptions import LocalizedError
@@ -28,6 +29,7 @@ from .filters import AccessLogFilter, GuestPassFilter
 from .models import AccessLog, GuestPass
 from . import tasks
 from .tasks import notify_pass_creator_on_entry
+from .qr_image import generate_guest_pass_qr_image
 from .serializers import (
     AccessLogSerializer, GuestPassSerializer, GuestPassCreateSerializer, GuestPassValidateSerializer,
     GuestPassValidationLogSerializer,
@@ -260,6 +262,44 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
         logs = guest_pass.access_logs.select_related('checked_by').order_by('-created_at')
         serializer = GuestPassValidationLogSerializer(logs, many=True)
         return Response({'total': guest_pass.times_used, 'results': serializer.data})
+
+
+@extend_schema(
+    tags=['Access'],
+    summary='Get guest pass QR image (public, for email clients)',
+    responses={
+        200: OpenApiResponse(description='PNG image'),
+        404: OpenApiResponse(description='Pass or image not found'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def guest_pass_qr_image(request, qr_code):
+    """
+    Serve QR PNG by pass UUID.
+
+    Public endpoint so Gmail/Outlook can load <img src="https://..."> without cid: attachments.
+    """
+    try:
+        guest_pass = GuestPass.objects.get(qr_code=qr_code)
+    except GuestPass.DoesNotExist:
+        raise Http404
+
+    if guest_pass.status in ('revoked', 'expired'):
+        raise Http404
+
+    if not guest_pass.qr_image:
+        generate_guest_pass_qr_image(guest_pass)
+
+    try:
+        image_file = guest_pass.qr_image.open('rb')
+    except FileNotFoundError:
+        generate_guest_pass_qr_image(guest_pass)
+        image_file = guest_pass.qr_image.open('rb')
+
+    response = FileResponse(image_file, content_type='image/png')
+    response['Cache-Control'] = 'private, max-age=3600'
+    return response
 
 
 @extend_schema(

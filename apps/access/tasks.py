@@ -1,22 +1,16 @@
 from datetime import timedelta
-from io import BytesIO
 
-import qrcode
 from celery import shared_task
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from apps.core.email_utils import (
-    GUEST_PASS_QR_CID,
-    attach_html_with_inline_image,
-    build_inline_png_attachment,
-    png_to_data_uri,
-)
+from apps.core.email_utils import guest_pass_qr_email_image_url
 from apps.notifications.models import Notification
 from apps.notifications.utils import create_notification
 
 from .models import GuestPass
+from .qr_image import generate_guest_pass_qr_image
 
 
 # NOTE: In-app guest_validated notification is created synchronously in validate_qr;
@@ -31,6 +25,9 @@ def send_guest_pass_email(guest_pass_id):
     except GuestPass.DoesNotExist:
         return
 
+    if not guest_pass.qr_image:
+        generate_guest_pass_qr_image(guest_pass)
+
     subject = 'Your NewLevelHub guest pass'
     body = (
         f'Hello {guest_pass.guest_name},\n\n'
@@ -39,36 +36,20 @@ def send_guest_pass_email(guest_pass_id):
         f'Valid from: {guest_pass.valid_from}\n'
         f'Valid until: {guest_pass.valid_until}\n'
         f'Created by: {guest_pass.created_by.full_name}\n\n'
-        f'Please present the attached QR code at reception.'
+        f'Please present the QR code at reception.'
     )
-    # Build QR PNG in-memory to avoid worker dependency on shared media volume.
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(str(guest_pass.qr_code))
-    qr.make(fit=True)
-    qr_image = qr.make_image(fill_color='black', back_color='white')
-    if qr_image.mode != 'RGB':
-        qr_image = qr_image.convert('RGB')
-    buffer = BytesIO()
-    qr_image.save(buffer, format='PNG')
-    qr_bytes = buffer.getvalue()
-
+    qr_image_url = guest_pass_qr_email_image_url(guest_pass.qr_code)
     html_body = render_to_string('emails/guest_pass.html', {
         'guest_name': guest_pass.guest_name,
         'visit_purpose': guest_pass.visit_purpose,
         'valid_from': guest_pass.valid_from,
         'valid_until': guest_pass.valid_until,
         'created_by_name': guest_pass.created_by.full_name,
-        'qr_cid': GUEST_PASS_QR_CID,
-        'qr_data_uri': png_to_data_uri(qr_bytes),
+        'qr_image_url': qr_image_url,
     })
 
     email = EmailMultiAlternatives(subject=subject, body=body, to=[guest_pass.guest_email])
-    mime_img = build_inline_png_attachment(
-        qr_bytes,
-        content_id=GUEST_PASS_QR_CID,
-        filename=f'guest-pass-{guest_pass.qr_code}.png',
-    )
-    attach_html_with_inline_image(email, html_body, mime_img)
+    email.attach_alternative(html_body, 'text/html')
     email.send(fail_silently=True)
 
 

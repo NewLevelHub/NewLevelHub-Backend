@@ -3,7 +3,8 @@
 #   docker compose --project-name <PR_SLUG> -f docker-compose.<PR_SLUG>.yml up -d
 #
 # Required env vars at runtime: PR_SLUG, PREVIEW_DB_NAME, BACKEND_IMAGE, PREVIEW_PORT
-# Optional: FRONTEND_URL (if not set, defaults to backend preview domain)
+# Optional: FRONTEND_URL (CI may override with matched fe-* preview URL)
+# BACKEND_URL is always https://${PR_SLUG}.staging.newlevelhub.kz (API + email QR images)
 # Base secrets loaded from .env.staging on the server.
 #
 # Postgres is NOT included here — all PRs share the single nlh_staging_postgres instance
@@ -39,6 +40,7 @@ services:
       CORS_ALLOWED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz"
       CSRF_TRUSTED_ORIGINS: "https://${PR_SLUG}.staging.newlevelhub.kz,https://*.staging.newlevelhub.kz"
       FRONTEND_URL: "${FRONTEND_URL:-https://${PR_SLUG}.staging.newlevelhub.kz}"
+      BACKEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       SECURE_SSL_REDIRECT: "False"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
@@ -79,6 +81,7 @@ services:
       POSTGRES_HOST: nlh_staging_postgres
       ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz,localhost,127.0.0.1"
       FRONTEND_URL: "${FRONTEND_URL:-https://${PR_SLUG}.staging.newlevelhub.kz}"
+      BACKEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
     depends_on:
@@ -101,6 +104,7 @@ services:
       POSTGRES_HOST: nlh_staging_postgres
       ALLOWED_HOSTS: "${PR_SLUG}.staging.newlevelhub.kz,localhost,127.0.0.1"
       FRONTEND_URL: "${FRONTEND_URL:-https://${PR_SLUG}.staging.newlevelhub.kz}"
+      BACKEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
     depends_on:

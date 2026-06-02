@@ -282,6 +282,8 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+# Public API origin for email image/link URLs (Celery). Example: https://api.staging.newlevelhub.kz
+BACKEND_URL = (os.getenv('BACKEND_URL') or '').strip() or FRONTEND_URL
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))

@@ -377,6 +377,42 @@ class TestRecurringBookingCreateAC:
         ]
         assert series_dates == [monday]
 
+    def test_create_rejected_when_only_occurrence_is_in_the_past(
+        self, api_client, employee, desk_resource
+    ):
+        from unittest.mock import patch
+        from zoneinfo import ZoneInfo
+
+        # Monday 12:00 — 10:00–11:00 already passed; repeat_until is the same Monday only
+        fixed_now = timezone.make_aware(
+            datetime(2026, 6, 8, 12, 0, 0),
+            ZoneInfo('Asia/Almaty'),
+        )
+        same_monday = date(2026, 6, 8)
+
+        api_client.force_authenticate(user=employee)
+        with patch('django.utils.timezone.now', return_value=fixed_now):
+            response = api_client.post(
+                RECURRING_URL,
+                {
+                    'resource_id': desk_resource.id,
+                    'day_of_week': 0,
+                    'start_time': '10:00',
+                    'end_time': '11:00',
+                    'repeat_until': same_monday.isoformat(),
+                },
+                format='json',
+            )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST, response.json()
+        assert RecurringBooking.objects.filter(
+            resource=desk_resource,
+            day_of_week=0,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            valid_until=same_monday,
+        ).count() == 0
+
     def test_guest_cannot_create_recurring_booking(self, api_client, guest_user, desk_resource):
         monday = _next_weekday_date(0)
         api_client.force_authenticate(user=guest_user)

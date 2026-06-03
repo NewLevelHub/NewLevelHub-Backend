@@ -29,7 +29,7 @@ from apps.companies.models import Company
 from apps.crm.models import Board, Column, Task
 from apps.hr.models import LeaveRequest
 from apps.notifications.models import Notification
-from apps.services.models import Announcement, Floor, MapPoint
+from apps.services.models import Announcement, Floor
 from apps.users.models import User
 
 DASHBOARD_URL = '/api/v1/dashboard/'
@@ -357,8 +357,15 @@ class TestSuperadminDashboard:
 
     def test_floor_load_structure(self, api_client, superadmin):
         floor_obj = Floor.objects.create(number=999, name='Тестовый этаж')
-        resource_obj = Resource.objects.create(name='Desk Floor 999', resource_type='desk', is_active=True)
-        MapPoint.objects.create(floor=floor_obj, resource=resource_obj, point_type='desk', x=10.0, y=20.0)
+        # Resource linked via floor_fk — the path used by both the floor list
+        # API and the dashboard floor_load widget after unification.
+        Resource.objects.create(
+            name='Desk Floor 999',
+            resource_type='desk',
+            is_active=True,
+            floor_fk=floor_obj,
+            floor=floor_obj.number,
+        )
 
         api_client.force_authenticate(user=superadmin)
         resp = api_client.get(DASHBOARD_URL)
@@ -370,7 +377,10 @@ class TestSuperadminDashboard:
         matching = [item for item in floor_load if item['floor_number'] == 999]
         assert len(matching) == 1, f"Expected floor 999 once in floor_load, got: {floor_load}"
         item = matching[0]
+        assert item['floor_id'] == floor_obj.id
         assert item['floor_name'] == 'Тестовый этаж'
+        assert item['total'] == 1
+        assert item['occupied'] == 0
         assert item['occupancy_pct'] == 0
 
 

@@ -19,7 +19,8 @@ from apps.core.permissions import IsCompanyMember
 from apps.crm.models import Task
 from apps.hr.models import LeaveRequest
 from apps.notifications.models import Notification
-from apps.services.models import Announcement, Floor, MapPoint, ServiceRequest
+from apps.services.models import Announcement, Floor, ServiceRequest
+from apps.services.utils import annotate_floor_occupancy
 from apps.users.models import User
 
 
@@ -196,42 +197,25 @@ def _serialize_announcement(ann):
 
 
 def _floor_load():
-    now = timezone.now()
-    floors = Floor.objects.order_by('number')
-    result = []
-    for floor in floors:
-        resource_ids = list(
-            MapPoint.objects
-            .filter(floor=floor, resource__isnull=False, resource__is_active=True)
-            .values_list('resource_id', flat=True)
-            .distinct()
-        )
-        total = len(resource_ids)
-        if total == 0:
-            result.append({
-                'floor_number': floor.number,
-                'floor_name': floor.name or f'Этаж {floor.number}',
-                'occupancy_pct': 0,
-            })
-            continue
-        occupied = (
-            Booking.objects
-            .filter(
-                resource_id__in=resource_ids,
-                status='confirmed',
-                start_time__lte=now,
-                end_time__gte=now,
-            )
-            .values('resource_id')
-            .distinct()
-            .count()
-        )
-        result.append({
+    """
+    Return per-floor occupancy stats for the superadmin dashboard.
+
+    Uses annotate_floor_occupancy() — the same function used by FloorViewSet —
+    so the dashboard floor_load and the floor list API occupancy_pct are always
+    identical, both based on the Resource.floor_fk FK relationship.
+    """
+    floors = annotate_floor_occupancy(Floor.objects.order_by('number'))
+    return [
+        {
+            'floor_id': floor.id,
             'floor_number': floor.number,
             'floor_name': floor.name or f'Этаж {floor.number}',
-            'occupancy_pct': round(occupied / total * 100),
-        })
-    return result
+            'total': floor.total_resources,
+            'occupied': floor.booked_now,
+            'occupancy_pct': floor.occupancy_pct,
+        }
+        for floor in floors
+    ]
 
 
 def _superadmin_widgets():

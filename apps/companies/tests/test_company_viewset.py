@@ -379,12 +379,12 @@ class TestCompanyUpdate:
 
     def test_company_admin_can_patch_allowed_fields(self, api_client, company_admin, company_a):
         auth(api_client, company_admin)
-        payload = {'name': 'Admin Renamed', 'contact_email': 'new@alpha.com'}
+        payload = {'name': 'Admin Renamed', 'description': 'Updated description'}
         response = api_client.patch(company_detail_url(company_a.id), payload, format='json')
         assert response.status_code == status.HTTP_200_OK
         company_a.refresh_from_db()
         assert company_a.name == 'Admin Renamed'
-        assert company_a.contact_email == 'new@alpha.com'
+        assert company_a.description == 'Updated description'
 
     def test_company_admin_cannot_change_plan(self, api_client, company_admin, company_a):
         """plan is not in CompanyAdminUpdateSerializer — it should be silently ignored."""

@@ -211,10 +211,11 @@ class MapPointSearchSerializer(serializers.ModelSerializer):
 class FloorListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views — omits map_points."""
     plan_image_url = serializers.SerializerMethodField()
+    occupancy_pct = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Floor
-        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'created_at', 'updated_at']
+        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'occupancy_pct', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_plan_image_url(self, obj):

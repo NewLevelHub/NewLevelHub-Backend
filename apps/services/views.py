@@ -27,6 +27,7 @@ from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
 
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
+from .utils import annotate_floor_occupancy
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     MapPointSearchSerializer,
@@ -328,16 +329,21 @@ class FloorViewSet(viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     pagination_class = FloorsListPagination
 
+    def _annotate_occupancy(self, qs):
+        """Annotate each floor with occupancy_pct (integer, 0–100) in a single query."""
+        return annotate_floor_occupancy(qs)
+
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
         if user.role == 'superadmin':
-            return qs
+            return self._annotate_occupancy(qs)
         if user.company_id:
             # Single OR query avoids subtle bugs from queryset-| unions with prefetch/joins.
-            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
+            filtered = qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
+            return self._annotate_occupancy(filtered)
         # guest or user without company — show only global floors
-        return qs.filter(company__isnull=True)
+        return self._annotate_occupancy(qs.filter(company__isnull=True))
 
     def perform_create(self, serializer):
         # Floors are global; superadmin creates them without a company.

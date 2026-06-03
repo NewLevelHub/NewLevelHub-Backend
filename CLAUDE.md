@@ -267,3 +267,5 @@ Existing tests: `apps/core/tests/test_permissions.py` — uses `unittest.mock` +
 - WIP limits in CRM columns
 - Recurring bookings logic
 - `CompanyViewSet.deactivate` action — deactivate all company members on company deactivation
+
+test

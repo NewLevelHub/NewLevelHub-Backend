@@ -125,6 +125,16 @@ if USE_S3:
         AWS_S3_ADDRESSING_STYLE = 'path'
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
+    # When MINIO_PUBLIC_URL is set (e.g. staging), use it for browser-facing URLs
+    # instead of the internal endpoint, so presigned URLs aren't needed.
+    _minio_public = (os.getenv('MINIO_PUBLIC_URL') or '').strip()
+    if _minio_public:
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(_minio_public)
+        # Include bucket name so path-style MinIO URLs resolve correctly.
+        AWS_S3_CUSTOM_DOMAIN = f"{_p.netloc}/{AWS_STORAGE_BUCKET_NAME}"
+        AWS_S3_URL_PROTOCOL = _p.scheme + ':'
+        AWS_QUERYSTRING_AUTH = False
     STORAGES = {
         'default': {
             'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
@@ -282,6 +292,8 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@newlevelhub.kz')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+# Public API origin for email image/link URLs (Celery). Example: https://api.staging.newlevelhub.kz
+BACKEND_URL = (os.getenv('BACKEND_URL') or '').strip() or FRONTEND_URL
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))

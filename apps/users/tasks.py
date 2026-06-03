@@ -36,6 +36,10 @@ def send_verification_email(user_id, token=None):
     token_value = str(token) if token else str(create_email_verification_token(user).token)
     verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/verify-email?{urlencode({'token': token_value})}"
 
+    html_message = render_to_string('emails/email_verification.html', {
+        'recipient_name': user.full_name,
+        'verify_link': verify_link,
+    })
     send_mail(
         subject='Подтвердите ваш email для New Level Hub',
         message=(
@@ -46,6 +50,7 @@ def send_verification_email(user_id, token=None):
         ),
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[user.email],
+        html_message=html_message,
         fail_silently=False,
     )
 

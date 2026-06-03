@@ -1,13 +1,11 @@
 from rest_framework import serializers
 from datetime import timedelta
-from io import BytesIO
 import logging
-from django.core.files.base import ContentFile
 from django.utils import timezone
-import qrcode
 
 from apps.core.exceptions import raise_validation_error
 from .models import GuestPass, AccessLog
+from .qr_image import generate_guest_pass_qr_image
 from . import tasks
 from apps.users.models import User
 
@@ -70,17 +68,6 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
         return attrs
 
-    def _generate_qr_image(self, guest_pass):
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(str(guest_pass.qr_code))
-        qr.make(fit=True)
-        image = qr.make_image(fill_color='black', back_color='white')
-        image_buffer = BytesIO()
-        image.save(image_buffer, format='PNG')
-        image_buffer.seek(0)
-        image_name = f'{guest_pass.qr_code}.png'
-        guest_pass.qr_image.save(image_name, ContentFile(image_buffer.read()), save=False)
-
     def create(self, validated_data):
         user = self.context['request'].user
         is_single_use = validated_data.pop('is_single_use')
@@ -89,8 +76,7 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         validated_data['company'] = user.company
         guest_pass = super().create(validated_data)
 
-        self._generate_qr_image(guest_pass)
-        guest_pass.save(update_fields=['qr_image'])
+        generate_guest_pass_qr_image(guest_pass)
 
         try:
             tasks.send_guest_pass_email.delay(guest_pass.id)

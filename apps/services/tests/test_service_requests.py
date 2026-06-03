@@ -445,9 +445,22 @@ def test_legacy_cleaning_endpoint_works(api_client, employee, floor):
 
 # ── PATCH /api/v1/services/requests/{id}/status/ ─────────────────────
 
+@pytest.fixture
+def status_manager(db):
+    """Service manager fixture for status-change tests (building-wide, no company)."""
+    return User.objects.create_user(
+        email='status-manager@test.com',
+        password='pass',
+        first_name='Status',
+        last_name='Manager',
+        role='service_manager',
+        is_email_verified=True,
+    )
+
+
 @pytest.mark.django_db
-def test_status_update_new_to_accepted(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_status_update_new_to_accepted(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
     assert response.status_code == status.HTTP_200_OK
@@ -455,8 +468,8 @@ def test_status_update_new_to_accepted(api_client, admin, service_request):
 
 
 @pytest.mark.django_db
-def test_status_update_full_lifecycle(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_status_update_full_lifecycle(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     base = f'{BASE_URL}{service_request.pk}/status/'
     for new_status in ('accepted', 'in_progress', 'completed'):
         resp = api_client.patch(base, {'status': new_status}, format='json')
@@ -465,25 +478,25 @@ def test_status_update_full_lifecycle(api_client, admin, service_request):
 
 
 @pytest.mark.django_db
-def test_status_update_invalid_transition(api_client, admin, service_request):
+def test_status_update_invalid_transition(api_client, status_manager, service_request):
     # new → in_progress is not valid (must go new → accepted first)
-    auth(api_client, admin)
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
     response = api_client.patch(url, {'status': 'in_progress'}, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 @pytest.mark.django_db
-def test_status_update_without_status_returns_400(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_status_update_without_status_returns_400(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
     response = api_client.patch(url, {}, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 @pytest.mark.django_db
-def test_status_update_sends_notification(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_status_update_sends_notification(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
     assert response.status_code == status.HTTP_200_OK
@@ -495,9 +508,9 @@ def test_status_update_sends_notification(api_client, admin, service_request):
 
 
 @pytest.mark.django_db
-def test_status_update_sets_completed_at(api_client, admin, service_request):
+def test_status_update_sets_completed_at(api_client, status_manager, service_request):
     # advance from new → accepted → in_progress → completed
-    auth(api_client, admin)
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
     for s in ('accepted', 'in_progress', 'completed'):
         api_client.patch(url, {'status': s}, format='json')
@@ -508,6 +521,17 @@ def test_status_update_sets_completed_at(api_client, admin, service_request):
 @pytest.mark.django_db
 def test_status_update_employee_forbidden(api_client, employee, service_request):
     auth(api_client, employee)
+    url = f'{BASE_URL}{service_request.pk}/status/'
+    response = api_client.patch(url, {'status': 'accepted'}, format='json')
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_status_update_company_admin_forbidden(api_client, admin, service_request):
+    # company_admin can manage assignments but is intentionally blocked from
+    # advancing status — ownership of the workflow stays with superadmin /
+    # service_manager (see IsServiceRequestStatusManager).
+    auth(api_client, admin)
     url = f'{BASE_URL}{service_request.pk}/status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
     assert response.status_code == status.HTTP_403_FORBIDDEN
@@ -528,37 +552,11 @@ def test_status_update_superadmin_can_update(api_client, superadmin, service_req
     assert response.status_code == status.HTTP_200_OK
 
 
-@pytest.mark.django_db
-def test_status_update_admin_from_other_company_gets_404(
-    api_client, other_company, employee, floor
-):
-    outsider_admin = User.objects.create_user(
-        email='outsider-admin@test.com',
-        password='pass',
-        first_name='Outside',
-        last_name='Admin',
-        role='company_admin',
-        company=other_company,
-        is_email_verified=True,
-    )
-    owned_request = ServiceRequest.objects.create(
-        created_by=employee,
-        company=employee.company,
-        request_type='repair',
-        urgency='medium',
-        floor=floor,
-    )
-    auth(api_client, outsider_admin)
-    url = f'{BASE_URL}{owned_request.pk}/status/'
-    response = api_client.patch(url, {'status': 'accepted'}, format='json')
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-
-
 # ── PATCH /api/v1/services/requests/{id}/update-status/ (legacy) ─────
 
 @pytest.mark.django_db
-def test_legacy_status_update_new_to_accepted(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_legacy_status_update_new_to_accepted(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/update-status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
     assert response.status_code == status.HTTP_200_OK
@@ -569,8 +567,8 @@ def test_legacy_status_update_new_to_accepted(api_client, admin, service_request
 
 
 @pytest.mark.django_db
-def test_legacy_status_update_invalid_transition(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_legacy_status_update_invalid_transition(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/update-status/'
     response = api_client.patch(url, {'status': 'in_progress'}, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -585,6 +583,14 @@ def test_legacy_status_update_employee_forbidden(api_client, employee, service_r
 
 
 @pytest.mark.django_db
+def test_legacy_status_update_company_admin_forbidden(api_client, admin, service_request):
+    auth(api_client, admin)
+    url = f'{BASE_URL}{service_request.pk}/update-status/'
+    response = api_client.patch(url, {'status': 'accepted'}, format='json')
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
 def test_legacy_status_update_unauthenticated(api_client, service_request):
     url = f'{BASE_URL}{service_request.pk}/update-status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
@@ -592,8 +598,8 @@ def test_legacy_status_update_unauthenticated(api_client, service_request):
 
 
 @pytest.mark.django_db
-def test_legacy_status_update_sends_notification(api_client, admin, service_request):
-    auth(api_client, admin)
+def test_legacy_status_update_sends_notification(api_client, status_manager, service_request):
+    auth(api_client, status_manager)
     url = f'{BASE_URL}{service_request.pk}/update-status/'
     response = api_client.patch(url, {'status': 'accepted'}, format='json')
     assert response.status_code == status.HTTP_200_OK
@@ -668,3 +674,133 @@ def test_rate_returns_full_request_object(api_client, employee, completed_reques
     assert data['rating'] == 5
     assert 'photo' in data
     assert 'status' in data
+
+
+# ── DEV-222: service_manager role ────────────────────────────────────
+
+@pytest.fixture
+def service_manager(db):
+    """Building-wide service manager — no company assignment."""
+    return User.objects.create_user(
+        email='svc-manager@test.com',
+        password='pass',
+        first_name='Service',
+        last_name='Manager',
+        role='service_manager',
+        is_email_verified=True,
+    )
+
+
+@pytest.mark.django_db
+def test_service_manager_sees_requests_across_all_companies(
+    api_client, service_manager, employee, other_employee, company, other_company,
+):
+    own = ServiceRequest.objects.create(
+        created_by=employee, company=company, request_type='repair', urgency='low',
+    )
+    foreign = ServiceRequest.objects.create(
+        created_by=other_employee, company=other_company, request_type='cleaning', urgency='low',
+    )
+    auth(api_client, service_manager)
+    response = api_client.get(BASE_URL)
+    assert response.status_code == status.HTTP_200_OK
+    ids = {r['id'] for r in response.json()['results']}
+    assert own.pk in ids
+    assert foreign.pk in ids
+
+
+@pytest.mark.django_db
+def test_service_manager_can_update_status_for_any_company(
+    api_client, service_manager, service_request,
+):
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/status/'
+    response = api_client.patch(url, {'status': 'accepted'}, format='json')
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()['status'] == 'accepted'
+
+
+@pytest.mark.django_db
+def test_service_manager_can_use_legacy_status_endpoint(
+    api_client, service_manager, service_request,
+):
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/update-status/'
+    response = api_client.patch(url, {'status': 'accepted'}, format='json')
+    assert response.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_service_manager_can_assign_executor(
+    api_client, service_manager, employee, service_request,
+):
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': employee.pk}, format='json')
+    assert response.status_code == status.HTTP_200_OK
+    service_request.refresh_from_db()
+    assert service_request.assigned_to_id == employee.pk
+    assert response.json()['assigned_to'] == employee.pk
+
+
+@pytest.mark.django_db
+def test_company_admin_cannot_assign_executor(api_client, admin, employee, service_request):
+    # company_admin is intentionally excluded from all service-request management
+    # actions (status + assign). Only superadmin / service_manager may assign.
+    auth(api_client, admin)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': employee.pk}, format='json')
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_assign_null_clears_executor(api_client, service_manager, employee, service_request):
+    service_request.assigned_to = employee
+    service_request.save(update_fields=['assigned_to'])
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': None}, format='json')
+    assert response.status_code == status.HTTP_200_OK
+    service_request.refresh_from_db()
+    assert service_request.assigned_to_id is None
+
+
+@pytest.mark.django_db
+def test_assign_rejects_guest_assignee(api_client, service_manager, guest, service_request):
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': guest.pk}, format='json')
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_assign_rejects_inactive_assignee(api_client, service_manager, employee, service_request):
+    employee.is_active = False
+    employee.save(update_fields=['is_active'])
+    auth(api_client, service_manager)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': employee.pk}, format='json')
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_assign_employee_forbidden(api_client, employee, service_request):
+    auth(api_client, employee)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': employee.pk}, format='json')
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_assign_unauthenticated_returns_401(api_client, service_request):
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': 1}, format='json')
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+def test_assign_guest_forbidden(api_client, guest, service_request):
+    auth(api_client, guest)
+    url = f'{BASE_URL}{service_request.pk}/assign/'
+    response = api_client.patch(url, {'assigned_to': guest.pk}, format='json')
+    assert response.status_code == status.HTTP_403_FORBIDDEN

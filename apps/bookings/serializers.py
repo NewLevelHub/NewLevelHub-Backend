@@ -870,6 +870,16 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         if has_duplicate_series:
             raise_validation_error('detail', 'booking.recurring_slot_conflict')
 
+        from apps.bookings.tasks import recurring_has_creatable_occurrence
+
+        if not recurring_has_creatable_occurrence(
+            day_of_week=attrs['day_of_week'],
+            end_time=attrs['end_time'],
+            repeat_until=attrs['repeat_until'],
+            base_date=today,
+        ):
+            raise_validation_error('repeat_until', 'booking.recurring_no_creatable_dates')
+
         attrs['resource'] = resource
         return attrs
 

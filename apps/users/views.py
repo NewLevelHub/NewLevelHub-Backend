@@ -6,7 +6,7 @@ import uuid
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, parser_classes, throttle_classes
 from rest_framework.exceptions import ValidationError
-from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.generics import ListAPIView, RetrieveDestroyAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -16,7 +16,13 @@ from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, inline_serializer
+from drf_spectacular.utils import (
+    extend_schema,
+    extend_schema_view,
+    OpenApiParameter,
+    OpenApiResponse,
+    inline_serializer,
+)
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import rest_framework.fields as fields
@@ -182,7 +188,7 @@ def register_by_invite(request):
 
         return Response(
             {
-                'company_name': invitation.company.name,
+                'company_name': invitation.company.name if invitation.company_id else None,
                 'email': invitation.email,
                 'role': invitation.role,
                 'is_guest_upgrade': is_guest_upgrade,
@@ -623,17 +629,31 @@ def impersonate_user(request, id):
     })
 
 
-@extend_schema(
-    tags=['Users'],
-    summary='Get user detail by id (superadmin)',
-    responses={
-        200: UserDetailSerializer,
-        401: OpenApiResponse(description='Not authenticated'),
-        403: OpenApiResponse(description='Superadmin only'),
-        404: OpenApiResponse(description='User not found'),
-    },
+@extend_schema_view(
+    get=extend_schema(
+        tags=['Users'],
+        summary='Get user detail by id (superadmin)',
+        responses={
+            200: UserDetailSerializer,
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='User not found'),
+        },
+    ),
+    delete=extend_schema(
+        tags=['Users'],
+        summary='Delete user by id (superadmin)',
+        description='Permanently deletes the user. Cannot delete self or another superadmin.',
+        responses={
+            204: OpenApiResponse(description='User deleted'),
+            400: OpenApiResponse(description='Cannot delete self or another superadmin'),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Superadmin only'),
+            404: OpenApiResponse(description='User not found'),
+        },
+    ),
 )
-class UserDetailView(RetrieveAPIView):
+class UserDetailView(RetrieveDestroyAPIView):
     serializer_class = UserDetailSerializer
     permission_classes = [IsSuperAdmin]
     lookup_field = 'pk'
@@ -643,6 +663,14 @@ class UserDetailView(RetrieveAPIView):
             bookings_count=Count('bookings', distinct=True),
             tasks_count=Count('assigned_tasks', distinct=True),
         )
+
+    def perform_destroy(self, instance):
+        if instance.id == self.request.user.id:
+            raise ValidationError({'detail': 'Cannot delete yourself'})
+        if instance.role == 'superadmin':
+            raise ValidationError({'detail': 'Cannot delete another superadmin'})
+        _blacklist_user_refresh_tokens(instance)
+        instance.delete()
 
 
 @extend_schema(

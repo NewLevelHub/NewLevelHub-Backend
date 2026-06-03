@@ -5,6 +5,7 @@ from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 from apps.core.exceptions import LocalizedError
@@ -67,6 +68,13 @@ def send_booking_reminders():
 
         if email_enabled and user.email:
             try:
+                html_message = render_to_string('emails/booking_reminder.html', {
+                    'recipient_name': user.full_name,
+                    'resource_name': resource_name,
+                    'start_time': f'{start_local:%H:%M}',
+                    'reminder_minutes': reminder_minutes,
+                    'frontend_url': settings.FRONTEND_URL,
+                })
                 send_mail(
                     subject=f'Напоминание о бронировании: {resource_name}',
                     message=(
@@ -77,6 +85,7 @@ def send_booking_reminders():
                     ),
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     recipient_list=[user.email],
+                    html_message=html_message,
                     fail_silently=True,
                 )
             except Exception:
@@ -193,6 +202,29 @@ def generate_recurring_bookings():
         recurring_booking.save(update_fields=['valid_until', 'updated_at'])
 
 
+def first_matching_weekday(*, day_of_week, base_date):
+    """First calendar date for weekday on or after base_date (Monday=0 … Sunday=6)."""
+    days_ahead = (day_of_week - base_date.weekday()) % 7
+    return base_date + timedelta(days=days_ahead)
+
+
+def recurring_has_creatable_occurrence(*, day_of_week, end_time, repeat_until, base_date=None):
+    """True if at least one occurrence in [valid_from, repeat_until] ends in the future."""
+    base_date = base_date or timezone.localdate()
+    valid_from = first_matching_weekday(day_of_week=day_of_week, base_date=base_date)
+    if valid_from > repeat_until:
+        return False
+    now = timezone.now()
+    for booking_date in _matching_dates(
+        day_of_week=day_of_week,
+        start_date=valid_from,
+        end_date=repeat_until,
+    ):
+        if _combine_aware(booking_date, end_time) > now:
+            return True
+    return False
+
+
 def _matching_dates(*, day_of_week, start_date, end_date):
     days_until_first = (day_of_week - start_date.weekday()) % 7
     current = start_date + timedelta(days=days_until_first)
@@ -212,6 +244,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
         return skipped_dates
 
     validator = BookingCreateSerializer(context={})
+    now = timezone.now()
 
     with transaction.atomic():
         resource = Resource.objects.select_for_update().get(pk=recurring_booking.resource_id)
@@ -222,6 +255,8 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
         ):
             start_time = _combine_aware(booking_date, recurring_booking.start_time)
             end_time = _combine_aware(booking_date, recurring_booking.end_time)
+            if end_time <= now:
+                continue
             try:
                 validator._ensure_no_conflicts(
                     resource=resource,

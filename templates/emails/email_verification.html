@@ -1,0 +1,41 @@
+{% extends "emails/base.html" %}
+
+{% block subject %}Подтвердите ваш email — NewLevelHub{% endblock %}
+
+{% block greeting %}
+<p style="margin:0 0 8px 0;font-size:14px;color:#6b7280;">
+  Здравствуйте{% if recipient_name %}, {{ recipient_name }}{% endif %}!
+</p>
+{% endblock %}
+
+{% block title %}
+<h1 style="margin:0 0 16px 0;font-size:22px;font-weight:700;color:#111827;">
+  Подтвердите ваш email
+</h1>
+{% endblock %}
+
+{% block content %}
+<p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;color:#374151;">
+  Спасибо за регистрацию на платформе NewLevelHub. Пожалуйста, подтвердите ваш
+  адрес электронной почты, нажав на кнопку ниже.
+</p>
+<p style="margin:0 0 24px 0;font-size:14px;color:#6b7280;">
+  Ссылка действительна в течение <strong>24 часов</strong>.
+</p>
+{% endblock %}
+
+{% block cta %}
+<table cellpadding="0" cellspacing="0" style="margin:0 0 24px 0;">
+  <tr>
+    <td style="background-color:#1a56db;border-radius:6px;">
+      <a href="{{ verify_link }}"
+         style="display:inline-block;padding:12px 28px;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;">
+        Подтвердить email
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:0;font-size:13px;color:#9ca3af;line-height:1.5;">
+  Если вы не регистрировались на NewLevelHub, просто проигнорируйте это письмо.
+</p>
+{% endblock %}

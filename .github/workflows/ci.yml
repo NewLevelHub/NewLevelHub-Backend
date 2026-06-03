@@ -348,8 +348,11 @@ jobs:
               echo "No ticket in branch name; using fallback FRONTEND_URL=${FRONTEND_URL}"
             fi
 
+            BACKEND_URL="https://${PR_SLUG}.staging.newlevelhub.kz"
+            echo "Backend API URL for this preview: ${BACKEND_URL}"
+
             echo "--- [3/5] Docker: deploy containers ---"
-            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL
+            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL BACKEND_URL
             docker compose \
               --project-name "$PR_SLUG" \
               --env-file .env.staging \

@@ -102,7 +102,13 @@ class CompanySettings(TimeStampedModel):
 
 
 class Invitation(TimeStampedModel):
-    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='invitations')
+    # Nullable so that "building staff" roles (reception, service_manager) can be invited
+    # without being tied to a specific company. Company-scoped roles (employee, company_admin)
+    # always carry a non-null company.
+    company = models.ForeignKey(
+        Company, on_delete=models.CASCADE, related_name='invitations',
+        null=True, blank=True,
+    )
     email = models.EmailField()
     token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
     invited_by = models.ForeignKey(
@@ -117,7 +123,8 @@ class Invitation(TimeStampedModel):
         db_table = 'invitations'
 
     def __str__(self):
-        return f'Invite {self.email} → {self.company.name}'
+        target = self.company.name if self.company_id else 'building staff'
+        return f'Invite {self.email} → {target}'
 
     def save(self, *args, **kwargs):
         if not self.expires_at:

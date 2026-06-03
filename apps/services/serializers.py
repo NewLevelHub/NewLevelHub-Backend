@@ -304,6 +304,52 @@ class ServiceRequestRateSerializer(serializers.Serializer):
     rating = serializers.IntegerField(min_value=1, max_value=5)
 
 
+class ServiceRequestAssignSerializer(serializers.ModelSerializer):
+    """Назначение/смена исполнителя сервисной заявки."""
+
+    class Meta:
+        model = ServiceRequest
+        fields = ['assigned_to']
+        extra_kwargs = {
+            'assigned_to': {'allow_null': True, 'required': True},
+        }
+
+    def validate_assigned_to(self, value):
+        if value is None:
+            return value
+        if not value.is_active:
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.assignee_inactive', 'params': {}}]
+            )
+        if value.role == 'guest':
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.assignee_invalid_role', 'params': {}}]
+            )
+        # Service managers cannot take over a request that is already assigned to someone else
+        requester = self.context['request'].user
+        if (
+            requester.role == 'service_manager'
+            and self.instance is not None
+            and self.instance.assigned_to_id is not None
+            and self.instance.assigned_to_id != value.pk
+        ):
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'services.service_manager_request_already_taken', 'params': {}}]
+            )
+        # Service managers can only have one active (non-completed) request at a time
+        if value.role == 'service_manager':
+            qs = ServiceRequest.objects.filter(
+                assigned_to=value,
+            ).exclude(status='completed')
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'services.service_manager_already_active', 'params': {}}]
+                )
+        return value
+
+
 class ServiceRequestUpdateSerializer(serializers.ModelSerializer):
     """Для суперадмина: смена статуса, назначение исполнителя."""
 

@@ -1,13 +1,11 @@
 from rest_framework import serializers
 from datetime import timedelta
-from io import BytesIO
 import logging
-from django.core.files.base import ContentFile
 from django.utils import timezone
-import qrcode
 
 from apps.core.exceptions import raise_validation_error
 from .models import GuestPass, AccessLog
+from .qr_image import generate_guest_pass_qr_image
 from . import tasks
 from apps.users.models import User
 
@@ -47,6 +45,9 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         if valid_until > valid_from + timedelta(days=30):
             raise_validation_error('valid_until', 'access.valid_until_too_far')
 
+        if not attrs['is_single_use'] and valid_until > valid_from + timedelta(days=1):
+            raise_validation_error('valid_until', 'access.multi_use_max_one_day')
+
         if attrs['guest_email'].strip().lower() == user.email.strip().lower():
             raise_validation_error('guest_email', 'access.cannot_create_for_self')
 
@@ -67,17 +68,6 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
         return attrs
 
-    def _generate_qr_image(self, guest_pass):
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(str(guest_pass.qr_code))
-        qr.make(fit=True)
-        image = qr.make_image(fill_color='black', back_color='white')
-        image_buffer = BytesIO()
-        image.save(image_buffer, format='PNG')
-        image_buffer.seek(0)
-        image_name = f'{guest_pass.qr_code}.png'
-        guest_pass.qr_image.save(image_name, ContentFile(image_buffer.read()), save=False)
-
     def create(self, validated_data):
         user = self.context['request'].user
         is_single_use = validated_data.pop('is_single_use')
@@ -86,8 +76,7 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
         validated_data['company'] = user.company
         guest_pass = super().create(validated_data)
 
-        self._generate_qr_image(guest_pass)
-        guest_pass.save(update_fields=['qr_image'])
+        generate_guest_pass_qr_image(guest_pass)
 
         try:
             tasks.send_guest_pass_email.delay(guest_pass.id)
@@ -105,6 +94,9 @@ class GuestPassSerializer(serializers.ModelSerializer):
     purpose = serializers.CharField(source='visit_purpose', read_only=True)
     is_single_use = serializers.SerializerMethodField()
     qr_image = serializers.ImageField(read_only=True)
+    last_validated_at = serializers.SerializerMethodField()
+    last_validated_by = serializers.SerializerMethodField()
+    last_method = serializers.SerializerMethodField()
 
     class Meta:
         model = GuestPass
@@ -114,15 +106,49 @@ class GuestPassSerializer(serializers.ModelSerializer):
             'qr_code', 'qr_image', 'status', 'usage_type', 'is_single_use', 'times_used',
             'valid_from', 'valid_until', 'is_valid',
             'created_at',
+            'last_validated_at', 'last_validated_by', 'last_method',
         ]
         read_only_fields = ['id', 'created_by', 'company', 'qr_code', 'qr_image', 'times_used', 'created_at']
 
     def get_is_single_use(self, obj):
         return obj.usage_type == 'single'
 
+    def _last_log(self, obj):
+        logs = getattr(obj, 'prefetched_logs', None)
+        if logs is not None:
+            return logs[0] if logs else None
+        return obj.access_logs.select_related('checked_by').order_by('-created_at').first()
+
+    def get_last_validated_at(self, obj):
+        log = self._last_log(obj)
+        return log.created_at.isoformat() if log else None
+
+    def get_last_validated_by(self, obj):
+        log = self._last_log(obj)
+        if log and log.checked_by:
+            return log.checked_by.full_name
+        return None
+
+    def get_last_method(self, obj):
+        log = self._last_log(obj)
+        return log.method if log else None
+
 
 class GuestPassValidateSerializer(serializers.Serializer):
     qr_code = serializers.UUIDField()
+
+
+class GuestPassValidationLogSerializer(serializers.ModelSerializer):
+    validated_at = serializers.DateTimeField(source='created_at', read_only=True)
+    validated_by = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AccessLog
+        fields = ['id', 'validated_at', 'validated_by', 'method', 'entry_point']
+        read_only_fields = fields
+
+    def get_validated_by(self, obj):
+        return obj.checked_by.full_name if obj.checked_by else None
 
 
 class AccessLogSerializer(serializers.ModelSerializer):

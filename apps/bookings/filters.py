@@ -152,8 +152,13 @@ class ResourceFilter(django_filters.FilterSet):
         return queryset
 
 
+class _CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):
+    pass
+
+
 class BookingFilter(django_filters.FilterSet):
     status = django_filters.CharFilter()
+    status_in = _CharInFilter(field_name='status', lookup_expr='in')
     resource_type = django_filters.CharFilter(field_name='resource__resource_type')
     date_from = django_filters.DateTimeFilter(field_name='start_time', lookup_expr='gte')
     date_to = django_filters.DateTimeFilter(field_name='end_time', lookup_expr='lte')
@@ -169,6 +174,7 @@ class BookingFilter(django_filters.FilterSet):
         model = Booking
         fields = [
             'status',
+            'status_in',
             'resource_type',
             'date_from',
             'date_to',

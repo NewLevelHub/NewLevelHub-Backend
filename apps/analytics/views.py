@@ -202,7 +202,7 @@ def build_superadmin_dashboard_payload(request):
     active_users_7d = user_qs.filter(last_login__gte=week_ago).count()
 
     bookings_qs = Booking.objects.filter(
-        status='confirmed',
+        status__in=('confirmed', 'completed'),
         start_time__gte=day_start,
         start_time__lte=day_end,
     )
@@ -237,7 +237,7 @@ def build_superadmin_dashboard_payload(request):
     }
 
     bookings_in_period = Booking.objects.filter(
-        status='confirmed',
+        status__in=('confirmed', 'completed'),
         start_time__gte=period_start,
         start_time__lte=period_end,
     )
@@ -704,9 +704,50 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
 
 @extend_schema(
     tags=['Analytics'],
-    summary='Resource usage stats (superadmin)',
+    summary='Per-resource usage stats (superadmin)',
+    parameters=[
+        OpenApiParameter(
+            name='period',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Reporting window: 7d, 30d, 90d, or custom.',
+            enum=['7d', '30d', '90d', 'custom'],
+        ),
+        OpenApiParameter(
+            name='date_from',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom (inclusive, YYYY-MM-DD).',
+        ),
+        OpenApiParameter(
+            name='date_to',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Required when period=custom (inclusive, YYYY-MM-DD).',
+        ),
+        OpenApiParameter(
+            name='resource_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='Optional: limit to a single resource.',
+        ),
+        OpenApiParameter(
+            name='floor',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='Optional: filter resources by floor.',
+        ),
+        OpenApiParameter(
+            name='company_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='Optional: only count bookings owned by this company.',
+        ),
+    ],
     responses={
-        200: ResourceUsageSerializer(many=True),
+        200: ResourceUsageSerializer,
+        400: OpenApiResponse(description='Validation error'),
+        404: OpenApiResponse(description='Company or resource not found'),
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Superadmin only'),
     },
@@ -714,16 +755,82 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
 @api_view(['GET'])
 @permission_classes([IsSuperAdmin])
 def resource_usage(request):
-    # TODO: фильтр по периоду через query params
+    qp = request.query_params
+    period, date_from, date_to = _resolve_period_metadata(qp)
+    period_start, _ = _local_day_bounds(date_from)
+    _, period_end = _local_day_bounds(date_to)
+
+    resource_id = _parse_optional_int('resource_id', qp.get('resource_id'))
+    floor = _parse_optional_int('floor', qp.get('floor'))
+    company_id = _parse_optional_int('company_id', qp.get('company_id'))
+
+    if company_id is not None and not Company.objects.filter(pk=company_id).exists():
+        raise NotFound()
+    if resource_id is not None and not Resource.objects.filter(pk=resource_id).exists():
+        raise NotFound()
+
+    bookings_qs = Booking.objects.filter(
+        status__in=('confirmed', 'completed'),
+        start_time__gte=period_start,
+        start_time__lte=period_end,
+    )
+    if resource_id is not None:
+        bookings_qs = bookings_qs.filter(resource_id=resource_id)
+    if floor is not None:
+        bookings_qs = bookings_qs.filter(resource__floor=floor)
+    if company_id is not None:
+        bookings_qs = bookings_qs.filter(company_id=company_id)
+
     stats = (
-        Booking.objects
-        .values(resource_type=F('resource__resource_type'))
+        bookings_qs
+        .values(
+            'resource_id',
+            'resource__name',
+            'resource__resource_type',
+            'resource__floor',
+        )
         .annotate(
             total_bookings=Count('id'),
-            avg_duration_minutes=Avg(
-                (F('end_time') - F('start_time')),
-            ),
+            avg_duration=Avg(F('end_time') - F('start_time')),
+            total_duration=Sum(F('end_time') - F('start_time')),
         )
+        .order_by('-total_bookings', 'resource_id')
     )
-    # TODO: конвертировать avg_duration в минуты (сейчас timedelta)
-    return Response(list(stats))
+
+    tz = timezone.get_current_timezone()
+    peak_by_resource = {}
+    for res_id, start_time in bookings_qs.values_list('resource_id', 'start_time'):
+        hour = timezone.localtime(start_time, tz).hour
+        buckets = peak_by_resource.setdefault(res_id, {})
+        buckets[hour] = buckets.get(hour, 0) + 1
+
+    results = []
+    for row in stats:
+        avg_duration = row['avg_duration']
+        total_duration = row['total_duration']
+        avg_minutes = round(avg_duration.total_seconds() / 60, 2) if avg_duration else 0.0
+        total_minutes = round(total_duration.total_seconds() / 60, 2) if total_duration else 0.0
+        buckets = peak_by_resource.get(row['resource_id']) or {}
+        if buckets:
+            peak_hour, peak_count = max(buckets.items(), key=lambda kv: (kv[1], -kv[0]))
+        else:
+            peak_hour, peak_count = None, 0
+        results.append({
+            'resource_id': row['resource_id'],
+            'resource_name': row['resource__name'],
+            'resource_type': row['resource__resource_type'],
+            'floor': row['resource__floor'],
+            'total_bookings': row['total_bookings'],
+            'avg_duration_minutes': avg_minutes,
+            'total_booked_minutes': total_minutes,
+            'peak_hour': peak_hour,
+            'peak_hour_bookings': peak_count,
+        })
+
+    payload = {
+        'period': period,
+        'date_from': date_from,
+        'date_to': date_to,
+        'results': results,
+    }
+    return Response(ResourceUsageSerializer(instance=payload).data)

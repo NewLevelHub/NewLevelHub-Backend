@@ -1,4 +1,4 @@
-"""Tests for guest pass email QR embedding (Gmail-compatible hosted image URL)."""
+"""Tests for guest pass email QR embedding (inline CID attachment)."""
 from datetime import timedelta
 
 import pytest
@@ -40,11 +40,8 @@ def api_client():
 
 
 @pytest.mark.django_db
-@override_settings(
-    EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
-    BACKEND_URL='https://api.example.com',
-)
-def test_guest_pass_email_uses_hosted_qr_url_without_attachments(company, company_admin):
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+def test_guest_pass_email_embeds_qr_as_inline_cid(company, company_admin):
     now = timezone.now()
     guest_pass = GuestPass.objects.create(
         created_by=company_admin,
@@ -61,12 +58,13 @@ def test_guest_pass_email_uses_hosted_qr_url_without_attachments(company, compan
 
     assert len(mail.outbox) == 1
     message = mail.outbox[0]
+
+    assert message.subject == 'Ваш гостевой пропуск — NewLevelHub'
+
     html_parts = [content for content, mimetype in message.alternatives if mimetype == 'text/html']
     assert html_parts, 'HTML alternative is required'
     html = html_parts[0]
-    expected_url = f'https://api.example.com{QR_IMAGE_URL.format(qr_code=guest_pass.qr_code)}'
-    assert expected_url in html
-    assert 'cid:' not in html
+    assert 'cid:qr_code_image' in html
     assert 'data:image/png;base64,' not in html
 
     mime_message = message.message()
@@ -74,7 +72,9 @@ def test_guest_pass_email_uses_hosted_qr_url_without_attachments(company, compan
         part for part in mime_message.walk()
         if part.get_content_type() == 'image/png'
     ]
-    assert image_parts == [], 'Gmail breaks on inline PNG attachments; use hosted URL only'
+    assert len(image_parts) == 1, 'Expected exactly one inline PNG part'
+    assert image_parts[0].get('Content-ID') == '<qr_code_image>'
+    assert image_parts[0].get('Content-Disposition', '').startswith('inline')
 
 
 @pytest.mark.django_db

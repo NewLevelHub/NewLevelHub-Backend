@@ -125,6 +125,16 @@ if USE_S3:
         AWS_S3_ADDRESSING_STYLE = 'path'
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
+    # When MINIO_PUBLIC_URL is set (e.g. staging), use it for browser-facing URLs
+    # instead of the internal endpoint, so presigned URLs aren't needed.
+    _minio_public = (os.getenv('MINIO_PUBLIC_URL') or '').strip()
+    if _minio_public:
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(_minio_public)
+        # Include bucket name so path-style MinIO URLs resolve correctly.
+        AWS_S3_CUSTOM_DOMAIN = f"{_p.netloc}/{AWS_STORAGE_BUCKET_NAME}"
+        AWS_S3_URL_PROTOCOL = _p.scheme + ':'
+        AWS_QUERYSTRING_AUTH = False
     STORAGES = {
         'default': {
             'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',

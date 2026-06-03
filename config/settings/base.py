@@ -125,8 +125,6 @@ if USE_S3:
         AWS_S3_ADDRESSING_STYLE = 'path'
     AWS_DEFAULT_ACL = None
     AWS_S3_FILE_OVERWRITE = False
-    # When MINIO_PUBLIC_URL is set (e.g. staging), use it for browser-facing URLs
-    # instead of the internal endpoint, so presigned URLs aren't needed.
     _minio_public = (os.getenv('MINIO_PUBLIC_URL') or '').strip()
     if _minio_public:
         from urllib.parse import urlparse as _urlparse

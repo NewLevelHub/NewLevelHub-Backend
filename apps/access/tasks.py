@@ -1,11 +1,11 @@
 from datetime import timedelta
+from email.mime.image import MIMEImage
 
 from celery import shared_task
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils import timezone
 
-from apps.core.email_utils import guest_pass_qr_email_image_url
 from apps.notifications.models import Notification
 from apps.notifications.utils import create_notification
 
@@ -28,28 +28,38 @@ def send_guest_pass_email(guest_pass_id):
     if not guest_pass.qr_image:
         generate_guest_pass_qr_image(guest_pass)
 
-    subject = 'Your NewLevelHub guest pass'
+    subject = 'Ваш гостевой пропуск — NewLevelHub'
     body = (
-        f'Hello {guest_pass.guest_name},\n\n'
-        f'Your digital pass is ready.\n'
-        f'Purpose: {guest_pass.visit_purpose}\n'
-        f'Valid from: {guest_pass.valid_from}\n'
-        f'Valid until: {guest_pass.valid_until}\n'
-        f'Created by: {guest_pass.created_by.full_name}\n\n'
-        f'Please present the QR code at reception.'
+        f'Здравствуйте, {guest_pass.guest_name}!\n\n'
+        f'Ваш цифровой пропуск готов.\n'
+        f'Цель визита: {guest_pass.visit_purpose}\n'
+        f'Действителен с: {guest_pass.valid_from}\n'
+        f'Действителен до: {guest_pass.valid_until}\n'
+        f'Пригласил: {guest_pass.created_by.full_name}\n\n'
+        f'Пожалуйста, предъявите QR-код на стойке регистрации.'
     )
-    qr_image_url = guest_pass_qr_email_image_url(guest_pass.qr_code)
     html_body = render_to_string('emails/guest_pass.html', {
         'guest_name': guest_pass.guest_name,
         'visit_purpose': guest_pass.visit_purpose,
         'valid_from': guest_pass.valid_from,
         'valid_until': guest_pass.valid_until,
         'created_by_name': guest_pass.created_by.full_name,
-        'qr_image_url': qr_image_url,
+        'qr_image_url': 'cid:qr_code_image',
     })
 
     email = EmailMultiAlternatives(subject=subject, body=body, to=[guest_pass.guest_email])
+    email.mixed_subtype = 'related'
     email.attach_alternative(html_body, 'text/html')
+
+    guest_pass.qr_image.open('rb')
+    try:
+        mime_img = MIMEImage(guest_pass.qr_image.read())
+    finally:
+        guest_pass.qr_image.close()
+    mime_img.add_header('Content-ID', '<qr_code_image>')
+    mime_img.add_header('Content-Disposition', 'inline', filename='qr_code.png')
+    email.attach(mime_img)
+
     email.send(fail_silently=True)
 
 

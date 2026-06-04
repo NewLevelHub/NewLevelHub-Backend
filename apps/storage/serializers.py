@@ -110,6 +110,7 @@ class FileShareSerializer(serializers.ModelSerializer):
 class PersonalStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
+    limit_bytes = serializers.IntegerField(allow_null=True)
 
 
 class CompanyStorageSerializer(serializers.Serializer):

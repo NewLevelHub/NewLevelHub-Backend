@@ -105,10 +105,11 @@ class TestStorageUsageEndpoint:
         response = api_client.get(USAGE_URL)
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_guest_returns_403(self, api_client, guest_user):
+    def test_guest_can_access_storage_usage(self, api_client, guest_user):
+        # Guests may check their own storage usage.
         api_client.force_authenticate(user=guest_user)
         response = api_client.get(USAGE_URL)
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_200_OK
 
     def test_response_shape_for_company_member(self, api_client, company_admin, company):
         api_client.force_authenticate(user=company_admin)

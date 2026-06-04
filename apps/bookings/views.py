@@ -25,7 +25,7 @@ from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import (
     IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
-    IsEmailVerifiedOrSuperAdmin,
+    IsGuestOrCompanyMember,
 )
 from apps.notifications.utils import create_notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
@@ -1406,7 +1406,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
 )
 class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = BookingSerializer
-    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+    permission_classes = [IsGuestOrCompanyMember]
     queryset = Booking.objects.all()
     filterset_class = BookingFilter
     ordering_fields = ['start_time', 'created_at']
@@ -1512,7 +1512,17 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        if user.role == 'superadmin' or not user.company_id:
+        if user.role == 'superadmin':
+            return qs.order_by('-created_at', '-id')
+        if user.role == 'guest':
+            participant_booking_ids = BookingParticipant.objects.filter(
+                user=user,
+            ).values_list('booking_id', flat=True)
+            return (
+                Booking.objects.filter(Q(user=user) | Q(pk__in=participant_booking_ids))
+                .order_by('-created_at', '-id')
+            )
+        if not user.company_id:
             return qs.order_by('-created_at', '-id')
         participant_booking_ids = BookingParticipant.objects.filter(
             user=user,
@@ -2123,7 +2133,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 )
 class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = RecurringBookingSerializer
-    permission_classes = [IsCompanyMember, IsEmailVerifiedOrSuperAdmin]
+    permission_classes = [IsGuestOrCompanyMember]
     queryset = RecurringBooking.objects.all()
     http_method_names = ['get', 'post', 'patch', 'delete']
 
@@ -2142,6 +2152,8 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         user = self.request.user
         if user.is_superadmin():
             return queryset
+        if user.role == 'guest':
+            return queryset.filter(user_id=user.id)
         if user.is_company_admin():
             return queryset.filter(
                 Q(user_id=user.id)
@@ -2176,8 +2188,8 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
         resource = serializer.validated_data['resource']
         company = request.user.company or resource.assigned_company
-        # company may be None when a superadmin books a shared (unassigned) resource — allowed.
-        if company is None and not request.user.is_superadmin():
+        # company may be None for superadmin (shared resource) or guest (no company) — both allowed.
+        if company is None and not request.user.is_superadmin() and request.user.role != 'guest':
             raise_validation_error('resource_id', 'booking.resource_wrong_company')
 
         with transaction.atomic():

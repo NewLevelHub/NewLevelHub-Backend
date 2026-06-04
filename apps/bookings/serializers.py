@@ -668,7 +668,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             validated_data['resource'] = resource
             validated_data['user'] = user
-            validated_data['company'] = user.company or resource.assigned_company
+            # Guests have no company; set company only for company-bound users.
+            if user.role != 'guest':
+                validated_data['company'] = user.company or resource.assigned_company
             booking = super().create(validated_data)
 
             # In-app confirmation for the booking owner (preferences + DND via helper)

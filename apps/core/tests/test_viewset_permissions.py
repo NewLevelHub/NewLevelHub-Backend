@@ -18,6 +18,7 @@ from apps.core.permissions import (
     IsCompanyAdmin,
     IsCompanyMember,
     IsCompanyAdminOrReadOnly,
+    IsGuestOrCompanyMember,
     IsOwnerOrAdmin,
 )
 from apps.core.mixins import CompanyIsolationMixin
@@ -372,9 +373,9 @@ class TestViewSetPermissionClasses:
     def _perms(self, viewset_class):
         return viewset_class.permission_classes
 
-    def test_booking_viewset_uses_is_company_member(self):
+    def test_booking_viewset_uses_is_guest_or_company_member(self):
         from apps.bookings.views import BookingViewSet
-        assert IsCompanyMember in self._perms(BookingViewSet)
+        assert IsGuestOrCompanyMember in self._perms(BookingViewSet)
 
     def test_resource_viewset_uses_is_authenticated(self):
         from apps.bookings.views import ResourceViewSet
@@ -388,13 +389,13 @@ class TestViewSetPermissionClasses:
         from apps.crm.views import LabelViewSet
         assert IsCompanyMember in self._perms(LabelViewSet)
 
-    def test_folder_viewset_uses_is_company_member(self):
+    def test_folder_viewset_uses_is_guest_or_company_member(self):
         from apps.storage.views import FolderViewSet
-        assert IsCompanyMember in self._perms(FolderViewSet)
+        assert IsGuestOrCompanyMember in self._perms(FolderViewSet)
 
-    def test_file_viewset_uses_is_company_member(self):
+    def test_file_viewset_uses_is_guest_or_company_member(self):
         from apps.storage.views import FileViewSet
-        assert IsCompanyMember in self._perms(FileViewSet)
+        assert IsGuestOrCompanyMember in self._perms(FileViewSet)
 
     def test_leave_request_viewset_uses_is_company_member(self):
         from apps.hr.views import LeaveRequestViewSet
@@ -404,9 +405,9 @@ class TestViewSetPermissionClasses:
         from apps.access.views import GuestPassViewSet
         assert IsCompanyAdmin in self._perms(GuestPassViewSet)
 
-    def test_service_request_viewset_uses_is_company_member(self):
+    def test_service_request_viewset_uses_is_guest_or_company_member(self):
         from apps.services.views import ServiceRequestViewSet
-        assert IsCompanyMember in self._perms(ServiceRequestViewSet)
+        assert IsGuestOrCompanyMember in self._perms(ServiceRequestViewSet)
 
     def test_announcement_viewset_uses_is_company_admin_or_readonly(self):
         from apps.services.views import AnnouncementViewSet

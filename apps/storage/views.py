@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db.models import F, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -9,12 +10,13 @@ from rest_framework.exceptions import PermissionDenied
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 from apps.companies.limits import (
     get_company_storage_used_bytes,
+    get_guest_storage_used_bytes,
     notify_company_admins_limit_thresholds,
 )
 from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import translate, get_lang
-from apps.core.permissions import IsCompanyMember
+from apps.core.permissions import IsCompanyMember, IsGuestOrCompanyMember
 from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
 from .s3_helpers import presigned_get_url_for_fieldfile
@@ -72,7 +74,7 @@ def _soft_delete_folder_recursive(folder):
 )
 class FolderViewSet(viewsets.ModelViewSet):
     serializer_class = FolderSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsGuestOrCompanyMember]
 
     def get_queryset(self):
         # CompanyIsolationMixin not used: Folder has a direct company FK but access
@@ -83,6 +85,9 @@ class FolderViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'superadmin':
             queryset = Folder.objects.all()
+        elif user.role == 'guest':
+            # Guests only have personal storage; never expose company-scope folders.
+            queryset = Folder.objects.filter(owner=user, scope='personal')
         else:
             queryset = (
                 Folder.objects.filter(owner=user, scope='personal')
@@ -105,6 +110,8 @@ class FolderViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-created_at')
 
     def _resolve_scope(self):
+        if self.request.user.role == 'guest':
+            return 'personal'
         if 'is_company_shared' in self.request.data:
             raw = self.request.data.get('is_company_shared')
             return 'company' if str(raw).lower() in ('1', 'true', 'yes', 'on') else 'personal'
@@ -198,7 +205,7 @@ class FolderViewSet(viewsets.ModelViewSet):
 )
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsGuestOrCompanyMember]
     search_fields = ['name']
     ordering_fields = ['name', 'file_size', 'size', 'created_at']
     _PERMISSION_LEVELS = {'view': 1, 'download': 2, 'full': 3}
@@ -211,6 +218,12 @@ class FileViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'superadmin':
             queryset = File.objects.all()
+        elif user.role == 'guest':
+            # Guests only have personal storage; never expose company-scope files.
+            queryset = (
+                File.objects.filter(owner=user, folder__scope='personal')
+                | File.objects.filter(owner=user, folder__isnull=True, company__isnull=True)
+            ).distinct()
         else:
             # Company scope is visible to all company members.
             company_files = File.objects.filter(company=user.company, folder__scope='company')
@@ -257,6 +270,8 @@ class FileViewSet(viewsets.ModelViewSet):
         return queryset.annotate(size=F('file_size')).order_by('-created_at')
 
     def _resolve_scope(self):
+        if self.request.user.role == 'guest':
+            return 'personal'
         if 'is_company_shared' in self.request.data:
             raw = self.request.data.get('is_company_shared')
             return 'company' if str(raw).lower() in ('1', 'true', 'yes', 'on') else 'personal'
@@ -332,6 +347,14 @@ class FileViewSet(viewsets.ModelViewSet):
             current_storage_used = get_company_storage_used_bytes(company)
             storage_limit_bytes = company.storage_limit_gb * 1024 * 1024 * 1024
             if current_storage_used + uploaded_size > storage_limit_bytes:
+                raise LocalizedError(
+                    code=STORAGE_LIMIT_EXCEEDED,
+                    i18n_key='storage.limit_exceeded',
+                )
+        elif request.user.role == 'guest':
+            current_storage_used = get_guest_storage_used_bytes(request.user)
+            guest_limit_bytes = settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024
+            if current_storage_used + uploaded_size > guest_limit_bytes:
                 raise LocalizedError(
                     code=STORAGE_LIMIT_EXCEEDED,
                     i18n_key='storage.limit_exceeded',
@@ -520,13 +543,18 @@ class FileShareViewSet(viewsets.ModelViewSet):
     },
 )
 @api_view(['GET'])
-@permission_classes([IsCompanyMember])
+@permission_classes([IsGuestOrCompanyMember])
 def storage_usage(request):
     user = request.user
 
     personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
     personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
     personal_count = personal_qs.count()
+
+    if user.role == 'guest':
+        personal_limit = settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024
+    else:
+        personal_limit = None
 
     if user.company_id:
         company = user.company
@@ -552,6 +580,7 @@ def storage_usage(request):
         'personal': {
             'used_bytes': personal_used,
             'file_count': personal_count,
+            'limit_bytes': personal_limit,
         },
         'company': company_data,
     }).data)

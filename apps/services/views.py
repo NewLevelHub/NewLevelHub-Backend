@@ -22,6 +22,7 @@ from apps.core.permissions import (
     IsOwnerOrSuperAdmin,
     IsServiceManager,
     IsServiceRequestManager,
+    IsGuestOrCompanyMember,
 )
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
@@ -657,7 +658,7 @@ class MapPointViewSet(viewsets.ModelViewSet):
 )
 class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     serializer_class = ServiceRequestSerializer
-    permission_classes = [IsCompanyMember]
+    permission_classes = [IsGuestOrCompanyMember]
     pagination_class = StandardPagination
     filterset_class = ServiceRequestFilter
     ordering = ['-created_at']
@@ -680,11 +681,11 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
     def get_permissions(self):
         # service_manager is a building-wide responsible role with no company FK,
-        # so IsCompanyMember rejects it. Allow it through for read actions; write
-        # actions (create) still require company membership. Action-level permission
+        # so IsGuestOrCompanyMember rejects it. Allow it through for read actions;
+        # guests may also read their own requests. Action-level permission
         # decorators (status/assign) handle the manage-level gates separately.
         if self.action in ('list', 'retrieve'):
-            return [(IsCompanyMember | IsServiceManager)()]
+            return [(IsGuestOrCompanyMember | IsServiceManager)()]
         return super().get_permissions()
 
     def perform_create(self, serializer):

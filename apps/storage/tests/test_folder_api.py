@@ -382,7 +382,8 @@ class TestFolderApiByAcceptanceCriteria:
         response = api_client.get(_folders_url())
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_permissions_guest_get_is_403(self, api_client, guest):
+    def test_permissions_guest_get_is_200(self, api_client, guest):
+        # Guests may list their own personal folders.
         api_client.force_authenticate(user=guest)
         response = api_client.get(_folders_url())
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_200_OK

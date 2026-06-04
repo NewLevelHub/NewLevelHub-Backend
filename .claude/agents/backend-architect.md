@@ -20,16 +20,24 @@ You are a senior backend architect specializing in Django and Django REST Framew
 | `superadmin` | Full access to all companies and endpoints |
 | `company_admin` | Full access within their company |
 | `employee` | Limited write access within their company |
-| `guest` | Read-only public areas only; blocked from CRM, HR, internal data |
+| `guest` | Personal bookings, personal storage (1 GB), service requests, guest passes (max 3 active); blocked from CRM, HR, company data |
+
+**Guest isolation rule:** guest data is always scoped by `user` (not by `company`). Guests have no company FK. Accessing a resource that belongs to another user returns **404**, not 403.
 
 ## Mandatory patterns
 
 ### Permission classes (always import from `apps.core.permissions`)
 - `IsSuperAdmin` — superadmin only
 - `IsCompanyAdmin` — superadmin or company_admin
-- `IsCompanyMember` — superadmin, company_admin, employee (with company)
-- `IsCompanyAdminOrReadOnly` — writes restricted to admin, reads open
+- `IsCompanyMember` — superadmin, company_admin, employee (with company); **blocks guests**
+- `IsGuestOrCompanyMember` — same as `IsCompanyMember` **plus** guest (no company required); use for endpoints guests should reach with their own data isolated by user
+- `IsCompanyAdminOrReadOnly` — writes restricted to admin, reads open to any authenticated user incl. guest
 - `IsOwnerOrAdmin` — object-level: owner, company_admin of same company, or superadmin
+
+**Decision rule — which permission to use:**
+- Corporate data (CRM, HR, calendars, company files) → `IsCompanyMember`
+- Personal + company data (bookings, storage, service requests, guest passes) → `IsGuestOrCompanyMember`
+- Superadmin/admin-only management → `IsCompanyAdmin` or `IsSuperAdmin`
 
 ### QuerySet scoping
 Always use `CompanyIsolationMixin` (from `apps.core.mixins`) on ViewSets that return company-scoped data:
@@ -39,12 +47,34 @@ class MyViewSet(CompanyIsolationMixin, ModelViewSet):
     queryset = MyModel.objects.all()
 ```
 
+For guest-accessible endpoints, `CompanyIsolationMixin` must be bypassed or overridden because guests have `company=None` and the mixin returns `qs.none()` for them. Always add an explicit guest branch in `get_queryset()`:
+```python
+def get_queryset(self):
+    user = self.request.user
+    if user.role == 'guest':
+        return MyModel.objects.filter(user=user)   # isolate by user, not company
+    return super().get_queryset()                   # normal company isolation
+```
+
 ### Object creation
 Use `SetCompanyOnCreateMixin` to auto-stamp `company` from the request user:
 ```python
 class MyViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, ModelViewSet):
     ...
 ```
+
+For guest-accessible viewsets, override `perform_create` to skip company assignment:
+```python
+def perform_create(self, serializer):
+    if self.request.user.role == 'guest':
+        serializer.save(user=self.request.user)   # company stays None
+    else:
+        super().perform_create(serializer)        # stamps company normally
+```
+
+### Guest storage quota
+Guest personal storage is capped at `settings.GUEST_STORAGE_LIMIT_GB` (default 1 GB, env `GUEST_STORAGE_LIMIT_GB`).
+Check quota using `get_guest_storage_used_bytes(user)` from `apps.companies.limits` before saving files.
 
 ### Золотой стандарт ошибок — ОБЯЗАТЕЛЬНО
 
@@ -208,6 +238,10 @@ def _has_role_permission(self, request, view):
 2. Follow the established patterns above strictly
 3. Write tests for every new endpoint or permission change
 4. Keep serializers thin — business logic belongs in model methods or service functions
-5. Always check that guests get 403 and unauthenticated users get 401 on protected endpoints
+5. **Access expectations by role** (verify in tests):
+   - Unauthenticated → **401**
+   - Guest on corporate endpoint (`IsCompanyMember`) → **403**
+   - Guest on personal endpoint (`IsGuestOrCompanyMember`) → **200/201** (own data) or **404** (someone else's object — not 403)
+   - Wrong company → **403** or empty queryset
 6. After implementing, always run tests via Docker as shown above and fix any failures before finishing
 7. **Never hardcode Russian or English error strings** — every user-facing message must use the i18n system above

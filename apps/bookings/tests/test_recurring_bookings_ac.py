@@ -413,7 +413,8 @@ class TestRecurringBookingCreateAC:
             valid_until=same_monday,
         ).count() == 0
 
-    def test_guest_cannot_create_recurring_booking(self, api_client, guest_user, desk_resource):
+    def test_guest_can_create_recurring_booking_on_shared_resource(self, api_client, guest_user, desk_resource):
+        # Guests may book shared (unassigned) resources. desk_resource has no company.
         monday = _next_weekday_date(0)
         api_client.force_authenticate(user=guest_user)
 
@@ -429,7 +430,7 @@ class TestRecurringBookingCreateAC:
             format='json',
         )
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_201_CREATED
 
 
 @pytest.mark.django_db

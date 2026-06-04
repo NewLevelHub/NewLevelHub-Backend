@@ -17,7 +17,6 @@ import rest_framework.fields as fields
 
 from apps.core.permissions import (
     IsSuperAdmin,
-    IsCompanyMember,
     IsCompanyAdminOrReadOnly,
     IsOwnerOrSuperAdmin,
     IsServiceManager,

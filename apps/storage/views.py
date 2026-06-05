@@ -17,6 +17,7 @@ from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyMember, IsGuestOrCompanyMember
+from apps.crm.models import TaskAttachment
 from apps.notifications.utils import create_notification
 from .models import Folder, File, FileShare
 from .s3_helpers import presigned_get_url_for_fieldfile
@@ -547,33 +548,50 @@ class FileShareViewSet(viewsets.ModelViewSet):
 def storage_usage(request):
     user = request.user
 
-    personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
-    personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-    personal_count = personal_qs.count()
-
     if user.role == 'guest':
-        personal_limit = settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024
-    else:
-        personal_limit = None
-
-    if user.company_id:
+        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+        personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
+        company_data = None
+    elif user.company_id:
         company = user.company
-        company_used = get_company_storage_used_bytes(company)
-        company_limit = company.storage_limit_gb * 1024 * 1024 * 1024
-        company_count = (
-            File.objects.filter(is_deleted=False)
-            .filter(
-                Q(company=company)
-                | Q(company__isnull=True, owner__company=company)
-            )
-            .count()
+        storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
+
+        # Personal files: company=NULL, owned by any employee of this company.
+        personal_qs = File.objects.filter(
+            company__isnull=True, owner__company=company, is_deleted=False
         )
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+
+        # Company-scoped storage files only — excludes personal files so that
+        # personal.used_bytes + company.used_bytes == total without double-counting.
+        company_qs = File.objects.filter(company=company, is_deleted=False)
+        company_files_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        company_count = company_qs.count()
+        # Direct-upload CRM attachments (storage_file=None) are not in File but
+        # do consume company storage — include them in the displayed total.
+        crm_direct_bytes = (
+            TaskAttachment.objects.filter(
+                task__column__board__company=company,
+                storage_file__isnull=True,
+                file__isnull=False,
+            ).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        company_used = company_files_used + crm_direct_bytes
+
         company_data = {
             'used_bytes': company_used,
-            'limit_bytes': company_limit,
+            'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
         }
+        personal_limit = storage_limit_bytes
     else:
+        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+        personal_limit = None
         company_data = None
 
     return Response(StorageUsageSerializer({

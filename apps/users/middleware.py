@@ -1,13 +1,9 @@
-from django.contrib.auth import get_user_model
-from django.utils import timezone
-
-
-User = get_user_model()
+from apps.users.session import should_track_activity, touch_last_activity
 
 
 class UpdateLastActivityMiddleware:
     """
-    Updates user's last_login on each authenticated request.
+    Updates user's last_login after each successful authenticated request.
     """
 
     def __init__(self, get_response):
@@ -17,9 +13,12 @@ class UpdateLastActivityMiddleware:
         response = self.get_response(request)
 
         user = getattr(request, 'user', None)
-        if user and user.is_authenticated:
-            now = timezone.now()
-            User.objects.filter(pk=user.pk).update(last_login=now)
-            user.last_login = now
+        if (
+            user
+            and user.is_authenticated
+            and response.status_code < 400
+            and should_track_activity(request)
+        ):
+            touch_last_activity(user)
 
         return response

@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
@@ -7,6 +8,16 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.views import TokenRefreshView
+
+from apps.users.authentication import SessionIdleTimeout
+from apps.users.session import (
+    clear_idle_session_marker,
+    handle_idle_session_expiry,
+    is_idle_session_expired,
+)
+
+
+User = get_user_model()
 
 
 REFRESH_COOKIE_NAME = 'refresh_token'
@@ -47,6 +58,7 @@ def _sync_outstanding_exp(refresh: RefreshToken):
 
 
 def issue_refresh_token(user, remember_me: bool = False) -> RefreshToken:
+    clear_idle_session_marker(user)
     refresh = RefreshToken.for_user(user)
     refresh['remember_me'] = bool(remember_me)
     refresh.set_exp(lifetime=_refresh_lifetime(bool(remember_me)))
@@ -80,6 +92,14 @@ class RememberMeTokenRefreshSerializer(TokenRefreshSerializer):
         try:
             incoming_refresh = RefreshToken(attrs['refresh'])
             remember_me = bool(incoming_refresh.get('remember_me', False))
+
+            user_id = incoming_refresh.get('user_id')
+            if user_id is not None:
+                user = User.objects.filter(pk=user_id).first()
+                if user and is_idle_session_expired(user):
+                    handle_idle_session_expiry(user)
+                    raise SessionIdleTimeout()
+
             data = super().validate(attrs)
         except TokenError as exc:
             raise InvalidToken(str(exc)) from exc

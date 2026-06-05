@@ -23,7 +23,7 @@ class CompanyAdmin(admin.ModelAdmin):
     list_display = ['name', 'plan', 'is_active', 'employee_count', 'storage_limit_gb', 'floor', 'office_number',
                     'created_at']
     list_filter = ['plan', 'is_active']
-    search_fields = ['name', 'contact_email']
+    search_fields = ['name']
 
 
 @admin.register(CompanySettings)

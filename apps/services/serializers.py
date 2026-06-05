@@ -5,6 +5,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import get_lang, translate
 
 from apps.companies.models import Company
 from apps.bookings.models import Booking, ResourceBlock
@@ -62,12 +63,16 @@ class MapPointSerializer(serializers.ModelSerializer):
     class Meta:
         model = MapPoint
         fields = [
-            'id', 'floor', 'point_type', 'label', 'x', 'y',
+            'id', 'floor', 'point_type', 'label', 'x', 'y', 'width', 'height',
             'resource', 'resource_name', 'resource_status', 'resource_status_reason', 'next_free_at',
             'company', 'company_name',
         ]
         read_only_fields = ['id', 'resource_name', 'resource_status', 'resource_status_reason', 'next_free_at',
                             'company_name']
+        extra_kwargs = {
+            'width': {'allow_null': True, 'required': False},
+            'height': {'allow_null': True, 'required': False},
+        }
 
     def _get_status_payload(self, obj):
         status_cache = self.context.setdefault('_resource_status_payload_cache', {})
@@ -161,16 +166,32 @@ class MapPointSerializer(serializers.ModelSerializer):
         company = attrs.get('company', getattr(instance, 'company', None))
         x = attrs.get('x', getattr(instance, 'x', None))
         y = attrs.get('y', getattr(instance, 'y', None))
+        width = attrs.get('width', getattr(instance, 'width', None))
+        height = attrs.get('height', getattr(instance, 'height', None))
 
         if x is not None and not (0.0 <= x <= 100.0):
             raise_validation_error('x', 'services.coordinate_out_of_range')
         if y is not None and not (0.0 <= y <= 100.0):
             raise_validation_error('y', 'services.coordinate_out_of_range')
+        if width is not None and not (0.0 <= width <= 100.0):
+            raise_validation_error('width', 'services.coordinate_out_of_range')
+        if height is not None and not (0.0 <= height <= 100.0):
+            raise_validation_error('height', 'services.coordinate_out_of_range')
 
         if point_type in _RESOURCE_POINT_TYPES and resource is None:
             raise_validation_error('resource', 'services.resource_required_for_type', {'point_type': point_type})
         if point_type == 'office' and company is None:
             raise_validation_error('company', 'services.company_required_for_office')
+
+        floor = attrs.get('floor', getattr(self.instance, 'floor', None))
+        if resource and floor:
+            if resource.floor_fk_id and resource.floor_fk_id != floor.id:
+                raise serializers.ValidationError({
+                    'resource': translate(
+                        'services.resource_floor_mismatch',
+                        get_lang(self.context.get('request')),
+                    )
+                })
 
         return attrs
 
@@ -183,16 +204,18 @@ class MapPointSearchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MapPoint
-        fields = ['id', 'floor_id', 'floor_name', 'point_type', 'label', 'x', 'y', 'resource_id', 'resource_name']
+        fields = ['id', 'floor_id', 'floor_name', 'point_type', 'label', 'x', 'y', 'width', 'height',
+                  'resource_id', 'resource_name']
 
 
 class FloorListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for list views — omits map_points."""
     plan_image_url = serializers.SerializerMethodField()
+    occupancy_pct = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Floor
-        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'created_at', 'updated_at']
+        fields = ['id', 'number', 'name', 'plan_image', 'plan_image_url', 'occupancy_pct', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_plan_image_url(self, obj):

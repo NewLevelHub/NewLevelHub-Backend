@@ -674,7 +674,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         return ctx
 
     def get_queryset(self):
-        qs = Resource.objects.all()
+        qs = Resource.objects.select_related('floor_fk')
         user = self.request.user
         if not user.is_authenticated:
             return Resource.objects.none()
@@ -1510,7 +1510,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     def get_queryset(self):
-        qs = super().get_queryset()
+        qs = super().get_queryset().select_related('user')
         user = self.request.user
         if user.role == 'superadmin':
             return qs.order_by('-created_at', '-id')
@@ -1529,6 +1529,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         ).values_list('booking_id', flat=True)
         return (
             Booking.objects.filter(Q(pk__in=qs) | Q(pk__in=participant_booking_ids))
+            .select_related('user')
             .order_by('-created_at', '-id')
         )
 

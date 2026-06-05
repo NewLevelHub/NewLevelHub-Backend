@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from apps.companies.models import Company
+from apps.services.models import Floor
 from apps.core.error_codes import (
     BOOKING_ADVANCE_DAYS_EXCEEDED,
     BOOKING_DURATION_TOO_SHORT,
@@ -80,6 +81,15 @@ class ResourceSerializer(serializers.ModelSerializer):
         source='resource_type',
         choices=[c[0] for c in Resource.TYPE_CHOICES],
     )
+    floor_id = serializers.PrimaryKeyRelatedField(
+        source='floor_fk',
+        queryset=Floor.objects.all(),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+    floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
+    floor_name = serializers.CharField(source='floor_fk.name', read_only=True, allow_null=True)
     equipment = serializers.JSONField(required=False, allow_null=True, write_only=True)
     parking_type = serializers.ChoiceField(
         choices=[('regular', 'regular'), ('vip', 'vip')],
@@ -107,6 +117,9 @@ class ResourceSerializer(serializers.ModelSerializer):
             'type',
             'name',
             'floor',
+            'floor_id',
+            'floor_number',
+            'floor_name',
             'zone',
             'description',
             'photo',
@@ -130,7 +143,7 @@ class ResourceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'floor_number', 'floor_name', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -183,7 +196,14 @@ class ResourceSerializer(serializers.ModelSerializer):
 
         return data
 
+    def _sync_floor_integer(self, validated_data):
+        floor_fk = validated_data.get('floor_fk')
+        if floor_fk is not None:
+            validated_data['floor'] = floor_fk.number
+        return validated_data
+
     def create(self, validated_data):
+        self._sync_floor_integer(validated_data)
         equipment = validated_data.pop('equipment', serializers.empty)
         parking_type = validated_data.pop('parking_type', serializers.empty)
         if parking_type is not serializers.empty and parking_type is not None:
@@ -199,6 +219,7 @@ class ResourceSerializer(serializers.ModelSerializer):
         return resource
 
     def update(self, instance, validated_data):
+        self._sync_floor_integer(validated_data)
         equipment = validated_data.pop('equipment', serializers.empty)
         parking_type = validated_data.pop('parking_type', serializers.empty)
         if parking_type is not serializers.empty and parking_type is not None:
@@ -273,6 +294,8 @@ class ResourceListSerializer(serializers.ModelSerializer):
     assigned_company_name = serializers.CharField(
         source='assigned_company.name', read_only=True, allow_null=True, default=None,
     )
+    floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
+    floor_name = serializers.CharField(source='floor_fk.name', read_only=True, allow_null=True)
 
     class Meta:
         model = Resource
@@ -281,6 +304,8 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'type',
             'name',
             'floor',
+            'floor_number',
+            'floor_name',
             'zone',
             'photo',
             'photo_url',
@@ -736,21 +761,45 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         return booking
 
 
+class BookingUserSerializer(serializers.ModelSerializer):
+    """Read-only nested user snapshot embedded in booking responses."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position', 'role']
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+
 class BookingSerializer(serializers.ModelSerializer):
     resource_name = serializers.CharField(source='resource.name', read_only=True)
     user_name = serializers.CharField(source='user.full_name', read_only=True)
+    booked_by = serializers.SerializerMethodField()
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'resource', 'resource_name', 'user', 'user_name', 'company',
+            'id', 'resource', 'resource_name', 'user', 'user_name', 'booked_by', 'company',
             'start_time', 'end_time', 'status', 'description',
             'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
             'checked_in_at', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'company', 'checked_in_at', 'created_at', 'updated_at']
+
+    def get_booked_by(self, obj):
+        return BookingUserSerializer(obj.user, context=self.context).data
 
     def get_participants(self, obj):
         return [

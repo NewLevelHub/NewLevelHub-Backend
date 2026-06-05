@@ -28,6 +28,7 @@ from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
 
 from .models import Floor, MapPoint, ServiceRequest, Announcement, AnnouncementRead
+from .utils import annotate_floor_occupancy
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     MapPointSearchSerializer,
@@ -330,16 +331,21 @@ class FloorViewSet(viewsets.ModelViewSet):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     pagination_class = FloorsListPagination
 
+    def _annotate_occupancy(self, qs):
+        """Annotate each floor with occupancy_pct (integer, 0–100) in a single query."""
+        return annotate_floor_occupancy(qs)
+
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
         if user.role == 'superadmin':
-            return qs
+            return self._annotate_occupancy(qs)
         if user.company_id:
             # Single OR query avoids subtle bugs from queryset-| unions with prefetch/joins.
-            return qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
+            filtered = qs.filter(Q(company__isnull=True) | Q(company_id=user.company_id)).distinct()
+            return self._annotate_occupancy(filtered)
         # guest or user without company — show only global floors
-        return qs.filter(company__isnull=True)
+        return self._annotate_occupancy(qs.filter(company__isnull=True))
 
     def perform_create(self, serializer):
         # Floors are global; superadmin creates them without a company.
@@ -485,14 +491,24 @@ class FloorViewSet(viewsets.ModelViewSet):
         )
         floor_number = instance.number
 
+        floor_pk = instance.pk
         image_name = instance.plan_image.name if instance.plan_image else None
         storage = instance.plan_image.storage if instance.plan_image else None
+
+        # Collect all resource IDs linked to this floor via FK before deleting
+        # (floor_fk becomes NULL after delete due to SET_NULL, so capture IDs now)
+        from apps.bookings.models import Resource as _Resource
+        floor_fk_resource_ids = list(
+            _Resource.objects.filter(floor_fk_id=floor_pk).values_list('id', flat=True)
+        )
+
         instance.delete()  # CASCADE deletes all map points on this floor
 
-        # Delete resources by map-point link OR by floor number match
+        # Delete resources by map-point link OR by floor number match OR by FK
         # (covers resources created for this floor but not yet placed on the map)
+        all_resource_ids = set(point_resource_ids) | set(floor_fk_resource_ids)
         Resource.objects.filter(
-            Q(id__in=point_resource_ids) | Q(floor=floor_number)
+            Q(id__in=all_resource_ids) | Q(floor=floor_number)
         ).delete()
 
         if image_name and storage:
@@ -778,11 +794,12 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 .first()
             )
             if last_booking and last_booking.resource and last_booking.resource.floor:
-                # resource.floor is a PositiveIntegerField (floor number),
-                # try to find the Floor object by number
-                floor_obj = Floor.objects.filter(
-                    number=last_booking.resource.floor
-                ).first()
+                # Prefer the FK link; fall back to number-based lookup for legacy data
+                floor_obj = getattr(last_booking.resource, 'floor_fk', None)
+                if floor_obj is None:
+                    floor_obj = Floor.objects.filter(
+                        number=last_booking.resource.floor
+                    ).first()
 
             if floor_obj is None:
                 return Response(

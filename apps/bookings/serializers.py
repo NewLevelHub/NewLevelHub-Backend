@@ -759,21 +759,45 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         return booking
 
 
+class BookingUserSerializer(serializers.ModelSerializer):
+    """Read-only nested user snapshot embedded in booking responses."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position', 'role']
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+
 class BookingSerializer(serializers.ModelSerializer):
     resource_name = serializers.CharField(source='resource.name', read_only=True)
     user_name = serializers.CharField(source='user.full_name', read_only=True)
+    booked_by = serializers.SerializerMethodField()
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'resource', 'resource_name', 'user', 'user_name', 'company',
+            'id', 'resource', 'resource_name', 'user', 'user_name', 'booked_by', 'company',
             'start_time', 'end_time', 'status', 'description',
             'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
             'checked_in_at', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'company', 'checked_in_at', 'created_at', 'updated_at']
+
+    def get_booked_by(self, obj):
+        return BookingUserSerializer(obj.user, context=self.context).data
 
     def get_participants(self, obj):
         return [

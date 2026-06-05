@@ -329,3 +329,55 @@ class TestAdminCancelReservation:
         assert audit is not None
         assert audit.cancelled_by_id == company_admin_a.id
         assert audit.cancel_reason == 'Policy violation'
+
+
+@pytest.mark.django_db
+class TestBookedByField:
+    """Verify the booked_by nested user object is present on reservations list responses."""
+
+    def test_booked_by_present_in_list_response(self, api_client, company_admin_a, bookings_dataset):
+        api_client.force_authenticate(user=company_admin_a)
+        response = api_client.get(RESERVATIONS_URL, {'page_size': 100})
+
+        assert response.status_code == status.HTTP_200_OK
+        results = _extract_results(response)
+        assert len(results) >= 1
+        for item in results:
+            assert 'booked_by' in item, "booked_by field missing from booking response"
+            booked_by = item['booked_by']
+            assert booked_by is not None
+            assert 'id' in booked_by
+            assert 'email' in booked_by
+            assert 'first_name' in booked_by
+            assert 'last_name' in booked_by
+            assert 'full_name' in booked_by
+            assert 'position' in booked_by
+            assert 'role' in booked_by
+            assert 'avatar' in booked_by
+
+    def test_booked_by_avatar_is_null_or_string(self, api_client, company_admin_a, bookings_dataset):
+        api_client.force_authenticate(user=company_admin_a)
+        response = api_client.get(RESERVATIONS_URL, {'page_size': 100})
+
+        assert response.status_code == status.HTTP_200_OK
+        results = _extract_results(response)
+        for item in results:
+            avatar = item['booked_by']['avatar']
+            assert avatar is None or isinstance(avatar, str), (
+                f"booked_by.avatar must be null or a string URL, got {type(avatar)}"
+            )
+
+    def test_booked_by_matches_booking_user(self, api_client, superadmin, bookings_dataset):
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(RESERVATIONS_URL, {'page_size': 100})
+
+        assert response.status_code == status.HTTP_200_OK
+        results = _extract_results(response)
+
+        booking_a = bookings_dataset['booking_a_confirmed']
+        matching = [r for r in results if r['id'] == booking_a.id]
+        assert matching, "booking_a_confirmed not found in results"
+
+        booked_by = matching[0]['booked_by']
+        assert booked_by['id'] == booking_a.user_id
+        assert booked_by['email'] == booking_a.user.email

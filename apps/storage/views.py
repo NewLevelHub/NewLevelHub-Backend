@@ -555,28 +555,27 @@ def storage_usage(request):
         company_data = None
     elif user.company_id:
         company = user.company
+        storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
+
+        # Personal files: company=NULL, owned by any employee of this company.
         personal_qs = File.objects.filter(
             company__isnull=True, owner__company=company, is_deleted=False
         )
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_count = personal_qs.count()
-        personal_limit = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
-        company_used = get_company_storage_used_bytes(company)
-        company_limit = int(company.storage_limit_gb * 1024 * 1024 * 1024)
-        company_count = (
-            File.objects.filter(is_deleted=False)
-            .filter(
-                Q(company=company)
-                | Q(company__isnull=True, owner__company=company)
-            )
-            .count()
-        )
+        # Company-scoped files only — excludes personal so that
+        # personal.used_bytes + company.used_bytes == total without double-counting.
+        company_qs = File.objects.filter(company=company, is_deleted=False)
+        company_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        company_count = company_qs.count()
+
         company_data = {
             'used_bytes': company_used,
-            'limit_bytes': company_limit,
+            'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
         }
+        personal_limit = storage_limit_bytes
     else:
         personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0

@@ -12,6 +12,7 @@
   "auth.token_invalid": "Недействительный токен.",
   "auth.token_expired": "Токен истёк.",
   "auth.token_already_used": "Токен уже использован.",
+  "auth.session_idle_timeout": "Сессия завершена из-за бездействия. Пожалуйста, войдите снова.",
   "auth.passwords_dont_match": "Пароли не совпадают.",
   "auth.current_password_wrong": "Текущий пароль неверен.",
   "booking.invalid_week_format": "Неверный формат недели. Используйте YYYY-MM-DD.",

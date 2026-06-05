@@ -181,18 +181,21 @@ class TestStorageUsageEndpoint:
         assert response.data['company']['file_count'] == 2
 
     def test_soft_deleted_files_excluded_from_counts(self, api_client, company_admin, company):
-        # Use company=None so the active file also shows in personal stats
+        # Personal files (company=None): one active, one soft-deleted.
         _create_db_file(owner=company_admin, company=None, size=100)
         _create_db_file(owner=company_admin, company=None, size=200, is_deleted=True)
+        # Company-scoped file: one active, one soft-deleted.
+        _create_db_file(owner=company_admin, company=company, size=300)
+        _create_db_file(owner=company_admin, company=company, size=400, is_deleted=True)
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.get(USAGE_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        # Soft-deleted file should not count
+        # Soft-deleted files must not be counted in either scope.
         assert response.data['personal']['used_bytes'] == 100
         assert response.data['personal']['file_count'] == 1
-        assert response.data['company']['used_bytes'] == 100
+        assert response.data['company']['used_bytes'] == 300
         assert response.data['company']['file_count'] == 1
 
     def test_empty_usage_returns_zeros(self, api_client, company_admin, company):
@@ -210,10 +213,13 @@ class TestStorageUsageEndpoint:
         response = api_client.get(USAGE_URL)
         assert response.status_code == status.HTTP_200_OK
 
-    def test_company_used_bytes_includes_personal_files_of_employees(
+    def test_personal_and_company_scopes_are_counted_separately(
         self, api_client, company_admin, employee, company
     ):
-        """Personal files of company employees must be counted in company total."""
+        """Personal and company-scoped files are counted in separate buckets.
+
+        personal.used_bytes + company.used_bytes == combined total with no double-counting.
+        """
         _create_db_file(owner=company_admin, company=company, size=300)   # company-scoped
         _create_db_file(owner=employee, company=None, size=400)            # personal by employee
 
@@ -221,9 +227,16 @@ class TestStorageUsageEndpoint:
         response = api_client.get(USAGE_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        # Both files count toward company total
-        assert response.data['company']['used_bytes'] == 700
-        assert response.data['company']['file_count'] == 2
+        # Company-scoped bucket: only files with company=company.
+        assert response.data['company']['used_bytes'] == 300
+        assert response.data['company']['file_count'] == 1
+        # Personal bucket: only files with company=None owned by company employees.
+        assert response.data['personal']['used_bytes'] == 400
+        assert response.data['personal']['file_count'] == 1
+        # Together they sum to the real total without double-counting.
+        assert (
+            response.data['personal']['used_bytes'] + response.data['company']['used_bytes'] == 700
+        )
 
     def test_personal_used_bytes_excludes_company_scoped_files(
         self, api_client, company_admin, company

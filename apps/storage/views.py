@@ -547,19 +547,23 @@ class FileShareViewSet(viewsets.ModelViewSet):
 def storage_usage(request):
     user = request.user
 
-    personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
-    personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-    personal_count = personal_qs.count()
-
     if user.role == 'guest':
-        personal_limit = settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024
-    else:
-        personal_limit = None
-
-    if user.company_id:
+        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+        personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
+        company_data = None
+    elif user.company_id:
         company = user.company
+        personal_qs = File.objects.filter(
+            company__isnull=True, owner__company=company, is_deleted=False
+        )
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+        personal_limit = int(company.storage_limit_gb * 1024 * 1024 * 1024)
+
         company_used = get_company_storage_used_bytes(company)
-        company_limit = company.storage_limit_gb * 1024 * 1024 * 1024
+        company_limit = int(company.storage_limit_gb * 1024 * 1024 * 1024)
         company_count = (
             File.objects.filter(is_deleted=False)
             .filter(
@@ -574,6 +578,10 @@ def storage_usage(request):
             'file_count': company_count,
         }
     else:
+        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        personal_count = personal_qs.count()
+        personal_limit = None
         company_data = None
 
     return Response(StorageUsageSerializer({

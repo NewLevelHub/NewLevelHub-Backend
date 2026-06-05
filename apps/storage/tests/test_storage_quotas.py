@@ -133,6 +133,16 @@ class TestStorageUsageEndpoint:
         assert 'limit_bytes' in company_data
         assert 'file_count' in company_data
 
+    def test_personal_limit_bytes_equals_company_storage_limit(self, api_client, company_admin, company):
+        company.storage_limit_gb = 10
+        company.save(update_fields=['storage_limit_gb'])
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['limit_bytes'] == 10 * 1024 * 1024 * 1024
+
     def test_limit_bytes_matches_company_storage_limit_gb(self, api_client, company_admin, company):
         company.storage_limit_gb = 20
         company.save(update_fields=['storage_limit_gb'])
@@ -144,18 +154,20 @@ class TestStorageUsageEndpoint:
         expected_limit = 20 * 1024 * 1024 * 1024
         assert response.data['company']['limit_bytes'] == expected_limit
 
-    def test_personal_used_bytes_counts_only_own_files(self, api_client, company_admin, employee, company):
+    def test_personal_used_bytes_aggregates_all_company_members_personal_files(
+        self, api_client, company_admin, employee, company
+    ):
         # Personal file owned by admin (company=None → true personal)
         _create_db_file(owner=company_admin, company=None, size=500)
-        # Personal file owned by employee — should NOT appear in admin's personal stats
+        # Personal file owned by employee — must also appear in company-wide personal stats
         _create_db_file(owner=employee, company=None, size=200)
 
         api_client.force_authenticate(user=company_admin)
         response = api_client.get(USAGE_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['personal']['used_bytes'] == 500
-        assert response.data['personal']['file_count'] == 1
+        assert response.data['personal']['used_bytes'] == 700
+        assert response.data['personal']['file_count'] == 2
 
     def test_company_used_bytes_aggregates_all_company_files(self, api_client, company_admin, employee, company):
         _create_db_file(owner=company_admin, company=company, size=300)

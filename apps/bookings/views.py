@@ -757,7 +757,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
 
     def get_permissions(self):
         if self.action == 'schedule':
-            return [IsCompanyMember()]
+            return [IsAuthenticated()]
         if self.action in (
             'create',
             'update',

@@ -805,17 +805,33 @@ class TestResourceScheduleEndpoints:
         assert len(data['schedule']) >= 1
         assert data['schedule'][0]['booking_id'] is not None
 
-    def test_schedule_for_guest_forbidden(self, api_client, superadmin, guest_user):
+    def test_schedule_guest(self, api_client, superadmin, employee, company, guest_user):
         api_client.force_authenticate(user=superadmin)
         cr = api_client.post(
             RESOURCES_URL,
-            {'type': 'desk', 'name': 'Guest forbidden sched', 'floor': 1},
+            {'type': 'desk', 'name': 'Guest sched desk', 'floor': 1},
             format='json',
         )
         rid = cr.json()['id']
+        resource = Resource.objects.get(pk=rid)
+        d = date(2031, 3, 2)
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=make_aware(datetime.combine(d, time(10, 0))),
+            end_time=make_aware(datetime.combine(d, time(11, 0))),
+            status='confirmed',
+        )
         api_client.force_authenticate(user=guest_user)
         r = api_client.get(f'{RESOURCES_URL}{rid}/schedule/', {'date': '2031-03-02'})
-        assert r.status_code == status.HTTP_403_FORBIDDEN
+        assert r.status_code == status.HTTP_200_OK
+        slots = r.json()
+        assert len(slots) == 1
+        slot = slots[0]
+        assert set(slot.keys()) == {'booking_id', 'start', 'end', 'status'}
+        pii_keys = {'user', 'email', 'user_name', 'booked_by', 'first_name', 'last_name'}
+        assert not pii_keys.intersection(slot.keys())
 
 
 @pytest.mark.django_db

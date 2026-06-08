@@ -152,10 +152,18 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_201_CREATED
 
-    def test_create_denies_guest_role(self, api_client, guest_user):
+    def test_create_allows_guest_role(self, api_client, guest_user):
+        # Guests may create up to 2 active passes for visitors.
         api_client.force_authenticate(user=guest_user)
         response = api_client.post(PASSES_URL, _payload(), format='json')
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_201_CREATED
+
+    def test_guest_cannot_create_more_than_two_active(self, api_client, guest_user):
+        _create_pass(creator=guest_user, guest_email='a@test.local', status_code='active')
+        _create_pass(creator=guest_user, guest_email='b@test.local', status_code='active')
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.post(PASSES_URL, _payload(), format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_cannot_create_pass_for_self_email(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
@@ -183,14 +191,6 @@ class TestGuestPassesCreateAC:
         payload = _payload()
         payload['valid_from'] = (timezone.now() - timedelta(hours=1)).isoformat()
         payload['valid_until'] = (timezone.now() + timedelta(days=2)).isoformat()
-        response = api_client.post(PASSES_URL, payload, format='json')
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_guest_coworker_cannot_create_more_than_two_active(self, api_client, company_admin):
-        payload = _payload()
-        _create_pass(creator=company_admin, guest_email=payload['guest_email'], status_code='active')
-        _create_pass(creator=company_admin, guest_email=payload['guest_email'], status_code='active')
-        api_client.force_authenticate(user=company_admin)
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 

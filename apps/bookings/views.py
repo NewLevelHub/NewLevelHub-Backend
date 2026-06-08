@@ -24,7 +24,7 @@ import rest_framework.fields as fields
 from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import (
-    IsSuperAdmin, IsCompanyAdmin, IsCompanyMember, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
+    IsSuperAdmin, IsCompanyAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
     IsGuestOrCompanyMember,
 )
 from apps.notifications.utils import create_notification

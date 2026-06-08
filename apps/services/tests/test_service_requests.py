@@ -209,10 +209,11 @@ def test_create_service_request_unauthenticated(api_client):
 
 
 @pytest.mark.django_db
-def test_create_service_request_guest_forbidden(api_client, guest):
+def test_create_service_request_guest_reaches_endpoint(api_client, guest):
+    # Guests may create service requests. Minimal payload → 400 (missing required fields), not 403.
     auth(api_client, guest)
     response = api_client.post(BASE_URL, {'request_type': 'cleaning'}, format='json')
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
 # ── GET /api/v1/services/requests/ ───────────────────────────────────
@@ -256,10 +257,11 @@ def test_list_unauthenticated_returns_401(api_client):
 
 
 @pytest.mark.django_db
-def test_list_guest_forbidden(api_client, guest):
+def test_list_guest_sees_own_requests(api_client, guest):
+    # Guests can list service requests — they see only their own.
     auth(api_client, guest)
     response = api_client.get(BASE_URL)
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_200_OK
 
 
 @pytest.mark.django_db
@@ -427,10 +429,11 @@ def test_quick_cleaning_unauthenticated(api_client, floor):
 
 
 @pytest.mark.django_db
-def test_quick_cleaning_guest_forbidden(api_client, guest, floor):
+def test_quick_cleaning_guest_allowed(api_client, guest, floor):
+    # Guests may submit quick cleaning requests.
     auth(api_client, guest)
     response = api_client.post(QUICK_CLEANING_URL, {'floor': floor.pk}, format='json')
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_201_CREATED
 
 
 @pytest.mark.django_db

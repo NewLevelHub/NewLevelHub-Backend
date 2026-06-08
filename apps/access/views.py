@@ -22,7 +22,7 @@ from rest_framework.response import Response
 
 from apps.core.exceptions import LocalizedError
 from apps.core.i18n import get_lang, translate
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsSuperAdminOrReception
+from apps.core.permissions import IsCompanyAdmin, IsSuperAdminOrReception, IsGuestOrCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
 from .filters import AccessLogFilter, GuestPassFilter
@@ -88,7 +88,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve', 'create', 'validations'):
-            return [IsCompanyMember()]
+            return [IsGuestOrCompanyMember()]
         return [permission() for permission in self.permission_classes]
 
     def get_serializer_class(self):
@@ -98,6 +98,15 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
 
     def get_queryset(self):
         user = self.request.user
+        if user.role == 'guest':
+            # Guests bypass CompanyIsolationMixin — they have no company.
+            return GuestPass.objects.select_related('created_by', 'company').prefetch_related(
+                Prefetch(
+                    'access_logs',
+                    queryset=AccessLog.objects.select_related('checked_by').order_by('-created_at'),
+                    to_attr='prefetched_logs',
+                )
+            ).filter(created_by=user).order_by('-created_at')
         qs = super().get_queryset()
         if user.role == 'superadmin':
             return qs

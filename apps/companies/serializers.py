@@ -4,25 +4,149 @@ from rest_framework import serializers
 from apps.users.models import User
 from apps.notifications.utils import create_notification
 from apps.core.exceptions import raise_validation_error
+from apps.services.models import Floor
 
 from .invite_policy import email_blocks_new_company_invitation
 from .limits import notify_company_admins_limit_thresholds
 from .models import Company, CompanySettings, Invitation
 from .tasks import send_invitation_email
 
+_CATEGORIES_MAX_COUNT = 10
+_CATEGORIES_ITEM_MAX_LEN = 50
+
+
+class CategoriesField(serializers.JSONField):
+    """
+    JSONField subclass that correctly handles ``categories`` arriving as a
+    JSON-encoded string from a ``multipart/form-data`` request.
+
+    Background
+    ----------
+    DRF's ``JSONField.get_value`` wraps QueryDict values in its internal
+    ``JSONString`` class (which carries ``is_json_string = True``) so that
+    ``to_internal_value`` knows to call ``json.loads``.  That works perfectly
+    for the case ``categories=["B2B","SaaS"]`` (a JSON-encoded array).
+
+    However, when a serializer's ``to_internal_value`` mutates the incoming
+    data (e.g. sets ``data['categories'] = ['B2B', 'SaaS']`` as a Python list
+    on a QueryDict copy), ``get_value`` still calls ``JSONString(the_list)``
+    which invokes ``str.__new__(cls, ['B2B', 'SaaS'])`` → ``"['B2B', 'SaaS']"``
+    (Python repr, not valid JSON), causing a spurious 400.
+
+    The correct fix is to override ``get_value`` so that when the raw value is
+    already a Python list we skip the JSON-decoding step entirely.  When it is
+    a string we apply the same ``JSONString`` wrapping DRF uses, which means
+    ``to_internal_value`` will call ``json.loads`` — turning
+    ``'["B2B","SaaS"]'`` into ``['B2B', 'SaaS']`` as expected.
+
+    A bare non-JSON string (e.g. ``categories=B2B``) makes ``json.loads`` raise
+    ``ValueError``, which DRF converts to ``self.fail('invalid')`` and the
+    ``_validate_categories`` validator then surfaces the correct i18n error.
+
+    Accepted multipart encodings
+    ----------------------------
+    * ``categories=["B2B","SaaS"]``  → ``['B2B', 'SaaS']`` ✓
+    * ``categories=[]``              → ``[]`` ✓
+    * ``categories=B2B``             → 400 ``company.categories_must_be_list`` ✓
+    """
+
+    def get_value(self, dictionary):
+        from rest_framework.utils import html as _html
+
+        if _html.is_html_input(dictionary) and self.field_name in dictionary:
+            raw = dictionary[self.field_name]
+            # If a previous layer already decoded the value to a list, pass it
+            # through directly — no JSONString wrapping needed.
+            if isinstance(raw, list):
+                return raw
+            # Otherwise apply the standard JSONString wrapping so that
+            # to_internal_value (which checks is_json_string) calls json.loads.
+
+            class JSONString(str):  # noqa: N801  (inline class, matches DRF style)
+                def __new__(cls, value):
+                    ret = str.__new__(cls, value)
+                    ret.is_json_string = True
+                    return ret
+            return JSONString(raw)
+        return super().get_value(dictionary)
+
+
+def _validate_categories(value):
+    """
+    Shared validator for the `categories` field.
+    - Must be a list
+    - Each item must be a non-empty string
+    - Maximum 10 items
+    - Each item max 50 characters
+    Raises serializers.ValidationError using the _i18n marker so the custom
+    exception handler translates the message.
+    """
+    if not isinstance(value, list):
+        raise serializers.ValidationError(
+            [{'_i18n': True, 'key': 'company.categories_must_be_list', 'params': {}}]
+        )
+    if len(value) > _CATEGORIES_MAX_COUNT:
+        raise serializers.ValidationError(
+            [{'_i18n': True, 'key': 'company.categories_too_many', 'params': {}}]
+        )
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.categories_item_must_be_string', 'params': {}}]
+            )
+        if len(item) > _CATEGORIES_ITEM_MAX_LEN:
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'company.categories_item_too_long', 'params': {}}]
+            )
+    return value
+
+
+class CompanyAdminUserSerializer(serializers.ModelSerializer):
+    """Minimal read-only snapshot of the company admin user embedded in company responses."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position']
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
 
 class CompanySerializer(serializers.ModelSerializer):
     """Lightweight serializer used for list responses."""
     employee_count = serializers.IntegerField(read_only=True)
+    company_admin = serializers.SerializerMethodField()
+    floor_id = serializers.IntegerField(source='floor_fk_id', read_only=True, allow_null=True)
+    floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
+    floor_name = serializers.SerializerMethodField()
+
+    def get_company_admin(self, obj):
+        admin = obj.members.filter(role='company_admin', is_active=True).first()
+        if admin is None:
+            return None
+        return CompanyAdminUserSerializer(admin, context=self.context).data
+
+    def get_floor_name(self, obj):
+        return obj.floor_fk.name if obj.floor_fk else None
 
     class Meta:
         model = Company
         fields = [
             'id', 'name', 'description', 'logo', 'floor', 'office_number',
-            'contact_email', 'contact_phone',
+            'company_admin', 'categories',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
             'is_active', 'working_hours_start', 'working_hours_end',
             'employee_count', 'created_at', 'updated_at',
+            'floor_id', 'floor_number', 'floor_name',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -32,16 +156,30 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     employee_count = serializers.SerializerMethodField()
     storage_used = serializers.SerializerMethodField()
     onboarding_completed = serializers.SerializerMethodField()
+    company_admin = serializers.SerializerMethodField()
+    floor_id = serializers.IntegerField(source='floor_fk_id', read_only=True, allow_null=True)
+    floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
+    floor_name = serializers.SerializerMethodField()
+
+    def get_company_admin(self, obj):
+        admin = obj.members.filter(role='company_admin', is_active=True).first()
+        if admin is None:
+            return None
+        return CompanyAdminUserSerializer(admin, context=self.context).data
+
+    def get_floor_name(self, obj):
+        return obj.floor_fk.name if obj.floor_fk else None
 
     class Meta:
         model = Company
         fields = [
             'id', 'name', 'description', 'logo', 'floor', 'office_number',
-            'contact_email', 'contact_phone',
+            'company_admin', 'categories',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
             'is_active', 'working_hours_start', 'working_hours_end',
             'employee_count', 'storage_used', 'onboarding_completed',
             'created_at', 'updated_at',
+            'floor_id', 'floor_number', 'floor_name',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -63,14 +201,27 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
 class CompanyCreateSerializer(serializers.ModelSerializer):
     """Used only by superadmin to create a new company (POST)."""
 
+    categories = CategoriesField(default=list, required=False)
+    floor_id = serializers.PrimaryKeyRelatedField(
+        queryset=Floor.objects.all(),
+        source='floor_fk',
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
     class Meta:
         model = Company
         fields = [
             'id', 'name', 'description', 'logo', 'floor', 'office_number',
-            'contact_email', 'contact_phone',
+            'categories',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
+            'floor_id',
         ]
         read_only_fields = ['id']
+
+    def validate_categories(self, value):
+        return _validate_categories(value)
 
     def create(self, validated_data):
         plan = validated_data.get('plan', 'basic')
@@ -86,21 +237,46 @@ class CompanyCreateSerializer(serializers.ModelSerializer):
 class CompanyUpdateSerializer(serializers.ModelSerializer):
     """PATCH/PUT serializer for superadmin — all writable Company fields, no CompanySettings."""
 
+    categories = CategoriesField(required=False)
+    floor_id = serializers.PrimaryKeyRelatedField(
+        queryset=Floor.objects.all(),
+        source='floor_fk',
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
     class Meta:
         model = Company
         fields = [
             'name', 'description', 'logo', 'floor', 'office_number',
-            'contact_email', 'contact_phone',
+            'categories',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
+            'floor_id',
         ]
+
+    def validate_categories(self, value):
+        return _validate_categories(value)
 
 
 class CompanyAdminUpdateSerializer(serializers.ModelSerializer):
     """Restricted PATCH serializer for company_admin — subset of fields only."""
 
+    categories = CategoriesField(required=False)
+    floor_id = serializers.PrimaryKeyRelatedField(
+        queryset=Floor.objects.all(),
+        source='floor_fk',
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+
     class Meta:
         model = Company
-        fields = ['name', 'description', 'logo', 'contact_email', 'contact_phone']
+        fields = ['name', 'description', 'logo', 'categories', 'floor_id']
+
+    def validate_categories(self, value):
+        return _validate_categories(value)
 
 
 class WorkingHoursSerializer(serializers.Serializer):

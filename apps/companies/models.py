@@ -24,9 +24,15 @@ class Company(TimeStampedModel, SoftDeleteModel):
     description = models.TextField(blank=True, default='')
     logo = models.ImageField(upload_to='company_logos/', null=True, blank=True)
     floor = models.CharField(max_length=50, blank=True, default='')
+    floor_fk = models.ForeignKey(
+        'services.Floor',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='companies',
+    )
     office_number = models.CharField(max_length=50, blank=True, default='')
-    contact_email = models.EmailField(blank=True, default='')
-    contact_phone = models.CharField(max_length=20, blank=True, default='')
+    categories = models.JSONField(default=list, blank=True)
 
     plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='basic', db_index=True)
     max_employees = models.PositiveIntegerField(default=10)

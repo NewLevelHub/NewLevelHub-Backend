@@ -449,12 +449,13 @@ class TestFileApiAcceptanceCriteria:
         assert not File.all_objects.filter(id=old_deleted.id).exists()
         assert File.all_objects.filter(id=recent_deleted.id).exists()
 
-    def test_guest_cannot_access_storage_files_list(self, api_client, guest_user):
+    def test_guest_can_access_own_storage_files_list(self, api_client, guest_user):
+        # Guests may list their own personal files.
         api_client.force_authenticate(user=guest_user)
 
         response = api_client.get(_files_url())
 
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_200_OK
 
     def test_company_admin_does_not_see_other_users_personal_files(self, api_client, company_member, company_admin):
         File.objects.create(

@@ -795,11 +795,13 @@ class TestGuestPassValidationsHistoryAC:
         response = api_client.get(pass_validations_url(guest_pass.id))
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_guest_role_gets_403(self, api_client, company_admin, guest_user):
+    def test_guest_role_gets_404_for_foreign_pass(self, api_client, company_admin, guest_user):
+        # Guests can reach the validations endpoint but a pass created by someone
+        # else is not in their queryset, so they receive 404 rather than 403.
         guest_pass = _create_pass(creator=company_admin, usage_type='multi')
         api_client.force_authenticate(user=guest_user)
         response = api_client.get(pass_validations_url(guest_pass.id))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_empty_results_for_unvalidated_pass(self, api_client, company_admin):
         guest_pass = _create_pass(creator=company_admin, usage_type='multi')

@@ -528,7 +528,9 @@ class TestBookingValidationAuth:
         resp = api_client.post(RESERVATIONS_URL, {}, format='json')
         assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_guest_returns_403(self, api_client, company):
+    def test_guest_reaches_endpoint_and_gets_400_on_empty_payload(self, api_client, company):
+        # Guests are now allowed to book shared resources.
+        # An empty payload fails validation (400), not permission (403).
         guest = User.objects.create_user(
             email='guest@test.com',
             password='pass',
@@ -539,4 +541,4 @@ class TestBookingValidationAuth:
         )
         api_client.force_authenticate(user=guest)
         resp = api_client.post(RESERVATIONS_URL, {}, format='json')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST

@@ -457,8 +457,8 @@ class FileViewSet(viewsets.ModelViewSet):
         queryset = self.get_queryset().filter(pk__in=ids)
         user = request.user
         for file_obj in queryset:
-            if not (user.role == 'superadmin' or file_obj.owner_id == user.id or
-                    (user.company_id and file_obj.company_id == user.company_id and user.role == 'company_admin')):
+            if not (user.role == 'superadmin' or file_obj.owner_id == user.id
+                    or (user.company_id and file_obj.company_id == user.company_id and user.role == 'company_admin')):
                 return Response(
                     {'detail': f'No permission to delete file {file_obj.id}.'},
                     status=status.HTTP_403_FORBIDDEN,

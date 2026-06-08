@@ -434,6 +434,41 @@ class FileViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         tags=['Storage'],
+        summary='Bulk delete files',
+        request=inline_serializer(
+            name='BulkDeleteRequest',
+            fields={'ids': drf_serializers.ListField(child=drf_serializers.IntegerField())},
+        ),
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            400: OpenApiResponse(description='Validation error'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk_delete')
+    def bulk_delete(self, request):
+        ids = request.data.get('ids')
+        if not isinstance(ids, list) or not ids:
+            return Response({'detail': '"ids" must be a non-empty list.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            ids = [int(i) for i in ids]
+        except (TypeError, ValueError):
+            return Response({'detail': '"ids" must contain integers.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = self.get_queryset().filter(pk__in=ids)
+        user = request.user
+        for file_obj in queryset:
+            if not (user.role == 'superadmin' or file_obj.owner_id == user.id
+                    or (user.company_id and file_obj.company_id == user.company_id and user.role == 'company_admin')):
+                return Response(
+                    {'detail': f'No permission to delete file {file_obj.id}.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        now = timezone.now()
+        queryset.update(is_deleted=True, deleted_at=now)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['Storage'],
         summary='Move file to folder',
         request=None,
         responses={200: FileSerializer, 400: OpenApiResponse(description='Validation error')},

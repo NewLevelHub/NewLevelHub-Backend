@@ -92,6 +92,34 @@ class IsCompanyMember(_AuthenticatedPermission):
         return False
 
 
+class IsGuestOrCompanyMember(_AuthenticatedPermission):
+    """
+    Like IsCompanyMember but also allows role=guest users.
+    Use on endpoints that guests should reach (e.g. creating their own passes).
+    company_admin / employee without a company still get 403 company_not_assigned.
+    """
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        user = request.user
+        if user.role == 'superadmin':
+            return True
+        if user.role == 'guest':
+            return True
+        if user.role in ('company_admin', 'employee'):
+            if user.company_id is None:
+                lang = get_lang(request)
+                raise PermissionDenied(
+                    detail={
+                        'code': 'company_not_assigned',
+                        'message': translate('company.not_assigned', lang),
+                    }
+                )
+            return True
+        return False
+
+
 class IsCompanyAdminOrReadOnly(_AuthenticatedPermission):
     """
     company_admin (and superadmin) may use any HTTP method.

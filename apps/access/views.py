@@ -22,7 +22,7 @@ from rest_framework.response import Response
 
 from apps.core.exceptions import LocalizedError
 from apps.core.i18n import get_lang, translate
-from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsSuperAdminOrReception
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsGuestOrCompanyMember, IsSuperAdminOrReception
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
 from .filters import AccessLogFilter, GuestPassFilter
@@ -87,7 +87,9 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     filterset_class = GuestPassFilter
 
     def get_permissions(self):
-        if self.action in ('list', 'retrieve', 'create', 'validations'):
+        if self.action in ('create', 'list', 'retrieve'):
+            return [IsGuestOrCompanyMember()]
+        if self.action == 'validations':
             return [IsCompanyMember()]
         return [permission() for permission in self.permission_classes]
 

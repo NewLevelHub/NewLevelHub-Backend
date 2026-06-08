@@ -127,14 +127,16 @@ def test_unauthenticated_list_returns_401(api_client, floor):
 
 
 @pytest.mark.django_db
-def test_guest_list_returns_403(api_client, guest, floor):
+def test_guest_list_returns_200(api_client, guest, floor):
+    # Guests can see global floors (company=null) for the building map.
     auth(api_client, guest)
     response = api_client.get(FLOORS_URL)
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_200_OK
 
 
 @pytest.mark.django_db
 def test_guest_post_returns_403(api_client, guest):
+    # Guests cannot create floors — only superadmin can.
     auth(api_client, guest)
     response = api_client.post(FLOORS_URL, {'number': 5, 'name': 'Test'})
     assert response.status_code == status.HTTP_403_FORBIDDEN

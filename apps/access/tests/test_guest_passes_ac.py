@@ -194,6 +194,17 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_employee_cannot_create_more_than_two_active_for_same_email(self, api_client, employee):
+        # Employees have a per-invitee-email limit of 2 active passes within the company.
+        # company_admin is exempt from this limit.
+        payload = _payload()
+        _create_pass(creator=employee, guest_email=payload['guest_email'], status_code='active')
+        _create_pass(creator=employee, guest_email=payload['guest_email'], status_code='active')
+        api_client.force_authenticate(user=employee)
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
     def test_company_admin_has_no_active_pass_limit(self, api_client, company_admin):
         _create_pass(creator=company_admin, guest_email='guest-1@test.local', status_code='active')
         _create_pass(creator=company_admin, guest_email='guest-2@test.local', status_code='active')
@@ -795,11 +806,13 @@ class TestGuestPassValidationsHistoryAC:
         response = api_client.get(pass_validations_url(guest_pass.id))
         assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    def test_guest_role_gets_403(self, api_client, company_admin, guest_user):
+    def test_guest_role_gets_404_for_foreign_pass(self, api_client, company_admin, guest_user):
+        # Guests can reach the validations endpoint but a pass created by someone
+        # else is not in their queryset, so they receive 404 rather than 403.
         guest_pass = _create_pass(creator=company_admin, usage_type='multi')
         api_client.force_authenticate(user=guest_user)
         response = api_client.get(pass_validations_url(guest_pass.id))
-        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert response.status_code == status.HTTP_404_NOT_FOUND
 
     def test_empty_results_for_unvalidated_pass(self, api_client, company_admin):
         guest_pass = _create_pass(creator=company_admin, usage_type='multi')

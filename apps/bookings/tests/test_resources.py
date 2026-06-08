@@ -12,6 +12,7 @@ from rest_framework.test import APIClient
 from apps.bookings.models import Booking, Resource, ResourceBlock
 from apps.companies.models import Company
 from apps.notifications.models import Notification
+from apps.services.models import Floor
 from apps.users.models import User
 
 
@@ -1319,3 +1320,100 @@ class TestResourceAvailabilityDaysAndHoursFilter:
         assert r.status_code == status.HTTP_200_OK
         ids = {x['id'] for x in _list_results(r)}
         assert rid in ids
+
+
+@pytest.mark.django_db
+class TestResourceFloorIdFilter:
+    """Regression tests for the floor_id filter.
+
+    Original bug: floor_id + available_from/available_to caused a Django FieldError:
+    "Field Resource.floor_fk cannot be both deferred and traversed using select_related
+    at the same time." The exception was silently swallowed inside the list comprehension
+    in filter_free_interval, and the queryset fell back to returning ALL resources instead
+    of an empty list.
+
+    Fix: add .select_related(None) before .only('id', 'available_days') so the
+    floor_fk select_related annotation does not conflict with deferred loading.
+    """
+
+    def test_floor_id_no_resources_returns_empty(self, api_client, superadmin, employee):
+        """floor_id pointing to a floor with no linked resources returns an empty list."""
+        empty_floor = Floor.objects.create(number=99, name='Empty Floor Regression')
+
+        api_client.force_authenticate(user=superadmin)
+        floor_other = Floor.objects.create(number=100, name='Other Floor Regression')
+        r_other = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'Desk On Other Floor', 'floor': 100},
+            format='json',
+        )
+        assert r_other.status_code == status.HTTP_201_CREATED
+        Resource.objects.filter(id=r_other.json()['id']).update(floor_fk=floor_other)
+
+        api_client.force_authenticate(user=employee)
+        resp = api_client.get(RESOURCES_URL, {'floor_id': str(empty_floor.id)})
+        assert resp.status_code == status.HTTP_200_OK
+        assert _list_results(resp) == [], (
+            f'Expected [] for floor_id={empty_floor.id} (no resources linked), '
+            f'got {len(_list_results(resp))} results.'
+        )
+
+    def test_floor_id_filters_to_correct_resources(self, api_client, superadmin, employee):
+        """floor_id returns only resources linked to that specific floor."""
+        api_client.force_authenticate(user=superadmin)
+        floor_a = Floor.objects.create(number=10, name='Floor A Regression')
+        floor_b = Floor.objects.create(number=11, name='Floor B Regression')
+
+        r_a = api_client.post(
+            RESOURCES_URL, {'type': 'desk', 'name': 'Desk Floor A Reg', 'floor': 10}, format='json'
+        )
+        r_b = api_client.post(
+            RESOURCES_URL, {'type': 'desk', 'name': 'Desk Floor B Reg', 'floor': 11}, format='json'
+        )
+        assert r_a.status_code == status.HTTP_201_CREATED
+        assert r_b.status_code == status.HTTP_201_CREATED
+
+        Resource.objects.filter(id=r_a.json()['id']).update(floor_fk=floor_a)
+        Resource.objects.filter(id=r_b.json()['id']).update(floor_fk=floor_b)
+
+        api_client.force_authenticate(user=employee)
+        resp = api_client.get(RESOURCES_URL, {'floor_id': str(floor_a.id)})
+        assert resp.status_code == status.HTTP_200_OK
+        ids = {x['id'] for x in _list_results(resp)}
+        assert r_a.json()['id'] in ids
+        assert r_b.json()['id'] not in ids
+
+    def test_floor_id_with_availability_empty_floor_returns_empty_not_all(
+        self, api_client, superadmin, employee
+    ):
+        """Regression: floor_id + available_from/to on a floor with no resources returns [].
+
+        Before the fix (missing select_related(None) in filter_free_interval), Django raised
+        FieldError which was silently swallowed and all resources were returned instead.
+        """
+        api_client.force_authenticate(user=superadmin)
+        empty_floor = Floor.objects.create(number=200, name='Empty Floor Avail Regression')
+        floor_other = Floor.objects.create(number=201, name='Other Floor Avail Regression')
+
+        r_other = api_client.post(
+            RESOURCES_URL,
+            {'type': 'desk', 'name': 'Desk Avail Reg Other', 'floor': 201},
+            format='json',
+        )
+        assert r_other.status_code == status.HTTP_201_CREATED
+        Resource.objects.filter(id=r_other.json()['id']).update(floor_fk=floor_other)
+
+        api_client.force_authenticate(user=employee)
+        # Combine floor_id (empty floor) with an availability interval.
+        # This was the exact trigger for the FieldError regression.
+        resp = api_client.get(RESOURCES_URL, {
+            'floor_id': str(empty_floor.id),
+            'available_from': '2030-06-17T05:00:00Z',
+            'available_to': '2030-06-17T07:00:00Z',
+        })
+        assert resp.status_code == status.HTTP_200_OK
+        results = _list_results(resp)
+        assert results == [], (
+            f'BUG REGRESSION: floor_id + availability returned {len(results)} resources '
+            f'for a floor with no resources (expected []).'
+        )

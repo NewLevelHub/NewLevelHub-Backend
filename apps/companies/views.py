@@ -339,9 +339,9 @@ class CompanyViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'superadmin':
-            return Company.objects.all().order_by('-id')
+            return Company.objects.select_related('floor_fk').order_by('-id')
         if user.company_id:
-            return Company.objects.filter(id=user.company_id).order_by('-id')
+            return Company.objects.select_related('floor_fk').filter(id=user.company_id).order_by('-id')
         return Company.objects.none().order_by('-id')
 
     def get_serializer_class(self):

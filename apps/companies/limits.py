@@ -58,6 +58,16 @@ def get_company_storage_used_bytes(company):
     return storage_files_bytes + crm_attachments_bytes
 
 
+def get_guest_storage_used_bytes(user):
+    """Return total personal storage used by a guest user in bytes."""
+    from apps.storage.models import File
+
+    return (
+        File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        .aggregate(total=Sum('file_size'))['total'] or 0
+    )
+
+
 def notify_company_admins_limit_thresholds(company, metric, current_value, limit_value):
     """
     Create system notifications for company admins when usage reaches 80% / 95%.

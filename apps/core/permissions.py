@@ -5,7 +5,7 @@ Role hierarchy (highest to lowest):
   superadmin  — full access to everything, cross-company
   company_admin — manages their own company
   employee     — member of a company, limited write access
-  guest        — read-only public areas; blocked from CRM / HR / internal
+  guest        — personal bookings/storage/passes/services; blocked from CRM / HR / internal
 
 Authentication contract:
   - Any permission that subclasses _AuthenticatedPermission will return 401
@@ -94,9 +94,15 @@ class IsCompanyMember(_AuthenticatedPermission):
 
 class IsGuestOrCompanyMember(_AuthenticatedPermission):
     """
-    Like IsCompanyMember but also allows role=guest users.
-    Use on endpoints that guests should reach (e.g. creating their own passes).
-    company_admin / employee without a company still get 403 company_not_assigned.
+    Allows access to:
+      - superadmin (cross-company),
+      - company_admin / employee with a non-null company_id,
+      - guest (no company required).
+
+    Use this instead of IsCompanyMember on endpoints that guests should
+    reach with their own data isolated by user (not by company).
+    company_admin / employee without a company get 403 with
+    ``detail.code`` = ``company_not_assigned``.
     """
 
     def has_permission(self, request, view):
@@ -104,8 +110,6 @@ class IsGuestOrCompanyMember(_AuthenticatedPermission):
             return False
         user = request.user
         if user.role == 'superadmin':
-            return True
-        if user.role == 'guest':
             return True
         if user.role in ('company_admin', 'employee'):
             if user.company_id is None:
@@ -116,6 +120,8 @@ class IsGuestOrCompanyMember(_AuthenticatedPermission):
                         'message': translate('company.not_assigned', lang),
                     }
                 )
+            return True
+        if user.role == 'guest':
             return True
         return False
 

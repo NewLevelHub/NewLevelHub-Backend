@@ -16,9 +16,11 @@ from apps.core.error_codes import (
     SERVER_ERROR,
     NOT_FOUND,
     PERMISSION_DENIED,
+    SESSION_IDLE_TIMEOUT,
     UNAUTHENTICATED,
     VALIDATION_ERROR,
 )
+from apps.users.authentication import SessionIdleTimeout
 from apps.core.i18n import get_lang, translate
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,10 @@ def custom_exception_handler(exc, context):  # noqa: C901
     http_status = response.status_code
 
     # ── 401 Unauthenticated ───────────────────────────────────────────────
+    if isinstance(exc, SessionIdleTimeout):
+        message = translate('auth.session_idle_timeout', lang)
+        return _build_error_response(SESSION_IDLE_TIMEOUT, message, http_status=http_status)
+
     if isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
         message = translate('common.unauthenticated', lang)
         return _build_error_response(UNAUTHENTICATED, message, http_status=http_status)

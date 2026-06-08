@@ -155,7 +155,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'apps.users.authentication.IdleAwareJWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -180,6 +180,7 @@ REST_FRAMEWORK = {
 ACCESS_TOKEN_LIFETIME = timedelta(minutes=int(os.getenv('ACCESS_TOKEN_LIFETIME', 15)))
 REFRESH_TOKEN_LIFETIME = timedelta(days=int(os.getenv('REFRESH_TOKEN_LIFETIME', 7)))
 REMEMBER_ME_LIFETIME = timedelta(days=int(os.getenv('REMEMBER_ME_LIFETIME', 30)))
+IDLE_SESSION_TIMEOUT = timedelta(minutes=int(os.getenv('IDLE_SESSION_TIMEOUT_MINUTES', 5)))
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': ACCESS_TOKEN_LIFETIME,
@@ -302,6 +303,9 @@ DEFAULT_UPLOAD_LIMIT_MB = int(os.getenv('UPLOAD_MAX_SIZE_MB', 100))
 DEFAULT_UPLOAD_LIMIT_BYTES = DEFAULT_UPLOAD_LIMIT_MB * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('FILE_UPLOAD_MAX_MEMORY_SIZE', DEFAULT_UPLOAD_LIMIT_BYTES))
 DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', DEFAULT_UPLOAD_LIMIT_BYTES))
+
+# Personal storage quota for users with role='guest' (no company).
+GUEST_STORAGE_LIMIT_GB = int(os.getenv('GUEST_STORAGE_LIMIT_GB', 1))
 
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = False

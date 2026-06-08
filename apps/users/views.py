@@ -58,6 +58,7 @@ from .jwt import (
     issue_refresh_token,
     set_refresh_cookie,
 )
+from .session import touch_last_activity
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,7 @@ def login(request):
     user = serializer.validated_data['user']
     remember_me = serializer.validated_data.get('remember_me', False)
     tokens = _get_tokens(user, remember_me=remember_me)
+    touch_last_activity(user)
     response = Response({'user': UserProfileSerializer(user).data, 'tokens': tokens})
     set_refresh_cookie(response, tokens['refresh'], remember_me=remember_me)
     return response

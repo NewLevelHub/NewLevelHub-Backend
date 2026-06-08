@@ -204,7 +204,6 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-
     def test_company_admin_has_no_active_pass_limit(self, api_client, company_admin):
         _create_pass(creator=company_admin, guest_email='guest-1@test.local', status_code='active')
         _create_pass(creator=company_admin, guest_email='guest-2@test.local', status_code='active')

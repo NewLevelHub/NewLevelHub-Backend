@@ -38,6 +38,7 @@ NOTIFICATION_TYPE_FIELD_MAP = {
     'announcement': ('announcement_in_app', 'announcement_email'),
     'invitation': ('invitation_in_app', 'invitation_email'),
     'leave_review': ('leave_review_in_app', 'leave_review_email'),
+    'new_employee': ('new_employee_in_app', 'new_employee_email'),
     'system': ('system_in_app', 'system_email'),
 }
 
@@ -53,6 +54,7 @@ EMAIL_ENABLED_TYPES = {
     'guest_validated',     # apps/access/tasks.py
     'announcement',        # apps/notifications/tasks.py send_bulk_email → announcement_company type
                            # maps to announcement_email pref, which this key controls
+    'new_employee',        # apps/users/tasks.py notify_new_employee → company admins
 }
 
 # Notification types each role is allowed to see and configure.
@@ -65,7 +67,7 @@ ROLE_NOTIFICATION_TYPES = {
         'guest_validated', 'guest_pass_expiring',
         'service_request_update',
         'announcement',
-        'invitation', 'leave_review',
+        'invitation', 'leave_review', 'new_employee',
         'system',
     ],
     'employee': [

@@ -289,3 +289,64 @@ class TestInviteRegistration:
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         msg = response.data['error']['details']['non_field_errors'][0]
         assert msg == 'Достигнут лимит сотрудников для вашего тарифа.'
+
+    @patch('apps.users.views.send_verification_email.delay')
+    @patch('apps.users.tasks.notify_new_employee.delay')
+    @patch('apps.users.serializers.transaction.on_commit', side_effect=lambda fn: fn())
+    def test_post_register_by_invite_notifies_company_admins(
+        self, _mock_on_commit, mock_notify, mock_send_email, api_client, invitation, inviter
+    ):
+        """Successful invite registration triggers new_employee notification for admins."""
+        from apps.notifications.models import Notification
+
+        response = api_client.post(
+            REGISTER_INVITE_URL,
+            {
+                'token': str(invitation.token),
+                'first_name': 'New',
+                'last_name': 'Employee',
+                'password': 'StrongPass123!',
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        new_user = User.objects.get(email=invitation.email)
+        mock_notify.assert_called_once_with(new_user.pk)
+
+    @patch('apps.users.views.send_verification_email.delay')
+    @patch('apps.users.tasks.notify_new_employee.delay')
+    @patch('apps.users.serializers.transaction.on_commit', side_effect=lambda fn: fn())
+    def test_notify_new_employee_task_creates_notifications_for_admins(
+        self, _mock_on_commit, _mock_notify_delay, mock_send_email, db, company, inviter
+    ):
+        """notify_new_employee task creates in-app notifications for all company admins."""
+        from apps.notifications.models import Notification
+        from apps.users.tasks import notify_new_employee
+
+        second_admin = User.objects.create_user(
+            email='admin2@invite.co',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Two',
+            role='company_admin',
+            company=company,
+        )
+        new_user = User.objects.create_user(
+            email='newbie@invite.co',
+            password='StrongPass123!',
+            first_name='New',
+            last_name='Hire',
+            role='employee',
+            company=company,
+        )
+
+        notify_new_employee(new_user.pk)
+
+        admin_ids = {inviter.pk, second_admin.pk}
+        notified_ids = set(
+            Notification.objects.filter(
+                notification_type='new_employee',
+            ).values_list('user_id', flat=True)
+        )
+        assert notified_ids == admin_ids

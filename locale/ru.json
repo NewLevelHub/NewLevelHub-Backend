@@ -182,7 +182,7 @@
   "access.valid_until_too_far": "Срок действия пропуска не может превышать 30 дней.",
   "access.multi_use_max_one_day": "Многоразовый пропуск действует не более 1 дня.",
   "access.cannot_create_for_self": "Нельзя создать пропуск для самого себя.",
-  "access.guest_max_passes_reached": "У гостя уже есть 2 активных пропуска.",
+  "access.guest_max_passes_reached": "У Вас уже есть 2 активных пропуска.",
   "access.guests_cannot_create_passes": "Гости не могут создавать пропуска.",
   "access.cannot_create_for_employee": "Нельзя создать гостевой пропуск для сотрудника компании.",
   "access.status.active": "активен",

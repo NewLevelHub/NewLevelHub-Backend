@@ -153,10 +153,17 @@ class TestGuestPassesCreateAC:
         assert response.status_code == status.HTTP_201_CREATED
 
     def test_create_allows_guest_role(self, api_client, guest_user):
-        # Guests may now create up to 3 active passes for visitors.
+        # Guests may create up to 2 active passes for visitors.
         api_client.force_authenticate(user=guest_user)
         response = api_client.post(PASSES_URL, _payload(), format='json')
         assert response.status_code == status.HTTP_201_CREATED
+
+    def test_guest_cannot_create_more_than_two_active(self, api_client, guest_user):
+        _create_pass(creator=guest_user, guest_email='a@test.local', status_code='active')
+        _create_pass(creator=guest_user, guest_email='b@test.local', status_code='active')
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.post(PASSES_URL, _payload(), format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_cannot_create_pass_for_self_email(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)

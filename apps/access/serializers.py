@@ -56,11 +56,11 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
             raise_validation_error('guest_email', 'access.cannot_create_for_employee')
 
         if user.role == 'guest':
-            # Guests may have at most 3 active passes total (across all invitees).
+            # Guests may have at most 2 active passes total (across all invitees).
             active_count = GuestPass.objects.filter(
                 created_by=user, status='active',
             ).count()
-            if active_count >= 3:
+            if active_count >= 2:
                 raise_validation_error('non_field_errors', 'access.guest_max_passes_reached')
         elif user.role not in ('superadmin', 'company_admin', 'service_manager', 'reception'):
             # Employees: max 2 active passes per invitee email within the company.

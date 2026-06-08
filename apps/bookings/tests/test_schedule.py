@@ -224,8 +224,8 @@ def test_schedule_response_shape(api_client, admin, resource):
 
 
 @pytest.mark.django_db
-def test_schedule_guest_returns_403(api_client, db, resource):
-    """Guest users must get 403."""
+def test_schedule_guest_returns_200_no_pii(api_client, db, resource, admin):
+    """Guest users can read the schedule; response must contain no PII fields."""
     guest = User.objects.create_user(
         email='guest@sched.test',
         password='pass',
@@ -233,9 +233,15 @@ def test_schedule_guest_returns_403(api_client, db, resource):
         last_name='U',
         role='guest',
     )
+    _make_booking(resource, admin, start_offset_hours=1, duration_hours=2)
     api_client.force_authenticate(user=guest)
     resp = api_client.get(schedule_url(resource.pk))
-    assert resp.status_code == 403
+    assert resp.status_code == 200
+    slots = resp.json()
+    assert isinstance(slots, list)
+    pii_keys = {'user', 'email', 'user_name', 'booked_by', 'first_name', 'last_name'}
+    for slot in slots:
+        assert not pii_keys.intersection(slot.keys()), f"PII found in slot: {slot}"
 
 
 # ---------------------------------------------------------------------------

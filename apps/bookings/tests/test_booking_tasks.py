@@ -302,7 +302,7 @@ def test_auto_complete_creates_inapp_notification(user, resource):
     """Auto-completing a booking creates a booking_completed in-app notification."""
     from apps.bookings.tasks import auto_complete_bookings
 
-    booking = _make_booking(user, resource, start_offset_minutes=-120, duration_minutes=60)
+    _make_booking(user, resource, start_offset_minutes=-120, duration_minutes=60)
 
     with patch('apps.notifications.tasks.send_notification_email.delay'):
         auto_complete_bookings()

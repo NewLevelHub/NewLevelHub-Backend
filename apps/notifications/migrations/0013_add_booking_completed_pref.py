@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('notifications', '0012_fix_new_employee_email_default'),
+        ('notifications', '0010_backfill_transactional_email_defaults'),
     ]
 
     operations = [

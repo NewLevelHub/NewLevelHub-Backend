@@ -367,8 +367,43 @@ def _company_admin_widgets(user):
         .order_by('-is_pinned', '-created_at')[:5]
     )
 
-    pending_leaves = LeaveRequest.objects.filter(company=company, status='pending').count()
-    active_guest_passes = GuestPass.objects.filter(company=company, status='active').count()
+    pending_leaves_qs = (
+        LeaveRequest.objects
+        .select_related('user')
+        .filter(company=company, status='pending')
+        .order_by('created_at')
+    )
+    pending_leaves = [
+        {
+            'id': lr.id,
+            'employee': _serialize_user(lr.user),
+            'leave_type': lr.leave_type,
+            'start_date': lr.start_date,
+            'end_date': lr.end_date,
+            'created_at': lr.created_at,
+        }
+        for lr in pending_leaves_qs
+    ]
+
+    active_guest_passes_qs = (
+        GuestPass.objects
+        .select_related('created_by')
+        .filter(company=company, status='active')
+        .order_by('created_at')
+    )
+    active_guest_passes = [
+        {
+            'id': gp.id,
+            'guest_name': gp.guest_name,
+            'guest_email': gp.guest_email,
+            'host': _serialize_user(gp.created_by),
+            'visit_date': gp.valid_from,
+            'valid_from': gp.valid_from,
+            'valid_until': gp.valid_until,
+            'created_at': gp.created_at,
+        }
+        for gp in active_guest_passes_qs
+    ]
 
     bookings_recent_qs = (
         Booking.objects

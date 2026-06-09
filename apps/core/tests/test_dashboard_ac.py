@@ -479,7 +479,20 @@ class TestCompanyAdminDashboard:
         api_client.force_authenticate(user=company_admin)
         resp = api_client.get(DASHBOARD_URL)
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.data['pending_approvals']['leaves'] == 1
+        leaves = resp.data['pending_approvals']['leaves']
+        assert isinstance(leaves, list)
+        assert len(leaves) == 1
+        item = leaves[0]
+        assert 'id' in item
+        assert 'employee' in item
+        emp = item['employee']
+        assert emp['id'] == employee.id
+        assert emp['full_name'] == employee.full_name
+        assert 'avatar' in emp
+        assert item['leave_type'] == 'vacation'
+        assert str(item['start_date']) == '2026-06-01'
+        assert str(item['end_date']) == '2026-06-10'
+        assert 'created_at' in item
 
     def test_pending_approvals_guest_passes_count(self, api_client, company_admin, company):
         now = timezone.now()
@@ -505,7 +518,22 @@ class TestCompanyAdminDashboard:
         api_client.force_authenticate(user=company_admin)
         resp = api_client.get(DASHBOARD_URL)
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.data['pending_approvals']['guest_passes'] == 1
+        guest_passes = resp.data['pending_approvals']['guest_passes']
+        assert isinstance(guest_passes, list)
+        assert len(guest_passes) == 1
+        item = guest_passes[0]
+        assert 'id' in item
+        assert item['guest_name'] == 'Guest A'
+        assert item['guest_email'] == 'ga@test.local'
+        assert 'host' in item
+        host = item['host']
+        assert host['id'] == company_admin.id
+        assert host['full_name'] == company_admin.full_name
+        assert 'avatar' in host
+        assert 'visit_date' in item
+        assert 'valid_from' in item
+        assert 'valid_until' in item
+        assert 'created_at' in item
 
     def test_data_isolated_from_other_company(
         self, api_client, company_admin, company, other_company, desk_resource,
@@ -534,7 +562,7 @@ class TestCompanyAdminDashboard:
         resp = api_client.get(DASHBOARD_URL)
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data['bookings_today'] == 0
-        assert resp.data['pending_approvals']['leaves'] == 0
+        assert resp.data['pending_approvals']['leaves'] == []
 
     def test_free_resources_now_excludes_currently_booked(
         self, api_client, company_admin, company, desk_resource,

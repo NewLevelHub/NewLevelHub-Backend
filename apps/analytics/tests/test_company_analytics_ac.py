@@ -11,6 +11,7 @@ from apps.access.models import GuestPass
 from apps.bookings.models import Booking, Resource
 from apps.companies.models import Company
 from apps.crm.models import Board, Column, Task
+from apps.hr.models import LeaveRequest
 from apps.storage.models import File
 from apps.users.models import User
 
@@ -188,6 +189,7 @@ class TestCompanyAnalyticsAC:
             'active_crm_tasks',
             'guest_visits_month',
             'employee_activity',
+            'pending_approvals',
         }
         assert data['total_employees'] == 3
         assert data['active_7d'] == 2
@@ -220,6 +222,13 @@ class TestCompanyAnalyticsAC:
         # (Asia/Almaty, +05:00), so we must compare against the *local* date, not the UTC date.
         local_last_login_date = timezone.localtime(employee_a.last_login).date().isoformat()
         assert by_user_id[employee_a.id]['last_login'].startswith(local_last_login_date)
+
+        # pending_approvals — no leaves; two active guest passes were created in this test
+        approvals = data['pending_approvals']
+        assert approvals['leaves'] == []
+        assert len(approvals['guest_passes']) == 2
+        assert approvals['guest_passes'][0]['guest_name'] == 'Guest'
+        assert approvals['guest_passes'][0]['host_name'] == company_admin.full_name
 
     def test_employee_is_forbidden(self, api_client, employee_a):
         api_client.force_authenticate(user=employee_a)
@@ -303,3 +312,90 @@ class TestCompanyAnalyticsAC:
         assert len(act['by_column']) == 2
         by_name = {c['name']: c['count'] for c in act['by_column']}
         assert by_name == {'Code review': 2, 'To Do': 1}
+
+    def test_pending_approvals_contains_leaves_and_guest_passes(
+        self, api_client, company_admin, employee_a, company, other_company, outsider_employee,
+    ):
+        """Pending leaves and active guest passes for the company appear in pending_approvals."""
+        now = timezone.now()
+
+        # Two pending leaves for the company; one approved (must be excluded)
+        pending_leave = LeaveRequest.objects.create(
+            user=employee_a,
+            company=company,
+            leave_type='vacation',
+            status='pending',
+            start_date=(now + timedelta(days=5)).date(),
+            end_date=(now + timedelta(days=10)).date(),
+        )
+        LeaveRequest.objects.create(
+            user=employee_a,
+            company=company,
+            leave_type='sick_leave',
+            status='approved',
+            start_date=(now + timedelta(days=1)).date(),
+            end_date=(now + timedelta(days=2)).date(),
+        )
+        # Pending leave for another company (must be excluded)
+        LeaveRequest.objects.create(
+            user=outsider_employee,
+            company=other_company,
+            leave_type='day_off',
+            status='pending',
+            start_date=(now + timedelta(days=3)).date(),
+            end_date=(now + timedelta(days=3)).date(),
+        )
+
+        # One active guest pass for the company; one revoked (must be excluded)
+        active_gp = GuestPass.objects.create(
+            created_by=company_admin,
+            company=company,
+            guest_name='Jane Visitor',
+            guest_email='jane@visitor.test',
+            valid_from=now + timedelta(hours=1),
+            valid_until=now + timedelta(days=1),
+            status='active',
+        )
+        GuestPass.objects.create(
+            created_by=company_admin,
+            company=company,
+            guest_name='Old Visitor',
+            guest_email='old@visitor.test',
+            valid_from=now - timedelta(days=2),
+            valid_until=now - timedelta(days=1),
+            status='revoked',
+        )
+        # Active guest pass for another company (must be excluded)
+        GuestPass.objects.create(
+            created_by=outsider_employee,
+            company=other_company,
+            guest_name='Other Visitor',
+            guest_email='other@visitor.test',
+            valid_from=now,
+            valid_until=now + timedelta(days=1),
+            status='active',
+        )
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(URL)
+        assert response.status_code == status.HTTP_200_OK
+
+        approvals = response.data['pending_approvals']
+        assert set(approvals.keys()) == {'leaves', 'guest_passes'}
+
+        assert len(approvals['leaves']) == 1
+        leave = approvals['leaves'][0]
+        assert leave['id'] == pending_leave.id
+        assert leave['employee_name'] == employee_a.full_name
+        assert leave['leave_type'] == 'vacation'
+        assert str(leave['start_date']) == pending_leave.start_date.isoformat()
+        assert str(leave['end_date']) == pending_leave.end_date.isoformat()
+        assert leave['created_at'] is not None
+
+        assert len(approvals['guest_passes']) == 1
+        gp = approvals['guest_passes'][0]
+        assert gp['id'] == active_gp.id
+        assert gp['guest_name'] == 'Jane Visitor'
+        assert gp['host_name'] == company_admin.full_name
+        assert gp['visit_date'] is not None
+        assert gp['created_at'] is not None

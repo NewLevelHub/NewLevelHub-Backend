@@ -111,6 +111,28 @@ class EmployeeActivitySerializer(serializers.Serializer):
     last_login = serializers.DateTimeField(allow_null=True)
 
 
+class PendingLeaveSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    employee_name = serializers.CharField()
+    leave_type = serializers.CharField()
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    created_at = serializers.DateTimeField()
+
+
+class PendingGuestPassSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    guest_name = serializers.CharField()
+    host_name = serializers.CharField()
+    visit_date = serializers.DateTimeField()
+    created_at = serializers.DateTimeField()
+
+
+class PendingApprovalsSerializer(serializers.Serializer):
+    leaves = PendingLeaveSerializer(many=True)
+    guest_passes = PendingGuestPassSerializer(many=True)
+
+
 class CompanyAnalyticsSerializer(serializers.Serializer):
     total_employees = serializers.IntegerField()
     active_7d = serializers.IntegerField()
@@ -119,6 +141,7 @@ class CompanyAnalyticsSerializer(serializers.Serializer):
     active_crm_tasks = ActiveCrmTasksSerializer()
     guest_visits_month = serializers.IntegerField()
     employee_activity = EmployeeActivitySerializer(many=True)
+    pending_approvals = PendingApprovalsSerializer()
 
 
 class ResourceUsageRowSerializer(serializers.Serializer):

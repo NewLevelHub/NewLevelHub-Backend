@@ -100,6 +100,8 @@ class NotificationPreference(TimeStampedModel):
     booking_reminder_email = models.BooleanField(default=True)
     booking_cancelled_in_app = models.BooleanField(default=True)
     booking_cancelled_email = models.BooleanField(default=True)
+    booking_completed_in_app = models.BooleanField(default=True)
+    booking_completed_email = models.BooleanField(default=False)
     # Task
     task_assigned_in_app = models.BooleanField(default=True)
     task_assigned_email = models.BooleanField(default=True)

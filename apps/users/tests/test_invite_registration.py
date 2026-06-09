@@ -31,6 +31,7 @@ def inviter(db, company):
         last_name='User',
         role='company_admin',
         company=company,
+        is_email_verified=True,
     )
 
 
@@ -350,3 +351,54 @@ class TestInviteRegistration:
             ).values_list('user_id', flat=True)
         )
         assert notified_ids == admin_ids
+
+    @patch('apps.notifications.tasks.send_notification_email.delay')
+    @patch('apps.users.views.send_verification_email.delay')
+    @patch('apps.users.tasks.notify_new_employee.delay')
+    @patch('apps.users.serializers.transaction.on_commit', side_effect=lambda fn: fn())
+    def test_notify_new_employee_task_sends_email_to_admins(
+        self, _mock_on_commit, _mock_notify_delay, _mock_verify_email, mock_send_email, db, company, inviter
+    ):
+        """notify_new_employee task sends email notification to all company admins."""
+        from apps.users.tasks import notify_new_employee
+
+        second_admin = User.objects.create_user(
+            email='admin2@invite.co',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Two',
+            role='company_admin',
+            company=company,
+            is_email_verified=True,
+        )
+        unverified_admin = User.objects.create_user(
+            email='admin3@invite.co',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Three',
+            role='company_admin',
+            company=company,
+            is_email_verified=False,
+        )
+        new_user = User.objects.create_user(
+            email='newbie@invite.co',
+            password='StrongPass123!',
+            first_name='New',
+            last_name='Hire',
+            role='employee',
+            company=company,
+        )
+
+        notify_new_employee(new_user.pk)
+
+        # Only verified admins receive email; unverified admin is skipped.
+        assert mock_send_email.call_count == 2
+        called_admin_ids = {call.args[0] for call in mock_send_email.call_args_list}
+        assert called_admin_ids == {inviter.pk, second_admin.pk}
+        assert unverified_admin.pk not in called_admin_ids
+
+        for call in mock_send_email.call_args_list:
+            assert call.args[1] == 'new_employee'
+            ctx = call.args[2]
+            assert ctx['employee_name'] == new_user.full_name
+            assert ctx['employee_email'] == new_user.email

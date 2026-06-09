@@ -30,6 +30,7 @@ def create_email_verification_token(user, invalidate_existing=False):
 @shared_task
 def notify_new_employee(user_id):
     """Notify company admins when a new employee joins via invite."""
+    from apps.notifications.tasks import send_notification_email
     from apps.notifications.utils import create_notification
 
     UserModel = get_user_model()
@@ -42,15 +43,28 @@ def notify_new_employee(user_id):
     if not company:
         return
 
+    title = f'{user.full_name} присоединился к компании'
+
     admins = UserModel.objects.filter(company=company, role='company_admin', is_active=True)
     for admin in admins:
         create_notification(
             user=admin,
             notification_type='new_employee',
-            title=f'{user.full_name} присоединился к компании',
+            title=title,
             message=f'Новый сотрудник {user.full_name} зарегистрировался по приглашению.',
             link='/team/manage',
         )
+        if admin.is_email_verified:
+            send_notification_email.delay(
+                admin.pk,
+                'new_employee',
+                {
+                    'subject': title,
+                    'employee_name': user.full_name,
+                    'employee_email': user.email,
+                    'action_url': '/team/manage',
+                },
+            )
 
 
 @shared_task

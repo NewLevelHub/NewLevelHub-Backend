@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='notificationpreference',
             name='new_employee_email',
-            field=models.BooleanField(default=False),
+            field=models.BooleanField(default=True),
         ),
         migrations.AddField(
             model_name='notificationpreference',

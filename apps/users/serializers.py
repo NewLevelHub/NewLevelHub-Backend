@@ -333,6 +333,13 @@ class ChangePasswordSerializer(serializers.Serializer):
             )
         return value
 
+    def validate_new_password(self, value):
+        try:
+            validate_password(value, self.context['request'].user)
+        except ValidationError as exc:
+            raise serializers.ValidationError(exc.messages)
+        return value
+
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()

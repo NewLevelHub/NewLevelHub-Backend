@@ -540,7 +540,8 @@ def change_password(request):
     serializer.is_valid(raise_exception=True)
     request.user.set_password(serializer.validated_data['new_password'])
     request.user.save(update_fields=['password'])
-    return Response({'detail': 'Password changed'})
+    _blacklist_user_refresh_tokens(request.user)
+    return Response({'detail': translate('auth.password_changed', get_lang(request))})
 
 
 # ── Admin: user management ────────────────────────────────────────────

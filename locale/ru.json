@@ -15,6 +15,7 @@
   "auth.session_idle_timeout": "Сессия завершена из-за бездействия. Пожалуйста, войдите снова.",
   "auth.passwords_dont_match": "Пароли не совпадают.",
   "auth.current_password_wrong": "Текущий пароль неверен.",
+  "auth.password_changed": "Пароль успешно изменён.",
   "booking.invalid_week_format": "Неверный формат недели. Используйте YYYY-MM-DD.",
   "booking.invalid_date_format": "Неверный формат даты. Используйте YYYY-MM-DD.",
   "booking.participants_admin_only": "Управлять участниками могут только администраторы компании.",

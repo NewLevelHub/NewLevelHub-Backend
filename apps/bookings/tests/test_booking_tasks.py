@@ -291,3 +291,86 @@ def test_auto_complete_only_affects_past_confirmed(user, resource):
     assert past_confirmed.status == 'completed'
     assert future_confirmed.status == 'confirmed'
     assert past_cancelled.status == 'cancelled'
+
+
+# ---------------------------------------------------------------------------
+# auto_complete_bookings — notification tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+def test_auto_complete_creates_inapp_notification(user, resource):
+    """Auto-completing a booking creates a booking_completed in-app notification."""
+    from apps.bookings.tasks import auto_complete_bookings
+
+    booking = _make_booking(user, resource, start_offset_minutes=-120, duration_minutes=60)
+
+    with patch('apps.notifications.tasks.send_notification_email.delay'):
+        auto_complete_bookings()
+
+    assert Notification.objects.filter(
+        user=user,
+        notification_type='booking_completed',
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_auto_complete_suppresses_notification_when_dnd(user, resource):
+    """No in-app notification is created when DND is active for the user."""
+    from apps.bookings.tasks import auto_complete_bookings
+    from apps.notifications.models import NotificationPreference
+
+    NotificationPreference.objects.update_or_create(
+        user=user,
+        defaults={'do_not_disturb': True},
+    )
+    _make_booking(user, resource, start_offset_minutes=-120, duration_minutes=60)
+
+    with patch('apps.notifications.tasks.send_notification_email.delay'):
+        auto_complete_bookings()
+
+    assert not Notification.objects.filter(
+        user=user,
+        notification_type='booking_completed',
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_auto_complete_sends_email_when_preference_enabled(user, resource):
+    """Email task is queued when booking_completed_email=True."""
+    from apps.bookings.tasks import auto_complete_bookings
+    from apps.notifications.models import NotificationPreference
+
+    NotificationPreference.objects.update_or_create(
+        user=user,
+        defaults={'booking_completed_email': True},
+    )
+    _make_booking(user, resource, start_offset_minutes=-120, duration_minutes=60)
+
+    with patch('apps.notifications.tasks.send_notification_email.delay') as mock_delay:
+        auto_complete_bookings()
+
+    mock_delay.assert_called_once()
+    args = mock_delay.call_args[0]
+    assert args[0] == user.id
+    assert args[1] == 'booking_completed'
+
+
+@pytest.mark.django_db
+def test_auto_complete_email_task_skips_when_preference_disabled(user, resource):
+    """send_notification_email skips sending when booking_completed_email=False (opt-in default)."""
+    from apps.notifications.tasks import send_notification_email
+    from apps.notifications.models import NotificationPreference
+
+    NotificationPreference.objects.update_or_create(
+        user=user,
+        defaults={'booking_completed_email': False},
+    )
+
+    with patch('apps.notifications.tasks.send_mail') as mock_send:
+        send_notification_email(
+            user.id,
+            'booking_completed',
+            {'resource_name': 'Test Desk', 'end_time': '09.06.2026 10:00'},
+        )
+
+    mock_send.assert_not_called()

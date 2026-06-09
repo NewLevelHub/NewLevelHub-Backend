@@ -28,6 +28,7 @@ NOTIFICATION_TYPE_FIELD_MAP = {
     'booking_confirmed': ('booking_confirmed_in_app', 'booking_confirmed_email'),
     'booking_reminder': ('booking_reminder_in_app', 'booking_reminder_email'),
     'booking_cancelled': ('booking_cancelled_in_app', 'booking_cancelled_email'),
+    'booking_completed': ('booking_completed_in_app', 'booking_completed_email'),
     'task_assigned': ('task_assigned_in_app', 'task_assigned_email'),
     'task_moved': ('task_moved_in_app', 'task_moved_email'),
     'task_comment': ('task_comment_in_app', 'task_comment_email'),
@@ -47,6 +48,7 @@ NOTIFICATION_TYPE_FIELD_MAP = {
 # call sites across the codebase (bookings, crm, hr, access, services).
 EMAIL_ENABLED_TYPES = {
     'booking_confirmed',   # apps/bookings/serializers.py
+    'booking_completed',   # apps/bookings/tasks.py auto_complete_bookings
     'task_assigned',       # apps/crm/views.py, apps/crm/tasks.py
     'task_deadline',       # apps/crm/tasks.py (also covers task_deadline_overdue via same pref field)
     'leave_review',        # apps/hr/views.py
@@ -60,7 +62,7 @@ EMAIL_ENABLED_TYPES = {
 ROLE_NOTIFICATION_TYPES = {
     'superadmin': '__all__',
     'company_admin': [
-        'booking_confirmed', 'booking_reminder', 'booking_cancelled',
+        'booking_confirmed', 'booking_reminder', 'booking_cancelled', 'booking_completed',
         'task_assigned', 'task_moved', 'task_comment', 'task_deadline',
         'guest_validated', 'guest_pass_expiring',
         'service_request_update',
@@ -69,7 +71,7 @@ ROLE_NOTIFICATION_TYPES = {
         'system',
     ],
     'employee': [
-        'booking_confirmed', 'booking_reminder', 'booking_cancelled',
+        'booking_confirmed', 'booking_reminder', 'booking_cancelled', 'booking_completed',
         'task_assigned', 'task_moved', 'task_comment', 'task_deadline',
         'service_request_update',
         'announcement',

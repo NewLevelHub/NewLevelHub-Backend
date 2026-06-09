@@ -3,14 +3,15 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     """
-    booking_completed_in_app / booking_completed_email columns already exist in
-    the DB (added outside the migration history) but are missing from the model.
-    This migration:
-      - DB level  : backfills any NULL rows and sets column-level defaults so
-                    future INSERTs that predate the Django field work correctly.
-      - State level: registers the two fields in Django's migration state so
-                    the ORM includes them in all INSERT/UPDATE statements going
-                    forward.
+    Adds booking_completed_in_app / booking_completed_email to NotificationPreference.
+
+    The columns may or may not already exist in the target database:
+      - Local/dev: were added outside the migration history (no-op for ADD COLUMN)
+      - Staging/prod: do not exist yet (normal ADD COLUMN)
+
+    ADD COLUMN IF NOT EXISTS makes the migration idempotent across all envs.
+    The UPDATE ensures any pre-existing NULL rows are backfilled before the
+    NOT NULL constraint is fully enforced by the ORM.
     """
 
     dependencies = [
@@ -22,21 +23,26 @@ class Migration(migrations.Migration):
             database_operations=[
                 migrations.RunSQL(
                     sql="""
+                        ALTER TABLE notification_preferences
+                          ADD COLUMN IF NOT EXISTS booking_completed_in_app boolean NOT NULL DEFAULT TRUE;
+
+                        ALTER TABLE notification_preferences
+                          ADD COLUMN IF NOT EXISTS booking_completed_email boolean NOT NULL DEFAULT FALSE;
+
                         UPDATE notification_preferences
                            SET booking_completed_in_app = TRUE
                          WHERE booking_completed_in_app IS NULL;
 
-                        ALTER TABLE notification_preferences
-                          ALTER COLUMN booking_completed_in_app SET DEFAULT TRUE;
-
                         UPDATE notification_preferences
                            SET booking_completed_email = FALSE
                          WHERE booking_completed_email IS NULL;
-
-                        ALTER TABLE notification_preferences
-                          ALTER COLUMN booking_completed_email SET DEFAULT FALSE;
                     """,
-                    reverse_sql=migrations.RunSQL.noop,
+                    reverse_sql="""
+                        ALTER TABLE notification_preferences
+                          DROP COLUMN IF EXISTS booking_completed_in_app;
+                        ALTER TABLE notification_preferences
+                          DROP COLUMN IF EXISTS booking_completed_email;
+                    """,
                 ),
             ],
             state_operations=[

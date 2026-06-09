@@ -9,11 +9,14 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 
+from apps.access.models import GuestPass
+from apps.bookings.models import Booking
 from apps.companies.invite_policy import existing_user_cannot_accept_invite_error
 from apps.companies.models import Invitation
 from apps.core.error_codes import EMAIL_NOT_VERIFIED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import get_lang, translate
+from apps.crm.models import Task
 from apps.hr.tasks import initialize_user_onboarding_progress
 from apps.users.tasks import notify_new_employee
 from .models import User
@@ -385,3 +388,28 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'date_joined', 'last_login',
             'bookings_count', 'tasks_count',
         ]
+
+
+# ── Activity summary (cross-app, read-only) ───────────────────────────
+
+class BookingActivitySerializer(serializers.ModelSerializer):
+    resource_name = serializers.CharField(source='resource.name', read_only=True)
+
+    class Meta:
+        model = Booking
+        fields = ['id', 'resource_name', 'start_time', 'end_time', 'status']
+
+
+class TaskActivitySerializer(serializers.ModelSerializer):
+    board_name = serializers.CharField(source='column.board.name', read_only=True)
+    board_id = serializers.IntegerField(source='column.board.id', read_only=True)
+
+    class Meta:
+        model = Task
+        fields = ['id', 'title', 'priority', 'deadline', 'board_name', 'board_id']
+
+
+class PassActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GuestPass
+        fields = ['id', 'guest_name', 'status', 'valid_from', 'valid_until']

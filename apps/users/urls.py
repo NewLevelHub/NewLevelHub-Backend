@@ -16,6 +16,7 @@ urlpatterns = [
 
     # Profile
     path('me/', views.me, name='me'),
+    path('me/activity/', views.me_activity, name='me-activity'),
     path('me/update/', views.update_profile, name='update-profile'),
     path('me/avatar/', views.delete_avatar, name='delete-avatar'),
     path('me/password/', views.change_password, name='change-password'),

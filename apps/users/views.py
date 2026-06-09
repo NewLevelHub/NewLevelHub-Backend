@@ -11,7 +11,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.core.cache import cache
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -27,6 +27,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import rest_framework.fields as fields
 
+from apps.access.models import GuestPass
+from apps.bookings.models import Booking
 from apps.core.error_codes import TOKEN_INVALID, TOKEN_EXPIRED, TOKEN_ALREADY_USED
 from apps.core.exceptions import LocalizedError
 from apps.core.i18n import translate, get_lang
@@ -34,6 +36,7 @@ from apps.core.pagination import StandardPagination
 from apps.core.permissions import IsSuperAdmin
 from apps.companies.invite_policy import existing_user_cannot_accept_invite_error, lookup_user_by_invite_email
 from apps.companies.models import Invitation
+from apps.crm.models import Task
 from .filters import UserFilter
 from .models import EmailVerificationToken, PasswordResetToken, User
 from .serializers import (
@@ -48,6 +51,9 @@ from .serializers import (
     EmailVerifySerializer,
     UserListSerializer,
     UserDetailSerializer,
+    BookingActivitySerializer,
+    TaskActivitySerializer,
+    PassActivitySerializer,
     _delete_file,
 )
 from .tasks import send_verification_email, create_email_verification_token
@@ -473,6 +479,76 @@ def password_reset_confirm(request):
 @permission_classes([IsAuthenticated])
 def me(request):
     return _profile_response(request.user, request)
+
+
+_ACTIVITY_LIMIT = 5
+_TASK_ROLES = {'superadmin', 'company_admin', 'employee'}
+_PASS_ROLES = {'superadmin', 'company_admin', 'employee', 'guest'}
+
+
+@extend_schema(
+    tags=['Users'],
+    summary='Current user activity summary',
+    description=(
+        'Returns the last 5 bookings, CRM tasks, and guest passes for the current user. '
+        'Guests receive an empty tasks list. Building staff (reception, service_manager) '
+        'receive empty tasks and passes lists.'
+    ),
+    responses={
+        200: inline_serializer(
+            name='UserActivityResponse',
+            fields={
+                'bookings': BookingActivitySerializer(many=True),
+                'tasks': TaskActivitySerializer(many=True),
+                'passes': PassActivitySerializer(many=True),
+            },
+        ),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def me_activity(request):
+    user = request.user
+
+    bookings_qs = (
+        Booking.objects
+        .filter(Q(user=user) | Q(participants__user=user))
+        .select_related('resource')
+        .order_by('-start_time')
+        .distinct()[:_ACTIVITY_LIMIT]
+    )
+
+    if user.role in _TASK_ROLES:
+        tasks_qs = (
+            Task.objects
+            .filter(assignee=user, is_archived=False)
+            .select_related('column__board')
+            .order_by('-created_at')[:_ACTIVITY_LIMIT]
+        )
+    else:
+        tasks_qs = Task.objects.none()
+
+    if user.role == 'company_admin' and user.company_id:
+        passes_qs = (
+            GuestPass.objects
+            .filter(company=user.company)
+            .order_by('-created_at')[:_ACTIVITY_LIMIT]
+        )
+    elif user.role in _PASS_ROLES:
+        passes_qs = (
+            GuestPass.objects
+            .filter(created_by=user)
+            .order_by('-created_at')[:_ACTIVITY_LIMIT]
+        )
+    else:
+        passes_qs = GuestPass.objects.none()
+
+    return Response({
+        'bookings': BookingActivitySerializer(bookings_qs, many=True).data,
+        'tasks': TaskActivitySerializer(tasks_qs, many=True).data,
+        'passes': PassActivitySerializer(passes_qs, many=True).data,
+    })
 
 
 @extend_schema(

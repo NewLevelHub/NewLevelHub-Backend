@@ -159,7 +159,7 @@ class TestCompanyCalendarAggregateAC:
             valid_until=_dt_for(target_day, 12),
         )
 
-        api_client.force_authenticate(user=employee)
+        api_client.force_authenticate(user=admin)
         response = api_client.get(
             _calendar_url(company.id),
             {'date_from': _iso_date(date_from), 'date_to': _iso_date(date_to)},
@@ -277,6 +277,7 @@ class TestCompanyCalendarAggregateAC:
         assert admin_filtered.status_code == status.HTTP_200_OK
         assert {item['user']['id'] for item in _items(admin_filtered)} == {colleague.id}
 
+        api_client.force_authenticate(user=employee)
         type_filtered = api_client.get(
             _calendar_url(company.id),
             {

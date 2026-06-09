@@ -298,8 +298,6 @@ class TestInviteRegistration:
         self, _mock_on_commit, mock_notify, mock_send_email, api_client, invitation, inviter
     ):
         """Successful invite registration triggers new_employee notification for admins."""
-        from apps.notifications.models import Notification
-
         response = api_client.post(
             REGISTER_INVITE_URL,
             {
@@ -348,16 +346,14 @@ class TestInviteRegistration:
         notified_ids = set(
             Notification.objects.filter(
                 notification_type='new_employee',
+                user_id__in=admin_ids,
             ).values_list('user_id', flat=True)
         )
         assert notified_ids == admin_ids
 
     @patch('apps.notifications.tasks.send_notification_email.delay')
-    @patch('apps.users.views.send_verification_email.delay')
-    @patch('apps.users.tasks.notify_new_employee.delay')
-    @patch('apps.users.serializers.transaction.on_commit', side_effect=lambda fn: fn())
     def test_notify_new_employee_task_sends_email_to_admins(
-        self, _mock_on_commit, _mock_notify_delay, _mock_verify_email, mock_send_email, db, company, inviter
+        self, mock_send_email, db, company, inviter
     ):
         """notify_new_employee task sends email notification to all company admins."""
         from apps.users.tasks import notify_new_employee

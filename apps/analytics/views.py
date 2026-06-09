@@ -25,6 +25,7 @@ from apps.access.models import GuestPass, AccessLog
 from apps.services.models import ServiceRequest
 from apps.crm.models import Task
 from apps.storage.models import File
+from apps.hr.models import LeaveRequest
 
 from .serializers import (
     SuperAdminDashboardSerializer,
@@ -418,6 +419,33 @@ def build_company_analytics_data(user):
         for employee in employees_qs.order_by('id')
     ]
 
+    pending_leaves = [
+        {
+            'id': lr.id,
+            'employee_name': lr.user.full_name,
+            'leave_type': lr.leave_type,
+            'start_date': lr.start_date,
+            'end_date': lr.end_date,
+            'created_at': lr.created_at,
+        }
+        for lr in LeaveRequest.objects.filter(
+            company=company, status='pending',
+        ).select_related('user').order_by('created_at')
+    ]
+
+    pending_guest_passes = [
+        {
+            'id': gp.id,
+            'guest_name': gp.guest_name,
+            'host_name': gp.created_by.full_name,
+            'visit_date': gp.valid_from,
+            'created_at': gp.created_at,
+        }
+        for gp in GuestPass.objects.filter(
+            company=company, status='active',
+        ).select_related('created_by').order_by('created_at')
+    ]
+
     return {
         'total_employees': employees_qs.count(),
         'active_7d': employees_qs.filter(last_login__gte=week_ago).count(),
@@ -429,6 +457,10 @@ def build_company_analytics_data(user):
         'active_crm_tasks': active_crm_tasks,
         'guest_visits_month': GuestPass.objects.filter(company=company, created_at__gte=month_start).count(),
         'employee_activity': employee_activity,
+        'pending_approvals': {
+            'leaves': pending_leaves,
+            'guest_passes': pending_guest_passes,
+        },
     }
 
 

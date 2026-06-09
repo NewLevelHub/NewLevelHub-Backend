@@ -113,6 +113,8 @@ def make_preference(db):
                 'task_comment_email': True, 'task_comment_in_app': True,
                 'task_deadline_email': True, 'task_deadline_in_app': True,
                 'task_moved_email': True, 'task_moved_in_app': True,
+                'new_employee_email': True, 'new_employee_in_app': True,
+                'booking_completed_email': False, 'booking_completed_in_app': True,
             }
             all_fields = {**model_defaults, **extra_defaults, **kwargs}
             all_fields['user_id'] = user.id

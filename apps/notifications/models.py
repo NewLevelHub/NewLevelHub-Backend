@@ -127,6 +127,7 @@ class NotificationPreference(TimeStampedModel):
     invitation_email = models.BooleanField(default=True)
     leave_review_in_app = models.BooleanField(default=True)
     leave_review_email = models.BooleanField(default=True)
+    # New employee
     new_employee_in_app = models.BooleanField(default=True)
     new_employee_email = models.BooleanField(default=True)
     # System

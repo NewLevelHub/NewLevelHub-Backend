@@ -107,9 +107,13 @@ def auto_complete_bookings():
     Beat task (every 5 min): auto-complete confirmed bookings whose end_time is in the past.
     """
     from apps.bookings.models import Booking
+    from apps.notifications.utils import create_notification
+    from apps.notifications.tasks import send_notification_email
 
     now = timezone.now()
-    bookings = Booking.objects.filter(status='confirmed', end_time__lt=now)
+    bookings = Booking.objects.filter(
+        status='confirmed', end_time__lt=now,
+    ).select_related('user', 'resource')
 
     completed_count = 0
 
@@ -117,6 +121,33 @@ def auto_complete_bookings():
         booking.status = 'completed'
         booking.save(update_fields=['status'])
         logger.info('Auto-completed booking %s', booking.id)
+
+        user = booking.user
+        resource_name = booking.resource.name
+        end_local = timezone.localtime(booking.end_time)
+
+        create_notification(
+            user=user,
+            notification_type='booking_completed',
+            title=f'Бронирование завершено: {resource_name}',
+            message=(
+                f'Ваше бронирование {resource_name} завершилось '
+                f'{end_local:%d.%m.%Y} в {end_local:%H:%M}.'
+            ),
+            link=f'/bookings/{booking.id}',
+        )
+
+        if user.email:
+            send_notification_email.delay(
+                user.id,
+                'booking_completed',
+                {
+                    'resource_name': resource_name,
+                    'end_time': end_local.strftime('%d.%m.%Y %H:%M'),
+                    'action_url': f'/bookings/{booking.id}',
+                },
+            )
+
         completed_count += 1
 
     return completed_count

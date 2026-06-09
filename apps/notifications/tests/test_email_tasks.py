@@ -107,6 +107,7 @@ def make_preference(db):
                 'guest_validated_email': True, 'guest_validated_in_app': True,
                 'invitation_email': True, 'invitation_in_app': True,
                 'leave_review_email': True, 'leave_review_in_app': True,
+                'new_employee_email': True, 'new_employee_in_app': True,
                 'service_request_update_email': False, 'service_request_update_in_app': True,
                 'task_assigned_email': True, 'task_assigned_in_app': True,
                 'task_comment_email': True, 'task_comment_in_app': True,

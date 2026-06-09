@@ -50,7 +50,7 @@ _PREF_FIELD_MAP = {
     'leave_review': 'leave_review_email',
     'leave_approved': 'leave_review_email',
     'leave_rejected': 'leave_review_email',
-    'new_employee': 'hr_email',                    # no dedicated field yet → legacy group
+    'new_employee': 'new_employee_email',
     # System
     'system': None,
 }

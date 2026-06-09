@@ -15,6 +15,7 @@ from apps.core.error_codes import EMAIL_NOT_VERIFIED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import get_lang, translate
 from apps.hr.tasks import initialize_user_onboarding_progress
+from apps.users.tasks import notify_new_employee
 from .models import User
 
 
@@ -216,6 +217,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                     ) from exc
 
             initialize_user_onboarding_progress(user)
+            transaction.on_commit(lambda: notify_new_employee.delay(user.pk))
 
             invitation.is_used = True
             invitation.used_at = timezone.now()

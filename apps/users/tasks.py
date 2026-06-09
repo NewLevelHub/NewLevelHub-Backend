@@ -4,6 +4,7 @@ from urllib.parse import urlencode
 
 from celery import shared_task
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -24,6 +25,46 @@ def create_email_verification_token(user, invalidate_existing=False):
         user=user,
         expires_at=timezone.now() + timedelta(hours=24),
     )
+
+
+@shared_task
+def notify_new_employee(user_id):
+    """Notify company admins when a new employee joins via invite."""
+    from apps.notifications.tasks import send_notification_email
+    from apps.notifications.utils import create_notification
+
+    UserModel = get_user_model()
+    try:
+        user = UserModel.objects.select_related('company').get(pk=user_id)
+    except UserModel.DoesNotExist:
+        return
+
+    company = user.company
+    if not company:
+        return
+
+    title = f'{user.full_name} присоединился к компании'
+
+    admins = UserModel.objects.filter(company=company, role='company_admin', is_active=True)
+    for admin in admins:
+        create_notification(
+            user=admin,
+            notification_type='new_employee',
+            title=title,
+            message=f'Новый сотрудник {user.full_name} зарегистрировался по приглашению.',
+            link='/team/manage',
+        )
+        if admin.is_email_verified:
+            send_notification_email.delay(
+                admin.pk,
+                'new_employee',
+                {
+                    'subject': title,
+                    'employee_name': user.full_name,
+                    'employee_email': user.email,
+                    'action_url': '/team/manage',
+                },
+            )
 
 
 @shared_task

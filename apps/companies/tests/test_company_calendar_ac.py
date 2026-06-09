@@ -173,12 +173,52 @@ class TestCompanyCalendarAggregateAC:
         by_type = {event['type']: event for event in events}
         assert by_type['booking']['title'] == booking.resource.name
         assert by_type['task_deadline']['title'] == task.title
+        assert by_type['task_deadline']['task_id'] == task.id
+        assert by_type['task_deadline']['board_id'] == task.column.board_id
         assert 'vacation' in by_type['leave']['title'].lower()
         assert by_type['guest_visit']['title'] == guest.guest_name
+        assert by_type['guest_visit']['guest_pass_id'] == guest.id
 
         for event in events:
-            assert set(event.keys()) == {'type', 'title', 'start', 'end', 'user'}
+            expected_keys = {'type', 'title', 'start', 'end', 'user'}
+            if event['type'] == 'task_deadline':
+                expected_keys |= {'task_id', 'board_id'}
+            if event['type'] == 'guest_visit':
+                expected_keys |= {'guest_pass_id'}
+            assert set(event.keys()) == expected_keys
             assert set(event['user'].keys()) == {'id', 'full_name'}
+
+    def test_employee_default_sees_only_own_events(
+        self, api_client, company, employee, colleague, desk
+    ):
+        target_day = timezone.localdate() + timedelta(days=3)
+        Booking.objects.create(
+            resource=desk,
+            user=employee,
+            company=company,
+            start_time=_dt_for(target_day, 9),
+            end_time=_dt_for(target_day, 10),
+            status='confirmed',
+        )
+        Booking.objects.create(
+            resource=desk,
+            user=colleague,
+            company=company,
+            start_time=_dt_for(target_day, 11),
+            end_time=_dt_for(target_day, 12),
+            status='confirmed',
+        )
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(
+            _calendar_url(company.id),
+            {'date_from': _iso_date(target_day), 'date_to': _iso_date(target_day)},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        events = _items(response)
+        assert len(events) == 1
+        assert events[0]['user']['id'] == employee.id
 
     def test_filters_user_id_event_type_and_my(
         self, api_client, company, employee, colleague, admin, desk
@@ -223,7 +263,19 @@ class TestCompanyCalendarAggregateAC:
             },
         )
         assert user_filtered.status_code == status.HTTP_200_OK
-        assert {item['user']['id'] for item in _items(user_filtered)} == {colleague.id}
+        assert {item['user']['id'] for item in _items(user_filtered)} == {employee.id}
+
+        api_client.force_authenticate(user=admin)
+        admin_filtered = api_client.get(
+            _calendar_url(company.id),
+            {
+                'date_from': _iso_date(target_day),
+                'date_to': _iso_date(target_day),
+                'user_id': colleague.id,
+            },
+        )
+        assert admin_filtered.status_code == status.HTTP_200_OK
+        assert {item['user']['id'] for item in _items(admin_filtered)} == {colleague.id}
 
         type_filtered = api_client.get(
             _calendar_url(company.id),

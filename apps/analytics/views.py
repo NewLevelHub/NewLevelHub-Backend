@@ -14,7 +14,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 
 from django.utils import timezone
 from django.db.models import Count, Avg, F, Sum, Q
-from django.db.models.functions import TruncDate, ExtractHour
+from django.db.models.functions import TruncDate
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound, ValidationError
@@ -161,12 +161,11 @@ def _build_resource_utilization(bookings_in_period):
 
 
 def _build_peak_hours(bookings_in_period):
-    rows = bookings_in_period.annotate(hour=ExtractHour('start_time')).values('start_time', 'hour')
-    aggregated = {}
     tz = timezone.get_current_timezone()
-    for row in rows:
-        dt_local = timezone.localtime(row['start_time'], tz)
-        key = (dt_local.weekday(), row['hour'])
+    aggregated = {}
+    for start_time in bookings_in_period.values_list('start_time', flat=True):
+        dt_local = timezone.localtime(start_time, tz)
+        key = (dt_local.weekday(), dt_local.hour)
         aggregated[key] = aggregated.get(key, 0) + 1
 
     return [
@@ -275,6 +274,8 @@ def build_superadmin_dashboard_payload(request):
     )
     if company_id is not None:
         bookings_in_period = bookings_in_period.filter(company_id=company_id)
+    if resource_type is not None:
+        bookings_in_period = bookings_in_period.filter(resource__resource_type=resource_type)
 
     resource_utilization = _build_resource_utilization(bookings_in_period)
     peak_hours = _build_peak_hours(bookings_in_period)

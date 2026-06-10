@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db.models import F, Q, Sum
+from django.db.models import Case, CharField, F, Q, Sum, Value, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
@@ -19,6 +19,7 @@ from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyMember, IsGuestOrCompanyMember
 from apps.crm.models import TaskAttachment
 from apps.notifications.utils import create_notification
+from .constants import ARCHIVE_MIME_TYPES
 from .models import Folder, File, FileShare
 from .s3_helpers import presigned_get_url_for_fieldfile
 from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
@@ -208,7 +209,7 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsGuestOrCompanyMember]
     search_fields = ['name']
-    ordering_fields = ['name', 'file_size', 'size', 'created_at']
+    ordering_fields = ['name', 'file_size', 'size', 'created_at', 'file_category']
     _PERMISSION_LEVELS = {'view': 1, 'download': 2, 'full': 3}
 
     def get_queryset(self):
@@ -268,7 +269,23 @@ class FileViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     raise_validation_error('folder_id', 'storage.folder_id_invalid')
 
-        return queryset.annotate(size=F('file_size')).order_by('-created_at')
+        annotated = queryset.annotate(
+            size=F('file_size'),
+            file_category=Case(
+                When(content_type__startswith='image/', then=Value('image')),
+                When(content_type__startswith='video/', then=Value('media')),
+                When(content_type__startswith='audio/', then=Value('media')),
+                When(content_type__in=ARCHIVE_MIME_TYPES, then=Value('archive')),
+                When(content_type__startswith='application/', then=Value('document')),
+                When(content_type__startswith='text/', then=Value('document')),
+                default=Value('other'),
+                output_field=CharField(),
+            ),
+        )
+        file_category = self.request.query_params.get('file_category')
+        if file_category in {'image', 'media', 'archive', 'document', 'other'}:
+            annotated = annotated.filter(file_category=file_category)
+        return annotated.order_by('-created_at')
 
     def _resolve_scope(self):
         if self.request.user.role == 'guest':

@@ -16,6 +16,7 @@ from apps.core.error_codes import (
     BOOKING_PARKING_WHOLE_DAY_ONLY,
 )
 from apps.core.exceptions import LocalizedError, raise_validation_error
+from apps.core.i18n import get_lang, translate
 from apps.notifications.utils import create_notification
 from .models import Resource, ResourcePhoto, Booking, BookingParticipant, RecurringBooking, ResourceBlock
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
@@ -25,6 +26,8 @@ User = get_user_model()
 # Plans that allow access to company-assigned (non-shared) resources.
 # basic and free users may only book shared resources (assigned_company IS NULL).
 PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
+
+_CANCEL_REASON_I18N_PREFIX = 'booking.cancel_reason.'
 
 
 def _booking_priority(user) -> int:
@@ -846,6 +849,7 @@ class BookingSerializer(serializers.ModelSerializer):
     booked_by = serializers.SerializerMethodField()
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
+    cancel_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -856,6 +860,21 @@ class BookingSerializer(serializers.ModelSerializer):
             'checked_in_at', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'user', 'company', 'checked_in_at', 'created_at', 'updated_at']
+
+    def get_cancel_reason(self, obj):
+        reason = obj.cancel_reason
+        if not reason:
+            return reason
+        i18n_key = f'{_CANCEL_REASON_I18N_PREFIX}{reason}'
+        lang = get_lang(self.context.get('request'))
+        translated = translate(i18n_key, lang)
+        # translate() falls back to common.server_error text when the key is missing;
+        # if the translated value differs from the i18n_key itself we have a real translation.
+        # Additionally guard against the server_error fallback by comparing to it.
+        server_error_text = translate('common.server_error', lang)
+        if translated == server_error_text:
+            return reason
+        return translated
 
     def get_booked_by(self, obj):
         return BookingUserSerializer(obj.user, context=self.context).data

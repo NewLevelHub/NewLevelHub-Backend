@@ -1,8 +1,17 @@
 import csv
 import io
+import os
 from datetime import datetime, timedelta, time
 
 from django.http import HttpResponse
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
 from django.utils import timezone
 from django.db.models import Count, Avg, F, Sum, Q
 from django.db.models.functions import TruncDate, ExtractHour
@@ -32,6 +41,28 @@ from .serializers import (
     ResourceUsageSerializer,
     CompanyAnalyticsSerializer,
 )
+
+_FONTS_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
+
+
+def _register_cyrillic_fonts():
+    """Register DejaVu Sans TTF for Unicode/Cyrillic support in PDF export."""
+    try:
+        pdfmetrics.registerFont(TTFont('DejaVuSans', os.path.join(_FONTS_DIR, 'DejaVuSans.ttf')))
+        pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', os.path.join(_FONTS_DIR, 'DejaVuSans-Bold.ttf')))
+    except Exception:
+        pass  # fonts already registered on repeated imports
+
+
+_register_cyrillic_fonts()
+
+_CELL_STYLE = ParagraphStyle('PdfCell', fontName='DejaVuSans', fontSize=8, leading=10)
+_CELL_HEADER_STYLE = ParagraphStyle('PdfCellHeader', fontName='DejaVuSans-Bold', fontSize=8, leading=10,
+                                    textColor=colors.white)
+
+
+def _pdf_cell(text, header=False):
+    return Paragraph(str(text), _CELL_HEADER_STYLE if header else _CELL_STYLE)
 
 
 def _normalize_column_status(column_name):
@@ -475,6 +506,237 @@ def _http_csv_attachment(filename_stem, rows):
     return response
 
 
+def _http_pdf_attachment(filename_stem, pdf_bytes):
+    response = HttpResponse(pdf_bytes, content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename_stem}.pdf"'
+    return response
+
+
+def _pdf_table_style(header_bg=colors.HexColor('#2563EB')):
+    return TableStyle([
+        ('FONTNAME', (0, 0), (-1, 0), 'DejaVuSans-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'DejaVuSans'),
+        ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('BACKGROUND', (0, 0), (-1, 0), header_bg),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        ('TOPPADDING', (0, 0), (-1, 0), 6),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 5),
+        ('TOPPADDING', (0, 1), (-1, -1), 5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ])
+
+
+def _build_superadmin_pdf(payload, lang='ru'):
+    t = lambda key, **params: translate(key, lang, **params)  # noqa: E731
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'PdfTitle',
+        parent=styles['Heading1'],
+        fontName='DejaVuSans-Bold',
+        fontSize=16,
+        textColor=colors.HexColor('#1E3A5F'),
+        spaceAfter=4,
+    )
+    subtitle_style = ParagraphStyle(
+        'PdfSubtitle',
+        parent=styles['Normal'],
+        fontName='DejaVuSans',
+        fontSize=9,
+        textColor=colors.HexColor('#64748B'),
+        spaceAfter=16,
+    )
+    section_style = ParagraphStyle(
+        'PdfSection',
+        parent=styles['Heading2'],
+        fontName='DejaVuSans-Bold',
+        fontSize=11,
+        textColor=colors.HexColor('#1E3A5F'),
+        spaceBefore=12,
+        spaceAfter=6,
+    )
+
+    period = payload['period']
+    date_from = payload['date_from'].isoformat()
+    date_to = payload['date_to'].isoformat()
+    ov = payload['overview']
+    generated_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    story = [
+        Paragraph(t('analytics.pdf.title_superadmin', period=period), title_style),
+        Paragraph(t('analytics.pdf.generated', date=generated_date), subtitle_style),
+        Paragraph(t('analytics.pdf.kpi_table'), section_style),
+    ]
+
+    kpi_headers = [
+        _pdf_cell(t('analytics.csv.period'), header=True),
+        _pdf_cell(t('analytics.csv.date_from'), header=True),
+        _pdf_cell(t('analytics.csv.date_to'), header=True),
+        _pdf_cell(t('analytics.csv.total_companies'), header=True),
+        _pdf_cell(t('analytics.csv.active_companies'), header=True),
+        _pdf_cell(t('analytics.csv.total_users'), header=True),
+        _pdf_cell(t('analytics.csv.active_users_7d'), header=True),
+        _pdf_cell(t('analytics.csv.bookings_today'), header=True),
+        _pdf_cell(t('analytics.csv.guests_today'), header=True),
+        _pdf_cell(t('analytics.csv.open_service_requests'), header=True),
+    ]
+    kpi_values = [
+        _pdf_cell(period),
+        _pdf_cell(date_from),
+        _pdf_cell(date_to),
+        _pdf_cell(ov['total_companies']),
+        _pdf_cell(ov['active_companies']),
+        _pdf_cell(ov['total_users']),
+        _pdf_cell(ov['active_users_7d']),
+        _pdf_cell(ov['bookings_today']),
+        _pdf_cell(ov['guests_today']),
+        _pdf_cell(ov['open_service_requests']),
+    ]
+
+    usable_width = A4[0] - 4 * cm
+    col_count = len(kpi_headers)
+    col_w = usable_width / col_count
+
+    kpi_table = Table(
+        [kpi_headers, kpi_values],
+        colWidths=[col_w] * col_count,
+        repeatRows=1,
+    )
+    kpi_table.setStyle(_pdf_table_style())
+    story.append(kpi_table)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _build_company_pdf(data, lang='ru'):
+    t = lambda key, **params: translate(key, lang, **params)  # noqa: E731
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'PdfTitle',
+        parent=styles['Heading1'],
+        fontName='DejaVuSans-Bold',
+        fontSize=16,
+        textColor=colors.HexColor('#1E3A5F'),
+        spaceAfter=4,
+    )
+    subtitle_style = ParagraphStyle(
+        'PdfSubtitle',
+        parent=styles['Normal'],
+        fontName='DejaVuSans',
+        fontSize=9,
+        textColor=colors.HexColor('#64748B'),
+        spaceAfter=16,
+    )
+    section_style = ParagraphStyle(
+        'PdfSection',
+        parent=styles['Heading2'],
+        fontName='DejaVuSans-Bold',
+        fontSize=11,
+        textColor=colors.HexColor('#1E3A5F'),
+        spaceBefore=12,
+        spaceAfter=6,
+    )
+
+    act = data['active_crm_tasks']
+    storage_used_gb = round(data['storage']['used'] / (1024 ** 3), 2)
+    storage_limit_gb = round(data['storage']['limit'] / (1024 ** 3), 2)
+    generated_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    story = [
+        Paragraph(t('analytics.pdf.title_company'), title_style),
+        Paragraph(t('analytics.pdf.generated', date=generated_date), subtitle_style),
+        Paragraph(t('analytics.pdf.summary'), section_style),
+    ]
+
+    summary_headers = [
+        _pdf_cell(t('analytics.csv.total_employees'), header=True),
+        _pdf_cell(t('analytics.csv.active_7d'), header=True),
+        _pdf_cell(t('analytics.csv.bookings_month'), header=True),
+        _pdf_cell('Storage (GB)', header=True),
+        _pdf_cell(t('analytics.csv.crm_total'), header=True),
+        _pdf_cell(t('analytics.csv.crm_todo'), header=True),
+        _pdf_cell(t('analytics.csv.crm_in_progress'), header=True),
+        _pdf_cell(t('analytics.csv.crm_done'), header=True),
+        _pdf_cell(t('analytics.csv.crm_other'), header=True),
+        _pdf_cell(t('analytics.csv.guest_visits_month'), header=True),
+    ]
+    summary_values = [
+        _pdf_cell(data['total_employees']),
+        _pdf_cell(data['active_7d']),
+        _pdf_cell(data['bookings_month']),
+        _pdf_cell(f'{storage_used_gb} / {storage_limit_gb}'),
+        _pdf_cell(act['total']),
+        _pdf_cell(act['todo']),
+        _pdf_cell(act['in_progress']),
+        _pdf_cell(act['done']),
+        _pdf_cell(act['other']),
+        _pdf_cell(data['guest_visits_month']),
+    ]
+
+    usable_width = A4[0] - 4 * cm
+    col_count = len(summary_headers)
+    col_w = usable_width / col_count
+
+    summary_table = Table(
+        [summary_headers, summary_values],
+        colWidths=[col_w] * col_count,
+        repeatRows=1,
+    )
+    summary_table.setStyle(_pdf_table_style())
+    story.append(summary_table)
+    story.append(Spacer(1, 0.5 * cm))
+
+    story.append(Paragraph(t('analytics.pdf.employee_activity'), section_style))
+
+    emp_headers = [
+        _pdf_cell(t('analytics.csv.full_name'), header=True),
+        _pdf_cell(t('analytics.csv.booking_count_30d'), header=True),
+        _pdf_cell(t('analytics.csv.task_count_active'), header=True),
+        _pdf_cell(t('analytics.csv.last_login'), header=True),
+    ]
+    emp_rows = [emp_headers]
+    for emp in data['employee_activity']:
+        last_login = emp['last_login'].strftime('%Y-%m-%d %H:%M') if emp['last_login'] else '—'
+        emp_rows.append([
+            _pdf_cell(emp['full_name']),
+            _pdf_cell(emp['booking_count_30d']),
+            _pdf_cell(emp['task_count_active']),
+            _pdf_cell(last_login),
+        ])
+
+    emp_col_widths = [usable_width * 0.40, usable_width * 0.20, usable_width * 0.20, usable_width * 0.20]
+    emp_table = Table(emp_rows, colWidths=emp_col_widths, repeatRows=1)
+    emp_table.setStyle(_pdf_table_style())
+    story.append(emp_table)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 def _rows_superadmin_csv(payload, lang='ru'):
     ov = payload['overview']
     t = lambda key: translate(key, lang)  # noqa: E731
@@ -638,14 +900,14 @@ def company_dashboard(request):
 
 @extend_schema(
     tags=['Analytics'],
-    summary='Export superadmin analytics as CSV',
+    summary='Export superadmin analytics as CSV or PDF',
     parameters=[
         OpenApiParameter(
             name='format',
             type=str,
             location=OpenApiParameter.QUERY,
-            description='Must be csv.',
-            enum=['csv'],
+            description='Export format: csv or pdf.',
+            enum=['csv', 'pdf'],
             required=True,
         ),
         OpenApiParameter(
@@ -682,7 +944,7 @@ def company_dashboard(request):
         ),
     ],
     responses={
-        200: OpenApiResponse(description='CSV (UTF-8 with BOM), Content-Disposition: attachment'),
+        200: OpenApiResponse(description='CSV (UTF-8 with BOM) or PDF, Content-Disposition: attachment'),
         400: OpenApiResponse(description='Validation error'),
         404: OpenApiResponse(description='Company not found'),
         401: OpenApiResponse(description='Not authenticated'),
@@ -693,29 +955,33 @@ class SuperadminExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
     permission_classes = [IsSuperAdmin]
 
     def get(self, request):
-        if request.query_params.get('format') != 'csv':
-            raise ValidationError({'format': ['Invalid or missing format. Use format=csv.']})
+        fmt = request.query_params.get('format')
+        if fmt not in ('csv', 'pdf'):
+            raise ValidationError({'format': ['Invalid or missing format. Use format=csv or format=pdf.']})
         payload = build_superadmin_dashboard_payload(request)
         stem = f'analytics-superadmin-{payload["period"]}'
+        if fmt == 'pdf':
+            pdf_bytes = _build_superadmin_pdf(payload, get_lang(request))
+            return _http_pdf_attachment(stem, pdf_bytes)
         return _http_csv_attachment(stem, _rows_superadmin_csv(payload, get_lang(request)))
 
 
 @extend_schema(
     tags=['Analytics'],
-    summary='Export company analytics as CSV',
+    summary='Export company analytics as CSV or PDF',
     parameters=[
         OpenApiParameter(
             name='format',
             type=str,
             location=OpenApiParameter.QUERY,
-            description='Must be csv.',
-            enum=['csv'],
+            description='Export format: csv or pdf.',
+            enum=['csv', 'pdf'],
             required=True,
         ),
     ],
     responses={
-        200: OpenApiResponse(description='CSV (UTF-8 with BOM), Content-Disposition: attachment'),
-        400: OpenApiResponse(description='No company assigned'),
+        200: OpenApiResponse(description='CSV (UTF-8 with BOM) or PDF, Content-Disposition: attachment'),
+        400: OpenApiResponse(description='No company assigned or invalid format'),
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Company admin only'),
     },
@@ -724,14 +990,19 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
     permission_classes = [IsCompanyAdmin]
 
     def get(self, request):
-        if request.query_params.get('format') != 'csv':
-            raise ValidationError({'format': ['Invalid or missing format. Use format=csv.']})
+        fmt = request.query_params.get('format')
+        if fmt not in ('csv', 'pdf'):
+            raise ValidationError({'format': ['Invalid or missing format. Use format=csv or format=pdf.']})
         user = request.user
         if not user.company:
             return Response({'detail': 'No company'}, status=400)
         data = build_company_analytics_data(user)
         safe_slug = ''.join(c if c.isalnum() else '-' for c in user.company.name.lower()) or 'company'
-        return _http_csv_attachment(f'analytics-company-{safe_slug}', _rows_company_csv(data, get_lang(request)))
+        stem = f'analytics-company-{safe_slug}'
+        if fmt == 'pdf':
+            pdf_bytes = _build_company_pdf(data, get_lang(request))
+            return _http_pdf_attachment(stem, pdf_bytes)
+        return _http_csv_attachment(stem, _rows_company_csv(data, get_lang(request)))
 
 
 @extend_schema(

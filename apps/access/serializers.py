@@ -11,6 +11,11 @@ from apps.users.models import User
 
 logger = logging.getLogger(__name__)
 
+# Plans that grant employees unlimited guest passes per invitee email.
+# Plans not in this set (e.g. 'basic') enforce a limit of 2 active passes
+# per guest email within the company.
+PLANS_WITHOUT_GUEST_LIMIT = {'standard', 'premium'}
+
 
 class GuestPassCreateSerializer(serializers.ModelSerializer):
     purpose = serializers.CharField(source='visit_purpose')
@@ -63,14 +68,18 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
             if active_count >= 2:
                 raise_validation_error('non_field_errors', 'access.guest_max_passes_reached')
         elif user.role not in ('superadmin', 'company_admin', 'service_manager', 'reception'):
-            # Employees: max 2 active passes per invitee email within the company.
-            active_count = GuestPass.objects.filter(
-                company=user.company,
-                guest_email=attrs['guest_email'],
-                status='active',
-            ).count()
-            if active_count >= 2:
-                raise_validation_error('guest_email', 'access.guest_max_passes_reached')
+            # Employees: max 2 active passes per invitee email within the company,
+            # unless the company is on a plan that lifts this restriction.
+            company = user.company
+            company_plan = getattr(company, 'plan', 'basic') if company else 'basic'
+            if company_plan not in PLANS_WITHOUT_GUEST_LIMIT:
+                active_count = GuestPass.objects.filter(
+                    company=company,
+                    guest_email=attrs['guest_email'],
+                    status='active',
+                ).count()
+                if active_count >= 2:
+                    raise_validation_error('guest_email', 'access.guest_max_passes_reached')
 
         return attrs
 

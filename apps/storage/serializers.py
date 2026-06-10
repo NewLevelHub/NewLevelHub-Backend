@@ -7,12 +7,13 @@ class FolderSerializer(serializers.ModelSerializer):
     children_count = serializers.IntegerField(source='children.count', read_only=True)
     files_count = serializers.IntegerField(source='files.count', read_only=True)
     is_restricted = serializers.SerializerMethodField()
+    user_permission = serializers.SerializerMethodField()
 
     class Meta:
         model = Folder
         fields = [
             'id', 'name', 'scope', 'parent', 'owner',
-            'children_count', 'files_count', 'is_restricted',
+            'children_count', 'files_count', 'is_restricted', 'user_permission',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'owner', 'created_at', 'updated_at']
@@ -21,6 +22,22 @@ class FolderSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'perm_exists'):
             return obj.perm_exists
         return obj.permissions.exists()
+
+    def get_user_permission(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+        user = request.user
+        # Admins and superadmins are never restricted
+        if user.role in ('superadmin', 'company_admin'):
+            return None
+        # Determine whether the folder is restricted using the annotation if available
+        is_restricted = obj.perm_exists if hasattr(obj, 'perm_exists') else obj.permissions.exists()
+        if not is_restricted:
+            return None
+        # Return the user's specific permission level
+        perm = obj.permissions.filter(user=user).first()
+        return perm.permission if perm else None
 
 
 class FileSerializer(serializers.ModelSerializer):
@@ -173,16 +190,28 @@ class TrashItemSerializer(serializers.Serializer):
     files_count = serializers.IntegerField(allow_null=True)
 
 
+class StorageBreakdownSerializer(serializers.Serializer):
+    document = serializers.IntegerField()
+    image = serializers.IntegerField()
+    archive = serializers.IntegerField()
+    media = serializers.IntegerField()
+    other = serializers.IntegerField()
+
+
 class PersonalStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
     limit_bytes = serializers.IntegerField(allow_null=True)
+    trash_bytes = serializers.IntegerField()
+    breakdown = StorageBreakdownSerializer()
 
 
 class CompanyStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     limit_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
+    trash_bytes = serializers.IntegerField()
+    breakdown = StorageBreakdownSerializer()
 
 
 class StorageUsageSerializer(serializers.Serializer):

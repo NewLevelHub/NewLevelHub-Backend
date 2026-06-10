@@ -957,6 +957,36 @@ class TrashListView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+_CATEGORY_ANNOTATION = Case(
+    When(content_type__startswith='image/', then=Value('image')),
+    When(content_type__startswith='video/', then=Value('media')),
+    When(content_type__startswith='audio/', then=Value('media')),
+    When(content_type__in=ARCHIVE_MIME_TYPES, then=Value('archive')),
+    When(content_type__startswith='application/', then=Value('document')),
+    When(content_type__startswith='text/', then=Value('document')),
+    default=Value('other'),
+    output_field=CharField(),
+)
+
+_BREAKDOWN_ZERO = {'document': 0, 'image': 0, 'archive': 0, 'media': 0, 'other': 0}
+
+
+def _compute_breakdown(active_qs):
+    """Return breakdown dict (bytes per category) for the given active-file queryset."""
+    rows = (
+        active_qs
+        .annotate(file_category=_CATEGORY_ANNOTATION)
+        .values('file_category')
+        .annotate(total=Sum('file_size'))
+    )
+    result = dict(_BREAKDOWN_ZERO)
+    for row in rows:
+        cat = row['file_category']
+        if cat in result:
+            result[cat] = row['total'] or 0
+    return result
+
+
 @extend_schema(
     tags=['Storage'],
     summary='Get storage usage for current user / company',
@@ -971,9 +1001,15 @@ def storage_usage(request):
     user = request.user
 
     if user.role == 'guest':
-        personal_qs = File.objects.filter(owner=user, company__isnull=True)
+        # used_bytes must include trashed files — they still occupy disk space.
+        personal_qs = File.all_objects.filter(owner=user, company__isnull=True)
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
         company_data = None
     elif user.company_id:
@@ -981,17 +1017,29 @@ def storage_usage(request):
         storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
         # Personal files: company=NULL, owned by any employee of this company.
-        personal_qs = File.objects.filter(
+        # Include trashed files in used_bytes — they still occupy disk space.
+        personal_qs = File.all_objects.filter(
             company__isnull=True, owner__company=company
         )
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
 
         # Company-scoped storage files only — excludes personal files so that
         # personal.used_bytes + company.used_bytes == total without double-counting.
-        company_qs = File.objects.filter(company=company)
+        # Include trashed files in used_bytes — they still occupy disk space.
+        company_qs = File.all_objects.filter(company=company)
         company_files_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        company_count = company_qs.count()
+        company_active_qs = company_qs.filter(is_deleted=False)
+        company_count = company_active_qs.count()
+        company_trash = (
+            company_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        company_breakdown = _compute_breakdown(company_active_qs)
         # Direct-upload CRM attachments (storage_file=None) are not in File but
         # do consume company storage — include them in the displayed total.
         crm_direct_bytes = (
@@ -1007,12 +1055,19 @@ def storage_usage(request):
             'used_bytes': company_used,
             'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
+            'trash_bytes': company_trash,
+            'breakdown': company_breakdown,
         }
         personal_limit = storage_limit_bytes
     else:
         personal_qs = File.all_objects.filter(owner=user, company__isnull=True)
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.filter(is_deleted=False).count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = None
         company_data = None
 
@@ -1021,6 +1076,8 @@ def storage_usage(request):
             'used_bytes': personal_used,
             'file_count': personal_count,
             'limit_bytes': personal_limit,
+            'trash_bytes': personal_trash,
+            'breakdown': personal_breakdown,
         },
         'company': company_data,
     }).data)

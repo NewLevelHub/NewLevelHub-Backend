@@ -33,7 +33,9 @@ def get_company_storage_used_bytes(company):
 
     from apps.storage.models import File
 
-    # All storage files belonging to the company:
+    # All storage files belonging to the company (including soft-deleted / in trash).
+    # Design decision: trashed files still occupy S3 storage until permanently deleted,
+    # so they count toward the quota. Users must empty trash to free up space.
     # - company-scoped files (file.company = company)
     # - personal files of company employees (file.company IS NULL, file.owner.company = company)
     storage_files_bytes = (

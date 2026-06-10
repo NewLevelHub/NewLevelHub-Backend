@@ -76,6 +76,16 @@ class FolderPermission(TimeStampedModel):
                 ),
                 name='folder_permission_user_xor_role',
             ),
+            models.UniqueConstraint(
+                fields=['folder', 'user'],
+                condition=Q(user__isnull=False),
+                name='unique_folder_user_perm',
+            ),
+            models.UniqueConstraint(
+                fields=['folder', 'role'],
+                condition=Q(role__isnull=False),
+                name='unique_folder_role_perm',
+            ),
         ]
         indexes = [
             models.Index(fields=['folder', 'user']),

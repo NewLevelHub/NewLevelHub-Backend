@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db.models import Case, CharField, Exists, F, OuterRef, Q, Sum, Value, When
+from django.db.models import Case, CharField, Count, Exists, F, OuterRef, Q, Subquery, Sum, Value, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
@@ -182,7 +182,22 @@ class FolderViewSet(viewsets.ModelViewSet):
                     raise_validation_error('parent_id', 'storage.parent_id_invalid')
 
         perm_exists_sq = FolderPermission.objects.filter(folder=OuterRef('pk'))
-        return queryset.annotate(perm_exists=Exists(perm_exists_sq)).order_by('-created_at')
+        queryset = queryset.annotate(perm_exists=Exists(perm_exists_sq))
+
+        # For employees: annotate per-folder permission level to avoid N+1 in serializer.
+        if user.role not in ('superadmin', 'company_admin', 'guest'):
+            user_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), user=user
+            ).values('permission')[:1]
+            role_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), role=user.role
+            ).values('permission')[:1]
+            queryset = queryset.annotate(
+                user_perm_ann=Subquery(user_perm_sq, output_field=CharField()),
+                role_perm_ann=Subquery(role_perm_sq, output_field=CharField()),
+            )
+
+        return queryset.order_by('-created_at')
 
     def _resolve_scope(self):
         if self.request.user.role == 'guest':
@@ -346,7 +361,20 @@ class FolderViewSet(viewsets.ModelViewSet):
 
         perm_exists_sq = FolderPermission.objects.filter(folder=OuterRef('pk'))
         child_folders = child_folders.annotate(perm_exists=Exists(perm_exists_sq))
-        data['folders'] = FolderSerializer(child_folders, many=True).data
+
+        if user.role not in ('superadmin', 'company_admin', 'guest'):
+            user_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), user=user
+            ).values('permission')[:1]
+            role_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), role=user.role
+            ).values('permission')[:1]
+            child_folders = child_folders.annotate(
+                user_perm_ann=Subquery(user_perm_sq, output_field=CharField()),
+                role_perm_ann=Subquery(role_perm_sq, output_field=CharField()),
+            )
+
+        data['folders'] = FolderSerializer(child_folders, many=True, context={'request': request}).data
         data['files'] = FileSerializer(files, many=True).data
         return Response(data)
 
@@ -904,6 +932,9 @@ class TrashListView(APIView):
     def get(self, request):
         files_qs, folders_qs = self._build_trash_querysets(request)
 
+        # Count all files (including soft-deleted) per folder in a single query.
+        folders_qs = folders_qs.annotate(cached_files_count=Count('files'))
+
         items = []
         for f in files_qs.order_by('-deleted_at'):
             items.append({
@@ -925,7 +956,7 @@ class TrashListView(APIView):
                 'scope': folder.scope,
                 'file_size': None,
                 'content_type': None,
-                'files_count': File.all_objects.filter(folder=folder).count(),
+                'files_count': folder.cached_files_count,
             })
 
         items.sort(key=lambda x: x['deleted_at'], reverse=True)

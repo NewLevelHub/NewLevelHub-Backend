@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework import serializers
 from apps.core.exceptions import raise_validation_error
 from .models import Folder, File, FileShare, FolderPermission
@@ -28,16 +29,21 @@ class FolderSerializer(serializers.ModelSerializer):
         if not request or not request.user or not request.user.is_authenticated:
             return None
         user = request.user
-        # Admins and superadmins are never restricted
         if user.role in ('superadmin', 'company_admin'):
             return None
-        # Determine whether the folder is restricted using the annotation if available
         is_restricted = obj.perm_exists if hasattr(obj, 'perm_exists') else obj.permissions.exists()
         if not is_restricted:
             return None
-        # Return the user's specific permission level
-        perm = obj.permissions.filter(user=user).first()
-        return perm.permission if perm else None
+        # Use DB annotations when available (avoids N+1 in list views).
+        if hasattr(obj, 'user_perm_ann'):
+            return obj.user_perm_ann or getattr(obj, 'role_perm_ann', None)
+        # Fallback: one query that fetches both user- and role-based records.
+        perms = list(obj.permissions.filter(Q(user=user) | Q(role=user.role)))
+        user_perm = next((p for p in perms if p.user_id == user.id), None)
+        if user_perm:
+            return user_perm.permission
+        role_perm = next((p for p in perms if p.role == user.role), None)
+        return role_perm.permission if role_perm else None
 
 
 class FileSerializer(serializers.ModelSerializer):

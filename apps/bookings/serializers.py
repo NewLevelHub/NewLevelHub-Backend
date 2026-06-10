@@ -26,6 +26,16 @@ User = get_user_model()
 # basic and free users may only book shared resources (assigned_company IS NULL).
 PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
 
+
+def _booking_priority(user) -> int:
+    """Return booking priority tier for the user: 3=premium/superadmin, 2=standard, 1=basic/guest."""
+    if getattr(user, 'role', None) == 'superadmin':
+        return 3
+    company = getattr(user, 'company', None)
+    plan = getattr(company, 'plan', 'basic') if company else 'basic'
+    return {'premium': 3, 'standard': 2}.get(plan, 1)
+
+
 # Type-specific validation constants
 _MEETING_ROOM_MIN_MINUTES = 30
 _MEETING_ROOM_MAX_MINUTES = 240  # 4 hours
@@ -588,7 +598,10 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if active_count >= active_limit:
             raise_validation_error('detail', 'booking.active_limit_exceeded', {'limit': active_limit})
 
-    def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None):
+    def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None, user=None):
+        override_hours = int(getattr(settings, 'PRIORITY_OVERRIDE_HOURS', 2))
+        override_cutoff = timezone.now() + timedelta(hours=override_hours)
+
         booking_overlap_qs = Booking.objects.filter(
             resource=resource,
             status='confirmed',
@@ -597,13 +610,26 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         )
         if exclude_booking_id is not None:
             booking_overlap_qs = booking_overlap_qs.exclude(pk=exclude_booking_id)
-        has_booking_overlap = booking_overlap_qs.exists()
-        if has_booking_overlap:
-            raise LocalizedError(
-                code='BOOKING_CONFLICT',
-                i18n_key='booking.conflict',
-                http_status=409,
-            )
+
+        if booking_overlap_qs.exists():
+            if user is not None:
+                requester_priority = _booking_priority(user)
+                # Attempt override: all conflicting bookings must be lower priority
+                # and start after the override cutoff window.
+                displaceable = booking_overlap_qs.filter(
+                    priority__lt=requester_priority,
+                    start_time__gt=override_cutoff,
+                )
+                non_displaceable = booking_overlap_qs.exclude(
+                    priority__lt=requester_priority,
+                    start_time__gt=override_cutoff,
+                )
+                if non_displaceable.exists() or not displaceable.exists():
+                    raise LocalizedError(code='BOOKING_CONFLICT', i18n_key='booking.conflict', http_status=409)
+                # All conflicting bookings can be displaced — store them for cancellation in create()
+                self._bookings_to_displace = list(displaceable)
+            else:
+                raise LocalizedError(code='BOOKING_CONFLICT', i18n_key='booking.conflict', http_status=409)
 
         has_block_overlap = ResourceBlock.objects.filter(
             resource=resource,
@@ -677,6 +703,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         import logging
         from apps.notifications.tasks import send_notification_email
+        self._bookings_to_displace = []
         validated_data.pop('resource_id', None)
         participant_ids = validated_data.pop('participant_ids', [])
         user = self.context['request'].user
@@ -691,6 +718,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 resource=resource,
                 start_time=start_time,
                 end_time=end_time,
+                user=user,
             )
             self._validate_availability_window(
                 resource=resource,
@@ -706,10 +734,28 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             validated_data['resource'] = resource
             validated_data['user'] = user
+            validated_data['priority'] = _booking_priority(user)
             # Guests have no company; set company only for company-bound users.
             if user.role != 'guest':
                 validated_data['company'] = user.company or resource.assigned_company
             booking = super().create(validated_data)
+
+            # Cancel any displaced lower-priority bookings and notify their owners.
+            for displaced_booking in self._bookings_to_displace:
+                displaced_booking.status = 'cancelled'
+                displaced_booking.cancel_reason = 'displaced_by_priority_booking'
+                displaced_booking.cancelled_by = user
+                displaced_booking.save(update_fields=['status', 'cancel_reason', 'cancelled_by'])
+                create_notification(
+                    user=displaced_booking.user,
+                    notification_type='booking_cancelled',
+                    title='Бронирование отменено',
+                    message=(
+                        f'Ваше бронирование {displaced_booking.resource.name} было отменено '
+                        f'в пользу пользователя с более высоким приоритетом.'
+                    ),
+                    link=f'/bookings/{displaced_booking.id}',
+                )
 
             # In-app confirmation for the booking owner (preferences + DND via helper)
             create_notification(

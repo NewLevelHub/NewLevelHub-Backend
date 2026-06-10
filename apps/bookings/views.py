@@ -83,6 +83,10 @@ _RecurringBookingCreatedSchema = inline_serializer(
 )
 
 
+# Plans that allow access to company-assigned (non-shared) resources.
+# basic and free users may only see/book shared resources (assigned_company IS NULL).
+PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
+
 # ---------------------------------------------------------------------------
 # Shared OpenApiExample sets — reused across list / create / retrieve actions
 # ---------------------------------------------------------------------------
@@ -683,9 +687,11 @@ class ResourceViewSet(viewsets.ModelViewSet):
         else:
             qs = qs.filter(is_active=True)
             company = getattr(user, 'company', None)
-            if company:
+            if company and getattr(company, 'plan', 'basic') in PLANS_WITH_ASSIGNED_RESOURCES:
+                # standard/premium: видят общие ресурсы + закреплённые за своей компанией
                 qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
             else:
+                # basic/free/нет компании: только общие ресурсы
                 qs = qs.filter(assigned_company__isnull=True)
 
         if self.action == 'list':

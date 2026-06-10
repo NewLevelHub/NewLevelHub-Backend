@@ -22,6 +22,10 @@ from .schedule import busy_slots_for_resource, is_soon_available, seven_day_rang
 
 User = get_user_model()
 
+# Plans that allow access to company-assigned (non-shared) resources.
+# basic and free users may only book shared resources (assigned_company IS NULL).
+PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
+
 # Type-specific validation constants
 _MEETING_ROOM_MIN_MINUTES = 30
 _MEETING_ROOM_MAX_MINUTES = 240  # 4 hours
@@ -193,6 +197,11 @@ class ResourceSerializer(serializers.ModelSerializer):
         )
         if availability_start and availability_end and availability_start >= availability_end:
             raise_validation_error('availability_start', 'booking.availability_start_after_end')
+
+        assigned_company = data.get('assigned_company')
+        if assigned_company is not None:
+            if getattr(assigned_company, 'plan', 'basic') not in PLANS_WITH_ASSIGNED_RESOURCES:
+                raise_validation_error('assigned_company', 'booking.assigned_company_requires_premium')
 
         return data
 
@@ -442,12 +451,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             raise_validation_error('resource_id', 'booking.resource_not_found')
 
     def _validate_access(self, *, resource, user):
-        if (
-            not user.is_superadmin()
-            and resource.assigned_company_id
-            and resource.assigned_company_id != user.company_id
-        ):
+        if user.is_superadmin():
+            return
+        # Cross-company block: resource is locked to a different company.
+        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
             raise_validation_error('resource_id', 'booking.resource_wrong_company')
+        # Plan-based block: basic/free companies may not book assigned resources.
+        company = getattr(user, 'company', None)
+        plan = getattr(company, 'plan', 'basic') if company else 'basic'
+        if resource.assigned_company_id and plan not in PLANS_WITH_ASSIGNED_RESOURCES:
+            raise_validation_error('resource_id', 'booking.resource_requires_premium')
 
     def _validate_availability_window(self, *, resource, start_time, end_time):
         local_start = timezone.localtime(start_time)
@@ -864,12 +877,15 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         if attrs['repeat_until'] < today:
             raise_validation_error('repeat_until', 'booking.repeat_until_in_past')
 
-        if (
-            not user.is_superadmin()
-            and resource.assigned_company_id
-            and resource.assigned_company_id != user.company_id
-        ):
-            raise_validation_error('resource_id', 'booking.resource_wrong_company')
+        if not user.is_superadmin():
+            # Cross-company block: resource is locked to a different company.
+            if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+                raise_validation_error('resource_id', 'booking.resource_wrong_company')
+            # Plan-based block: basic/free companies may not book assigned resources.
+            company = getattr(user, 'company', None)
+            plan = getattr(company, 'plan', 'basic') if company else 'basic'
+            if resource.assigned_company_id and plan not in PLANS_WITH_ASSIGNED_RESOURCES:
+                raise_validation_error('resource_id', 'booking.resource_requires_premium')
 
         available_days = resource.available_days or list(range(7))
         if attrs['day_of_week'] not in available_days:

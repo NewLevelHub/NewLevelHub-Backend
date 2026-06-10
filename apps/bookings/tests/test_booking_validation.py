@@ -13,6 +13,17 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+
+
+def _noon_offset(days):
+    """Return a tz-aware datetime at 12:00 noon local time, `days` from now.
+
+    Pinning to noon avoids same-day validation failures when start + 1h
+    would otherwise cross midnight (test runs between 23:00-23:59 local).
+    """
+    local_tz = timezone.get_current_timezone()
+    base = timezone.now().astimezone(local_tz)
+    return (base + timedelta(days=days)).replace(hour=12, minute=0, second=0, microsecond=0)
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -111,9 +122,9 @@ class TestDeskValidation:
         # advance_booking_days=14 is set explicitly on the resource.
         resource = _make_resource('desk', available_days=list(range(7)), advance_booking_days=14)
         api_client.force_authenticate(user=employee)
-        now = timezone.now()
-        # Exactly 14 days from now (truncate sub-second so it does not exceed boundary)
-        start = (now + timedelta(days=14)).replace(second=0, microsecond=0)
+        # Pin to noon local time: prevents start+1h from crossing midnight when the
+        # test runs between 23:00-23:59, which would trigger same_day_only validation.
+        start = _noon_offset(14)
         end = start + timedelta(hours=1)
 
         resp = api_client.post(RESERVATIONS_URL, {
@@ -507,8 +518,8 @@ class TestMeetingRoomAdvanceBookingDays:
         resource = _make_resource('meeting_room', capacity=4, advance_booking_days=3,
                                   available_days=list(range(7)))
         api_client.force_authenticate(user=employee)
-        now = timezone.now()
-        start = (now + timedelta(days=2)).replace(second=0, microsecond=0)
+        # Pin to noon local time to avoid midnight-crossing same_day_only error.
+        start = _noon_offset(2)
         end = start + timedelta(hours=1)
 
         resp = api_client.post(RESERVATIONS_URL, {

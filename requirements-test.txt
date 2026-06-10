@@ -30,6 +30,9 @@ moto[s3]==5.0.5
 # QR Code Generation
 qrcode==7.4.2
 
+# PDF Export
+reportlab==4.1.0
+
 # Testing
 pytest==8.0.0
 pytest-django==4.8.0

@@ -13,6 +13,14 @@ from datetime import timedelta
 
 import pytest
 from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APIClient
+
+from apps.bookings.models import Resource
+from apps.companies.models import Company
+from apps.users.models import User
+
+RESERVATIONS_URL = '/api/v1/bookings/reservations/'
 
 
 def _noon_offset(days):
@@ -24,14 +32,6 @@ def _noon_offset(days):
     local_tz = timezone.get_current_timezone()
     base = timezone.now().astimezone(local_tz)
     return (base + timedelta(days=days)).replace(hour=12, minute=0, second=0, microsecond=0)
-from rest_framework import status
-from rest_framework.test import APIClient
-
-from apps.bookings.models import Resource
-from apps.companies.models import Company
-from apps.users.models import User
-
-RESERVATIONS_URL = '/api/v1/bookings/reservations/'
 
 
 @pytest.fixture

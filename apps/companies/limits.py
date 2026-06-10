@@ -37,8 +37,7 @@ def get_company_storage_used_bytes(company):
     # - company-scoped files (file.company = company)
     # - personal files of company employees (file.company IS NULL, file.owner.company = company)
     storage_files_bytes = (
-        File.objects.filter(is_deleted=False)
-        .filter(
+        File.all_objects.filter(
             Q(company=company)
             | Q(company__isnull=True, owner__company=company)
         )
@@ -63,7 +62,7 @@ def get_guest_storage_used_bytes(user):
     from apps.storage.models import File
 
     return (
-        File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        File.all_objects.filter(owner=user, company__isnull=True)
         .aggregate(total=Sum('file_size'))['total'] or 0
     )
 

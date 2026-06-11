@@ -1084,3 +1084,12 @@ class BookingCancellationAuditSerializer(serializers.ModelSerializer):
         model = BookingCancellationAudit
         fields = ['id', 'booking_id', 'cancelled_by', 'cancel_reason', 'cancelled_at']
         read_only_fields = fields
+
+
+class BulkCancelSerializer(serializers.Serializer):
+    booking_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        min_length=1,
+        max_length=50,
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, default='')

@@ -1,6 +1,12 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 from apps.core.models import TimeStampedModel
+
+
+def _booking_qr_upload_path(instance, filename):
+    return f'bookings/qr/{instance.id}/{filename}'
 
 
 class Resource(TimeStampedModel):
@@ -120,6 +126,8 @@ class Booking(TimeStampedModel):
     cancel_reason = models.TextField(blank=True, default='')
     reminder_sent = models.BooleanField(default=False, db_index=True)
     checked_in_at = models.DateTimeField(null=True, blank=True)
+    qr_code = models.UUIDField(null=True, blank=True, unique=True, db_index=True)
+    qr_image = models.ImageField(upload_to=_booking_qr_upload_path, blank=True, default='')
 
     class Meta:
         db_table = 'bookings'

@@ -8,5 +8,10 @@ router.register('reservations', views.BookingViewSet, basename='booking')
 router.register('recurring', views.RecurringBookingViewSet, basename='recurring-booking')
 
 urlpatterns = [
+    path(
+        'reservations/qr/<uuid:qr_code>/image/',
+        views.booking_qr_image,
+        name='booking-qr-image',
+    ),
     path('', include(router.urls)),
 ]

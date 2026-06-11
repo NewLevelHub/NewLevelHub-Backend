@@ -298,7 +298,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
                 skipped_dates.append(booking_date.isoformat())
                 continue
 
-            Booking.objects.get_or_create(
+            booking, created = Booking.objects.get_or_create(
                 resource=resource,
                 user=recurring_booking.user,
                 company=recurring_booking.company,
@@ -307,5 +307,8 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
                 end_time=end_time,
                 defaults={'status': 'confirmed', 'description': ''},
             )
+            if created and resource.resource_type == 'capsule':
+                from .qr_image import ensure_capsule_booking_qr
+                ensure_capsule_booking_qr(booking)
 
     return skipped_dates

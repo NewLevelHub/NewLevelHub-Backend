@@ -79,7 +79,11 @@ _FOLDER_PERM_LEVELS = {'view': 1, 'upload': 2, 'full': 3}
 
 
 def _folder_access_level(user, folder):
-    """Return effective permission level ('view'/'upload'/'full') or None if no access."""
+    """Return effective permission level ('view'/'upload'/'full') or None if no access.
+
+    Walks the ancestor chain: a folder with no explicit permissions inherits
+    the first restriction found in its parent hierarchy.
+    """
     if user.role == 'superadmin':
         return 'full'
     if folder.scope == 'personal':
@@ -89,16 +93,22 @@ def _folder_access_level(user, folder):
         return None
     if user.role == 'company_admin':
         return 'full'
-    perms = list(FolderPermission.objects.filter(folder=folder))
-    if not perms:
-        return 'upload'   # open folder: view + upload, but not delete/modify others' files
-    user_perm = next((p for p in perms if p.user_id == user.id), None)
-    if user_perm:
-        return user_perm.permission
-    role_perm = next((p for p in perms if p.role == user.role), None)
-    if role_perm:
-        return role_perm.permission
-    return None
+
+    current = folder
+    while current is not None:
+        perms = list(FolderPermission.objects.filter(folder=current))
+        if perms:
+            user_perm = next((p for p in perms if p.user_id == user.id), None)
+            if user_perm:
+                return user_perm.permission
+            role_perm = next((p for p in perms if p.role == user.role), None)
+            if role_perm:
+                return role_perm.permission
+            return None  # folder is restricted but user has no matching entry
+        # No permissions on this folder — check parent
+        current = Folder.objects.filter(pk=current.parent_id).first() if current.parent_id else None
+
+    return 'upload'  # reached root with no restrictions — open folder default
 
 
 @extend_schema_view(
@@ -231,6 +241,10 @@ class FolderViewSet(viewsets.ModelViewSet):
         else:
             if user.role != 'superadmin' and (parent.scope != 'company' or parent.company_id != user.company_id):
                 raise_validation_error('parent_id', 'storage.company_parent_inaccessible')
+            if user.role not in ('superadmin', 'company_admin'):
+                level = _folder_access_level(user, parent)
+                if level is None or _FOLDER_PERM_LEVELS.get(level, 0) < _FOLDER_PERM_LEVELS['upload']:
+                    raise_validation_error('parent_id', 'storage.folder_upload_forbidden')
         return parent
 
     def create(self, request, *args, **kwargs):

@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.companies.models import CompanySettings
 from apps.core.exceptions import raise_validation_error
 from apps.users.models import User
+from .constants import SYSTEM_STEPS
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
 
@@ -158,11 +159,15 @@ class LeaveBalanceTeamSerializer(serializers.ModelSerializer):
 
 class OnboardingStepSerializer(serializers.ModelSerializer):
     order = serializers.IntegerField(source='position')
+    url = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
+
+    def validate_url(self, value):
+        return value or ''
 
     class Meta:
         model = OnboardingStep
-        fields = ['id', 'title', 'description', 'url', 'order']
-        read_only_fields = ['id']
+        fields = ['id', 'title', 'description', 'url', 'order', 'is_system']
+        read_only_fields = ['id', 'is_system']
 
 
 class OnboardingTemplateSerializer(serializers.ModelSerializer):
@@ -177,7 +182,12 @@ class OnboardingTemplateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])
         template = OnboardingTemplate.objects.create(**validated_data)
+        for system_step in SYSTEM_STEPS:
+            OnboardingStep.objects.create(template=template, is_system=True, **system_step)
+        custom_position = len(SYSTEM_STEPS) + 1
         for step_data in steps_data:
+            step_data['position'] = custom_position
+            custom_position += 1
             OnboardingStep.objects.create(template=template, **step_data)
         return template
 
@@ -188,8 +198,12 @@ class OnboardingTemplateSerializer(serializers.ModelSerializer):
         instance.save()
 
         if steps_data is not None:
-            instance.steps.all().delete()
+            # Preserve system steps; only replace custom ones.
+            instance.steps.filter(is_system=False).delete()
+            custom_position = len(SYSTEM_STEPS) + 1
             for step_data in steps_data:
+                step_data['position'] = custom_position
+                custom_position += 1
                 OnboardingStep.objects.create(template=instance, **step_data)
         return instance
 

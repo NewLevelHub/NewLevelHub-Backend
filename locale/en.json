@@ -213,6 +213,7 @@
   "hr.leave_reviewer_is_author": "You cannot assign yourself as the reviewer of your own request.",
   "hr.leave_review_self_forbidden": "You cannot review your own leave request.",
   "hr.leave_review_not_assigned": "Only the assigned administrator can review this request.",
+  "hr.onboarding_system_step_immutable": "System steps cannot be edited or deleted.",
   "services.coordinate_out_of_range": "Value must be between 0.0 and 100.0.",
   "services.resource_required_for_type": "Resource is required for point_type \"{point_type}\".",
   "services.company_required_for_office": "Company is required for point_type \"office\".",

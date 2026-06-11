@@ -13,6 +13,7 @@
   "auth.token_expired": "Token has expired.",
   "auth.token_already_used": "Token has already been used.",
   "auth.session_idle_timeout": "Your session has expired due to inactivity. Please sign in again.",
+  "auth.session_absolute_timeout": "Your session has reached its maximum lifetime. Please sign in again to continue.",
   "auth.passwords_dont_match": "Passwords do not match.",
   "auth.current_password_wrong": "Current password is incorrect.",
   "auth.password_changed": "Password changed successfully.",

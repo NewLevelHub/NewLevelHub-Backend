@@ -1004,3 +1004,12 @@ class ResourceBlockSerializer(serializers.ModelSerializer):
         if start_time and end_time and start_time >= end_time:
             raise_validation_error('detail', 'booking.start_time_before_end_time')
         return attrs
+
+
+class BulkCancelSerializer(serializers.Serializer):
+    booking_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        min_length=1,
+        max_length=50,
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, default='')

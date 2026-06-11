@@ -316,6 +316,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
     assigned_company_name = serializers.CharField(
         source='assigned_company.name', read_only=True, allow_null=True, default=None,
     )
+    floor_id = serializers.IntegerField(source='floor_fk.id', read_only=True, allow_null=True)
     floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
     floor_name = serializers.CharField(source='floor_fk.name', read_only=True, allow_null=True)
 
@@ -325,7 +326,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'id',
             'type',
             'name',
-            'floor',
+            'floor_id',
             'floor_number',
             'floor_name',
             'zone',

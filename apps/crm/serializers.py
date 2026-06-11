@@ -455,14 +455,26 @@ class ColumnReorderSerializer(serializers.Serializer):
 
 class BoardSerializer(serializers.ModelSerializer):
     columns = ColumnSerializer(many=True, read_only=True)
+    template_id = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        default='basic',
+    )
 
     class Meta:
         model = Board
         fields = [
             'id', 'name', 'description', 'is_archived', 'company',
-            'created_by', 'columns', 'created_at', 'updated_at',
+            'created_by', 'columns', 'template_id', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'company', 'created_by', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        # template_id is a view-level hint; strip it before passing to the ORM.
+        validated_data.pop('template_id', None)
+        return super().create(validated_data)
 
 
 class BoardListSerializer(serializers.ModelSerializer):

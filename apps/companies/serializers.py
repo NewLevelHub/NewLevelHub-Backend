@@ -640,3 +640,12 @@ class OnboardingStatusSerializer(serializers.Serializer):
     """Onboarding status for a company."""
     completed = serializers.BooleanField()
     steps = OnboardingStepSerializer(many=True)
+
+
+class BulkIdsSerializer(serializers.Serializer):
+    """Request body for bulk company operations — a non-empty list of company PKs."""
+    ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=True,
+        allow_empty=False,
+    )

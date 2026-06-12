@@ -234,6 +234,28 @@ class IsSuperAdminOrReception(_AuthenticatedPermission):
         return request.user.role in ('superadmin', 'reception')
 
 
+class IsCompanyPremium(_AuthenticatedPermission):
+    """
+    Passes only if the user's company has a premium plan.
+
+    Superadmin always passes (platform-level override).
+    Users without a company (guest, building-staff) are denied.
+    company_admin / employee on a non-premium plan are denied with a
+    localised error so the client can show a plan-upgrade prompt.
+    """
+
+    def _has_role_permission(self, request, view):
+        user = request.user
+        if user.role == 'superadmin':
+            return True
+        company = getattr(user, 'company', None)
+        if not company:
+            return False
+        if getattr(company, 'plan', None) == 'premium':
+            return True
+        raise PermissionDenied(translate('company.premium_plan_required', get_lang(request)))
+
+
 class IsOwnerOrSuperAdmin(_AuthenticatedPermission):
     """
     Object-level permission for actions that require physical presence or

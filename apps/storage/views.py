@@ -1,12 +1,13 @@
 from django.conf import settings
-from django.db.models import F, Q, Sum
+from django.db.models import Case, CharField, Count, Exists, F, OuterRef, Q, Subquery, Sum, Value, When
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse, inline_serializer
 from apps.companies.limits import (
     get_company_storage_used_bytes,
@@ -16,12 +17,16 @@ from apps.companies.limits import (
 from apps.core.error_codes import STORAGE_LIMIT_EXCEEDED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import translate, get_lang
-from apps.core.permissions import IsCompanyMember, IsGuestOrCompanyMember
+from apps.core.permissions import IsCompanyAdmin, IsCompanyMember, IsGuestOrCompanyMember
 from apps.crm.models import TaskAttachment
 from apps.notifications.utils import create_notification
-from .models import Folder, File, FileShare
-from .s3_helpers import presigned_get_url_for_fieldfile
-from .serializers import FolderSerializer, FileSerializer, FileShareSerializer, StorageUsageSerializer
+from .constants import ARCHIVE_MIME_TYPES
+from .models import Folder, File, FileShare, FolderPermission
+from .s3_helpers import presigned_get_url_for_fieldfile, _delete_fieldfile_with_retry
+from .serializers import (
+    FolderSerializer, FileSerializer, FileShareSerializer, FolderPermissionSerializer,
+    StorageUsageSerializer, TrashItemSerializer,
+)
 
 
 _FileDownloadResponseSerializer = inline_serializer(
@@ -43,6 +48,67 @@ def _soft_delete_folder_recursive(folder):
     folder.is_deleted = True
     folder.deleted_at = now
     folder.save(update_fields=['is_deleted', 'deleted_at'])
+
+
+def _collect_all_folder_files(folder):
+    """Yield all File records in folder's entire subtree (uses all_objects — includes soft-deleted)."""
+    for f in File.all_objects.filter(folder=folder):
+        yield f
+    for child in Folder.all_objects.filter(parent=folder):
+        yield from _collect_all_folder_files(child)
+
+
+def _check_folder_permission(request, folder):
+    """Raise PermissionDenied if the request user cannot modify this folder."""
+    user = request.user
+    if user.role == 'superadmin':
+        return
+    if folder.owner_id == user.id:
+        return
+    if (
+        folder.scope == 'company'
+        and user.company_id
+        and folder.company_id == user.company_id
+        and user.role == 'company_admin'
+    ):
+        return
+    raise PermissionDenied(translate('storage.folder_action_forbidden', get_lang(request)))
+
+
+_FOLDER_PERM_LEVELS = {'view': 1, 'upload': 2, 'full': 3}
+
+
+def _folder_access_level(user, folder):
+    """Return effective permission level ('view'/'upload'/'full') or None if no access.
+
+    Walks the ancestor chain: a folder with no explicit permissions inherits
+    the first restriction found in its parent hierarchy.
+    """
+    if user.role == 'superadmin':
+        return 'full'
+    if folder.scope == 'personal':
+        return 'full' if folder.owner_id == user.id else None
+    # company folder
+    if user.company_id is None or folder.company_id != user.company_id:
+        return None
+    if user.role == 'company_admin':
+        return 'full'
+
+    current = folder
+    while current is not None:
+        perms = list(FolderPermission.objects.filter(folder=current))
+        if perms:
+            user_perm = next((p for p in perms if p.user_id == user.id), None)
+            if user_perm:
+                return user_perm.permission
+            role_perm = next((p for p in perms if p.role == user.role), None)
+            if role_perm:
+                return role_perm.permission
+            return None  # folder is restricted but user has no matching entry
+        # No permissions on this folder — check parent
+        current = Folder.objects.filter(pk=current.parent_id).first() if current.parent_id else None
+
+    return 'upload'  # reached root with no restrictions — open folder default
 
 
 @extend_schema_view(
@@ -90,10 +156,26 @@ class FolderViewSet(viewsets.ModelViewSet):
             # Guests only have personal storage; never expose company-scope folders.
             queryset = Folder.objects.filter(owner=user, scope='personal')
         else:
-            queryset = (
-                Folder.objects.filter(owner=user, scope='personal')
-                | Folder.objects.filter(company=user.company, scope='company')
-            ).distinct()
+            personal_qs = Folder.objects.filter(owner=user, scope='personal')
+
+            if user.role == 'company_admin':
+                company_qs = Folder.objects.filter(company=user.company, scope='company')
+            else:
+                restricted_ids = FolderPermission.objects.filter(
+                    folder__company=user.company, folder__scope='company',
+                ).values('folder_id')
+
+                permitted_ids = FolderPermission.objects.filter(
+                    folder__company=user.company, folder__scope='company',
+                ).filter(Q(user=user) | Q(role=user.role)).values('folder_id')
+
+                company_qs = Folder.objects.filter(
+                    company=user.company, scope='company',
+                ).filter(
+                    Q(id__in=permitted_ids) | ~Q(id__in=restricted_ids)
+                )
+
+            queryset = (personal_qs | company_qs).distinct()
 
         scope = self.request.query_params.get('scope')
         if scope in ('personal', 'company'):
@@ -108,6 +190,23 @@ class FolderViewSet(viewsets.ModelViewSet):
                     queryset = queryset.filter(parent_id=int(parent_id))
                 except (TypeError, ValueError):
                     raise_validation_error('parent_id', 'storage.parent_id_invalid')
+
+        perm_exists_sq = FolderPermission.objects.filter(folder=OuterRef('pk'))
+        queryset = queryset.annotate(perm_exists=Exists(perm_exists_sq))
+
+        # For employees: annotate per-folder permission level to avoid N+1 in serializer.
+        if user.role not in ('superadmin', 'company_admin', 'guest'):
+            user_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), user=user
+            ).values('permission')[:1]
+            role_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), role=user.role
+            ).values('permission')[:1]
+            queryset = queryset.annotate(
+                user_perm_ann=Subquery(user_perm_sq, output_field=CharField()),
+                role_perm_ann=Subquery(role_perm_sq, output_field=CharField()),
+            )
+
         return queryset.order_by('-created_at')
 
     def _resolve_scope(self):
@@ -142,6 +241,10 @@ class FolderViewSet(viewsets.ModelViewSet):
         else:
             if user.role != 'superadmin' and (parent.scope != 'company' or parent.company_id != user.company_id):
                 raise_validation_error('parent_id', 'storage.company_parent_inaccessible')
+            if user.role not in ('superadmin', 'company_admin'):
+                level = _folder_access_level(user, parent)
+                if level is None or _FOLDER_PERM_LEVELS.get(level, 0) < _FOLDER_PERM_LEVELS['upload']:
+                    raise_validation_error('parent_id', 'storage.folder_upload_forbidden')
         return parent
 
     def create(self, request, *args, **kwargs):
@@ -161,6 +264,84 @@ class FolderViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         _soft_delete_folder_recursive(instance)
 
+    @extend_schema(
+        tags=['Storage'],
+        summary='Restore folder from trash',
+        responses={
+            204: OpenApiResponse(description='Restored'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='restore')
+    def restore(self, request, pk=None):
+        try:
+            folder = Folder.all_objects.get(pk=pk, is_deleted=True)
+        except Folder.DoesNotExist:
+            raise NotFound()
+        _check_folder_permission(request, folder)
+        folder.restore()
+        File.all_objects.filter(folder=folder, is_deleted=True).update(is_deleted=False, deleted_at=None)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Permanently delete folder from trash',
+        responses={
+            204: OpenApiResponse(description='Deleted permanently'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['delete'], url_path='permanent')
+    def permanent_delete(self, request, pk=None):
+        try:
+            folder = Folder.all_objects.get(pk=pk, is_deleted=True)
+        except Folder.DoesNotExist:
+            raise NotFound()
+        _check_folder_permission(request, folder)
+        for f in _collect_all_folder_files(folder):
+            if f.file:
+                _delete_fieldfile_with_retry(f.file)
+        folder.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        methods=['get'],
+        tags=['Storage'],
+        summary='List folder permissions',
+        responses={200: FolderPermissionSerializer(many=True), 403: OpenApiResponse(description='Forbidden')},
+    )
+    @extend_schema(
+        methods=['post'],
+        tags=['Storage'],
+        summary='Add folder permission',
+        request=FolderPermissionSerializer,
+        responses={
+            201: FolderPermissionSerializer,
+            400: OpenApiResponse(description='Validation error'),
+            403: OpenApiResponse(description='Forbidden'),
+        },
+    )
+    @action(detail=True, methods=['get', 'post'], url_path='permissions')
+    def folder_permissions(self, request, pk=None):
+        folder = self.get_object()
+        if request.user.role not in ('superadmin', 'company_admin'):
+            raise PermissionDenied(translate('storage.folder_action_forbidden', get_lang(request)))
+        if request.method == 'GET':
+            qs = (
+                FolderPermission.objects.filter(folder=folder)
+                .select_related('user', 'granted_by')
+                .order_by('created_at')
+            )
+            return Response(FolderPermissionSerializer(qs, many=True, context={'request': request}).data)
+        serializer = FolderPermissionSerializer(
+            data=request.data, context={'request': request, 'folder': folder}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(folder=folder, granted_by=request.user)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     def retrieve(self, request, *args, **kwargs):
         folder = self.get_object()
         user = request.user
@@ -173,11 +354,41 @@ class FolderViewSet(viewsets.ModelViewSet):
             if user.role == 'superadmin':
                 child_folders = Folder.objects.filter(parent=folder, scope='company')
                 files = File.objects.filter(folder=folder)
-            else:
+            elif user.role == 'company_admin':
                 child_folders = Folder.objects.filter(parent=folder, scope='company', company=user.company)
                 files = File.objects.filter(folder=folder, company=user.company)
+            else:
+                restr_child_ids = FolderPermission.objects.filter(
+                    folder__parent=folder, folder__scope='company',
+                ).values('folder_id')
 
-        data['folders'] = FolderSerializer(child_folders, many=True).data
+                permitted_child_ids = FolderPermission.objects.filter(
+                    folder__parent=folder, folder__scope='company',
+                ).filter(Q(user=user) | Q(role=user.role)).values('folder_id')
+
+                child_folders = Folder.objects.filter(
+                    parent=folder, scope='company', company=user.company,
+                ).filter(
+                    Q(id__in=permitted_child_ids) | ~Q(id__in=restr_child_ids)
+                ).distinct()
+                files = File.objects.filter(folder=folder, company=user.company)
+
+        perm_exists_sq = FolderPermission.objects.filter(folder=OuterRef('pk'))
+        child_folders = child_folders.annotate(perm_exists=Exists(perm_exists_sq))
+
+        if user.role not in ('superadmin', 'company_admin', 'guest'):
+            user_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), user=user
+            ).values('permission')[:1]
+            role_perm_sq = FolderPermission.objects.filter(
+                folder=OuterRef('pk'), role=user.role
+            ).values('permission')[:1]
+            child_folders = child_folders.annotate(
+                user_perm_ann=Subquery(user_perm_sq, output_field=CharField()),
+                role_perm_ann=Subquery(role_perm_sq, output_field=CharField()),
+            )
+
+        data['folders'] = FolderSerializer(child_folders, many=True, context={'request': request}).data
         data['files'] = FileSerializer(files, many=True).data
         return Response(data)
 
@@ -208,7 +419,7 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsGuestOrCompanyMember]
     search_fields = ['name']
-    ordering_fields = ['name', 'file_size', 'size', 'created_at']
+    ordering_fields = ['name', 'file_size', 'size', 'created_at', 'file_category']
     _PERMISSION_LEVELS = {'view': 1, 'download': 2, 'full': 3}
 
     def get_queryset(self):
@@ -225,9 +436,36 @@ class FileViewSet(viewsets.ModelViewSet):
                 File.objects.filter(owner=user, folder__scope='personal')
                 | File.objects.filter(owner=user, folder__isnull=True, company__isnull=True)
             ).distinct()
-        else:
-            # Company scope is visible to all company members.
+        elif user.role == 'company_admin':
             company_files = File.objects.filter(company=user.company, folder__scope='company')
+            company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
+            personal_owned = File.objects.filter(owner=user, folder__scope='personal')
+            legacy_owned = File.objects.filter(owner=user, folder__isnull=True)
+            explicitly_shared = File.objects.filter(shares__shared_with=user)
+            queryset = (
+                company_files
+                | company_root_files
+                | personal_owned
+                | legacy_owned
+                | explicitly_shared
+            ).distinct()
+        else:
+            # Exclude files from restricted folders the employee has no access to.
+            restricted_folder_ids = FolderPermission.objects.filter(
+                folder__company=user.company, folder__scope='company',
+            ).values('folder_id')
+
+            permitted_folder_ids = FolderPermission.objects.filter(
+                folder__company=user.company, folder__scope='company',
+            ).filter(Q(user=user) | Q(role=user.role)).values('folder_id')
+
+            inaccessible_folder_ids = Folder.objects.filter(
+                id__in=restricted_folder_ids, company=user.company, scope='company',
+            ).exclude(id__in=permitted_folder_ids).values('id')
+
+            company_files = File.objects.filter(
+                company=user.company, folder__scope='company',
+            ).exclude(folder_id__in=inaccessible_folder_ids)
             company_root_files = File.objects.filter(company=user.company, folder__isnull=True)
 
             # Personal scope: only files owned by this user.
@@ -268,7 +506,23 @@ class FileViewSet(viewsets.ModelViewSet):
                 except (TypeError, ValueError):
                     raise_validation_error('folder_id', 'storage.folder_id_invalid')
 
-        return queryset.annotate(size=F('file_size')).order_by('-created_at')
+        annotated = queryset.annotate(
+            size=F('file_size'),
+            file_category=Case(
+                When(content_type__startswith='image/', then=Value('image')),
+                When(content_type__startswith='video/', then=Value('media')),
+                When(content_type__startswith='audio/', then=Value('media')),
+                When(content_type__in=ARCHIVE_MIME_TYPES, then=Value('archive')),
+                When(content_type__startswith='application/', then=Value('document')),
+                When(content_type__startswith='text/', then=Value('document')),
+                default=Value('other'),
+                output_field=CharField(),
+            ),
+        )
+        file_category = self.request.query_params.get('file_category')
+        if file_category in {'image', 'media', 'archive', 'document', 'other'}:
+            annotated = annotated.filter(file_category=file_category)
+        return annotated.select_related('folder').order_by('-created_at')
 
     def _resolve_scope(self):
         if self.request.user.role == 'guest':
@@ -294,6 +548,10 @@ class FileViewSet(viewsets.ModelViewSet):
             raise_validation_error('folder_id', 'storage.personal_folder_inaccessible')
         if folder.scope == 'company' and user.role != 'superadmin' and folder.company_id != user.company_id:
             raise_validation_error('folder_id', 'storage.company_folder_inaccessible')
+        if folder.scope == 'company' and user.role not in ('superadmin', 'company_admin'):
+            level = _folder_access_level(user, folder)
+            if level is None or _FOLDER_PERM_LEVELS.get(level, 0) < _FOLDER_PERM_LEVELS['upload']:
+                raise_validation_error('folder_id', 'storage.folder_upload_forbidden')
         return folder
 
     def _get_share_for_user(self, file_obj, user):
@@ -322,14 +580,24 @@ class FileViewSet(viewsets.ModelViewSet):
             and file_obj.company_id == user.company_id
             and (folder is None or folder.scope == 'company')
         )
-        if (
-            is_company_file
-            and (
-                required_permission in ('view', 'download')
-                or (required_permission == 'full' and user.role == 'company_admin')
-            )
-        ):
-            return
+        if is_company_file:
+            if folder is not None:
+                level = _folder_access_level(user, folder)
+                if level is None:
+                    raise PermissionDenied(translate('storage.file_access_denied', get_lang(self.request)))
+                if required_permission in ('view', 'download'):
+                    if _FOLDER_PERM_LEVELS.get(level, 0) >= _FOLDER_PERM_LEVELS['view']:
+                        return
+                elif required_permission == 'full':
+                    if _FOLDER_PERM_LEVELS.get(level, 0) >= _FOLDER_PERM_LEVELS['full']:
+                        return
+                raise PermissionDenied(translate('storage.file_action_forbidden', get_lang(self.request)))
+            else:
+                # root-level company file (folder=None): legacy behaviour
+                if required_permission in ('view', 'download'):
+                    return
+                if required_permission == 'full' and user.role == 'company_admin':
+                    return
 
         lang = get_lang(self.request)
         raise PermissionDenied(translate('storage.file_access_denied', lang))
@@ -457,8 +725,15 @@ class FileViewSet(viewsets.ModelViewSet):
         queryset = self.get_queryset().filter(pk__in=ids)
         user = request.user
         for file_obj in queryset:
+            folder = getattr(file_obj, 'folder', None)
+            has_folder_full = (
+                folder is not None
+                and _FOLDER_PERM_LEVELS.get(_folder_access_level(user, folder) or '', 0)
+                >= _FOLDER_PERM_LEVELS['full']
+            )
             if not (user.role == 'superadmin' or file_obj.owner_id == user.id
-                    or (user.company_id and file_obj.company_id == user.company_id and user.role == 'company_admin')):
+                    or (user.company_id and file_obj.company_id == user.company_id and user.role == 'company_admin')
+                    or has_folder_full):
                 return Response(
                     {'detail': f'No permission to delete file {file_obj.id}.'},
                     status=status.HTTP_403_FORBIDDEN,
@@ -505,6 +780,73 @@ class FileViewSet(viewsets.ModelViewSet):
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Restore file from trash',
+        responses={
+            204: OpenApiResponse(description='Restored'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['post'], url_path='restore')
+    def restore(self, request, pk=None):
+        try:
+            file_obj = File.all_objects.get(pk=pk, is_deleted=True)
+        except File.DoesNotExist:
+            raise NotFound()
+        self._ensure_file_permission(file_obj, 'full')
+        file_obj.restore()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Permanently delete file from trash',
+        responses={
+            204: OpenApiResponse(description='Deleted permanently'),
+            403: OpenApiResponse(description='Forbidden'),
+            404: OpenApiResponse(description='Not found'),
+        },
+    )
+    @action(detail=True, methods=['delete'], url_path='permanent')
+    def permanent_delete(self, request, pk=None):
+        try:
+            file_obj = File.all_objects.get(pk=pk, is_deleted=True)
+        except File.DoesNotExist:
+            raise NotFound()
+        self._ensure_file_permission(file_obj, 'full')
+        if file_obj.file:
+            _delete_fieldfile_with_retry(file_obj.file)
+        file_obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema_view(
+    partial_update=extend_schema(
+        tags=['Storage'],
+        summary='Update folder permission',
+        request=FolderPermissionSerializer,
+        responses={200: FolderPermissionSerializer, 403: OpenApiResponse(description='Forbidden')},
+    ),
+    destroy=extend_schema(
+        tags=['Storage'],
+        summary='Delete folder permission',
+        responses={204: OpenApiResponse(description='Deleted'), 403: OpenApiResponse(description='Forbidden')},
+    ),
+)
+class FolderPermissionViewSet(viewsets.ModelViewSet):
+    serializer_class = FolderPermissionSerializer
+    permission_classes = [IsCompanyAdmin]
+    http_method_names = ['patch', 'delete']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'superadmin':
+            return FolderPermission.objects.all().select_related('user', 'folder', 'granted_by')
+        return FolderPermission.objects.filter(
+            folder__company=user.company,
+        ).select_related('user', 'folder', 'granted_by')
 
 
 @extend_schema_view(
@@ -570,6 +912,126 @@ class FileShareViewSet(viewsets.ModelViewSet):
         )
 
 
+class TrashListView(APIView):
+    permission_classes = [IsGuestOrCompanyMember]
+
+    def _build_trash_querysets(self, request):
+        """Return (files_qs, folders_qs) scoped to the requesting user."""
+        user = request.user
+        scope = request.query_params.get('scope', 'personal')
+
+        if user.role == 'superadmin':
+            files_qs = File.all_objects.filter(is_deleted=True)
+            folders_qs = Folder.all_objects.filter(is_deleted=True)
+        elif user.role == 'guest':
+            files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+            folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+        elif scope == 'company' and user.company_id:
+            files_qs = File.all_objects.filter(is_deleted=True, company=user.company)
+            folders_qs = Folder.all_objects.filter(is_deleted=True, scope='company', company=user.company)
+        else:
+            files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+            folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+
+        return files_qs, folders_qs
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='List trash (soft-deleted files and folders)',
+        responses={
+            200: TrashItemSerializer(many=True),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
+    def get(self, request):
+        files_qs, folders_qs = self._build_trash_querysets(request)
+
+        # Count all files (including soft-deleted) per folder in a single query.
+        folders_qs = folders_qs.annotate(cached_files_count=Count('files'))
+
+        items = []
+        for f in files_qs.order_by('-deleted_at'):
+            items.append({
+                'id': f.id,
+                'name': f.name,
+                'item_type': 'file',
+                'deleted_at': f.deleted_at,
+                'scope': 'personal' if f.company_id is None else 'company',
+                'file_size': f.file_size,
+                'content_type': f.content_type,
+                'files_count': None,
+            })
+        for folder in folders_qs.order_by('-deleted_at'):
+            items.append({
+                'id': folder.id,
+                'name': folder.name,
+                'item_type': 'folder',
+                'deleted_at': folder.deleted_at,
+                'scope': folder.scope,
+                'file_size': None,
+                'content_type': None,
+                'files_count': folder.cached_files_count,
+            })
+
+        items.sort(key=lambda x: x['deleted_at'], reverse=True)
+        serializer = TrashItemSerializer(items, many=True)
+        return Response({'count': len(items), 'next': None, 'previous': None, 'results': serializer.data})
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Empty trash (permanently delete all items in trash)',
+        responses={
+            204: OpenApiResponse(description='All trash items permanently deleted'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
+    def delete(self, request):
+        files_qs, folders_qs = self._build_trash_querysets(request)
+
+        for f in files_qs:
+            if f.file:
+                _delete_fieldfile_with_retry(f.file)
+            f.delete()
+
+        for folder in folders_qs:
+            for f in _collect_all_folder_files(folder):
+                if f.file:
+                    _delete_fieldfile_with_retry(f.file)
+            folder.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+_CATEGORY_ANNOTATION = Case(
+    When(content_type__startswith='image/', then=Value('image')),
+    When(content_type__startswith='video/', then=Value('media')),
+    When(content_type__startswith='audio/', then=Value('media')),
+    When(content_type__in=ARCHIVE_MIME_TYPES, then=Value('archive')),
+    When(content_type__startswith='application/', then=Value('document')),
+    When(content_type__startswith='text/', then=Value('document')),
+    default=Value('other'),
+    output_field=CharField(),
+)
+
+_BREAKDOWN_ZERO = {'document': 0, 'image': 0, 'archive': 0, 'media': 0, 'other': 0}
+
+
+def _compute_breakdown(active_qs):
+    """Return breakdown dict (bytes per category) for the given active-file queryset."""
+    rows = (
+        active_qs
+        .annotate(file_category=_CATEGORY_ANNOTATION)
+        .values('file_category')
+        .annotate(total=Sum('file_size'))
+    )
+    result = dict(_BREAKDOWN_ZERO)
+    for row in rows:
+        cat = row['file_category']
+        if cat in result:
+            result[cat] = row['total'] or 0
+    return result
+
+
 @extend_schema(
     tags=['Storage'],
     summary='Get storage usage for current user / company',
@@ -584,9 +1046,15 @@ def storage_usage(request):
     user = request.user
 
     if user.role == 'guest':
-        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        # used_bytes must include trashed files — they still occupy disk space.
+        personal_qs = File.all_objects.filter(owner=user, company__isnull=True)
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
         company_data = None
     elif user.company_id:
@@ -594,17 +1062,29 @@ def storage_usage(request):
         storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
         # Personal files: company=NULL, owned by any employee of this company.
-        personal_qs = File.objects.filter(
-            company__isnull=True, owner__company=company, is_deleted=False
+        # Include trashed files in used_bytes — they still occupy disk space.
+        personal_qs = File.all_objects.filter(
+            company__isnull=True, owner__company=company
         )
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
 
         # Company-scoped storage files only — excludes personal files so that
         # personal.used_bytes + company.used_bytes == total without double-counting.
-        company_qs = File.objects.filter(company=company, is_deleted=False)
+        # Include trashed files in used_bytes — they still occupy disk space.
+        company_qs = File.all_objects.filter(company=company)
         company_files_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        company_count = company_qs.count()
+        company_active_qs = company_qs.filter(is_deleted=False)
+        company_count = company_active_qs.count()
+        company_trash = (
+            company_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        company_breakdown = _compute_breakdown(company_active_qs)
         # Direct-upload CRM attachments (storage_file=None) are not in File but
         # do consume company storage — include them in the displayed total.
         crm_direct_bytes = (
@@ -620,12 +1100,19 @@ def storage_usage(request):
             'used_bytes': company_used,
             'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
+            'trash_bytes': company_trash,
+            'breakdown': company_breakdown,
         }
         personal_limit = storage_limit_bytes
     else:
-        personal_qs = File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        personal_qs = File.all_objects.filter(owner=user, company__isnull=True)
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
-        personal_count = personal_qs.count()
+        personal_active_qs = personal_qs.filter(is_deleted=False)
+        personal_count = personal_active_qs.count()
+        personal_trash = (
+            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        )
+        personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = None
         company_data = None
 
@@ -634,6 +1121,8 @@ def storage_usage(request):
             'used_bytes': personal_used,
             'file_count': personal_count,
             'limit_bytes': personal_limit,
+            'trash_bytes': personal_trash,
+            'breakdown': personal_breakdown,
         },
         'company': company_data,
     }).data)

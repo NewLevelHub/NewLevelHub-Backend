@@ -180,7 +180,9 @@ class TestStorageUsageEndpoint:
         assert response.data['company']['used_bytes'] == 1000
         assert response.data['company']['file_count'] == 2
 
-    def test_soft_deleted_files_excluded_from_counts(self, api_client, company_admin, company):
+    def test_soft_deleted_files_counted_in_used_bytes_but_not_file_count(
+        self, api_client, company_admin, company
+    ):
         # Personal files (company=None): one active, one soft-deleted.
         _create_db_file(owner=company_admin, company=None, size=100)
         _create_db_file(owner=company_admin, company=None, size=200, is_deleted=True)
@@ -192,11 +194,14 @@ class TestStorageUsageEndpoint:
         response = api_client.get(USAGE_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        # Soft-deleted files must not be counted in either scope.
-        assert response.data['personal']['used_bytes'] == 100
-        assert response.data['personal']['file_count'] == 1
-        assert response.data['company']['used_bytes'] == 300
-        assert response.data['company']['file_count'] == 1
+        # used_bytes includes trashed files — they still occupy S3 storage until
+        # permanently deleted (design decision: trash counts toward quota).
+        assert response.data['personal']['used_bytes'] == 300   # 100 active + 200 trashed
+        assert response.data['personal']['file_count'] == 1     # only active files
+        assert response.data['personal']['trash_bytes'] == 200
+        assert response.data['company']['used_bytes'] == 700    # 300 active + 400 trashed
+        assert response.data['company']['file_count'] == 1      # only active files
+        assert response.data['company']['trash_bytes'] == 400
 
     def test_empty_usage_returns_zeros(self, api_client, company_admin, company):
         api_client.force_authenticate(user=company_admin)

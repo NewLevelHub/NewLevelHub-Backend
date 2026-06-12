@@ -32,6 +32,7 @@ from apps.core.permissions import (
     IsCompanyAdminOrReadOnly,
     IsOwnerOrAdmin,
     IsSuperAdminOrReception,
+    IsCompanyPremium,
 )
 from apps.core.mixins import CompanyIsolationMixin, CompanyQuerySetMixin
 
@@ -43,14 +44,18 @@ from apps.core.mixins import CompanyIsolationMixin, CompanyQuerySetMixin
 factory = APIRequestFactory()
 
 
-def _make_user(role, company_id=None, authenticated=True):
+def _make_user(role, company_id=None, authenticated=True, plan='basic'):
     """Return a lightweight mock user — no database required."""
     user = MagicMock()
     user.role = role
     user.company_id = company_id
     user.is_authenticated = authenticated
-    user.company = MagicMock()
-    user.company.pk = company_id
+    if company_id is not None:
+        user.company = MagicMock()
+        user.company.pk = company_id
+        user.company.plan = plan
+    else:
+        user.company = None
     return user
 
 
@@ -688,4 +693,70 @@ class TestUnauthenticatedReturns401:
             result = perm.has_permission(request, _view())
             assert result is False, (
                 f"{perm.__class__.__name__} should deny unauthenticated POST"
+            )
+
+
+# ---------------------------------------------------------------------------
+# IsCompanyPremium
+# ---------------------------------------------------------------------------
+
+class TestIsCompanyPremium:
+    """
+    IsCompanyPremium: passes only for superadmin OR authenticated users whose
+    company.plan == 'premium'. All others receive 403 (PermissionDenied).
+
+    No DB required — all users are constructed via MagicMock.
+    """
+
+    perm = IsCompanyPremium()
+
+    def test_unauthenticated_returns_false(self):
+        user = _make_user('company_admin', company_id=1, authenticated=False)
+        request = _make_request(user=user)
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_none_user_returns_false(self):
+        request = _make_request()
+        request.user = None
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_superadmin_always_passes(self):
+        """Superadmin bypasses the premium plan gate unconditionally."""
+        request = _make_request(user=_make_user('superadmin', company_id=None))
+        assert self.perm.has_permission(request, _view()) is True
+
+    def test_company_admin_with_premium_plan_passes(self):
+        request = _make_request(user=_make_user('company_admin', company_id=1, plan='premium'))
+        assert self.perm.has_permission(request, _view()) is True
+
+    def test_employee_with_premium_plan_passes(self):
+        request = _make_request(user=_make_user('employee', company_id=1, plan='premium'))
+        assert self.perm.has_permission(request, _view()) is True
+
+    def test_company_admin_with_basic_plan_raises_permission_denied(self):
+        request = _make_request(user=_make_user('company_admin', company_id=1, plan='basic'))
+        with pytest.raises(PermissionDenied):
+            self.perm.has_permission(request, _view())
+
+    def test_company_admin_with_standard_plan_raises_permission_denied(self):
+        request = _make_request(user=_make_user('company_admin', company_id=1, plan='standard'))
+        with pytest.raises(PermissionDenied):
+            self.perm.has_permission(request, _view())
+
+    def test_employee_with_basic_plan_raises_permission_denied(self):
+        request = _make_request(user=_make_user('employee', company_id=1, plan='basic'))
+        with pytest.raises(PermissionDenied):
+            self.perm.has_permission(request, _view())
+
+    def test_guest_without_company_returns_false(self):
+        """Guest has no company — returns False (not PermissionDenied)."""
+        request = _make_request(user=_make_user('guest', company_id=None))
+        assert self.perm.has_permission(request, _view()) is False
+
+    def test_building_staff_without_company_returns_false(self):
+        """reception / service_manager have no company — returns False."""
+        for role in ('reception', 'service_manager'):
+            request = _make_request(user=_make_user(role, company_id=None))
+            assert self.perm.has_permission(request, _view()) is False, (
+                f"Expected False for {role} without company"
             )

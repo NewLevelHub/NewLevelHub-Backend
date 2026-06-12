@@ -54,9 +54,10 @@ from .serializers import (
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
     ParticipantPickerUserSerializer,
+    BookingCancellationAuditSerializer,
     _EQUIPMENT_KEYS,
 )
-from .filters import ResourceFilter, BookingFilter
+from .filters import ResourceFilter, BookingFilter, BookingCancellationAuditFilter
 from .schedule import get_schedule_status, week_range_for_date
 from .tasks import create_bookings_for_recurring
 
@@ -84,6 +85,10 @@ _RecurringBookingCreatedSchema = inline_serializer(
     },
 )
 
+
+# Plans that allow access to company-assigned (non-shared) resources.
+# basic and free users may only see/book shared resources (assigned_company IS NULL).
+PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
 
 # ---------------------------------------------------------------------------
 # Shared OpenApiExample sets — reused across list / create / retrieve actions
@@ -685,9 +690,11 @@ class ResourceViewSet(viewsets.ModelViewSet):
         else:
             qs = qs.filter(is_active=True)
             company = getattr(user, 'company', None)
-            if company:
+            if company and getattr(company, 'plan', 'basic') in PLANS_WITH_ASSIGNED_RESOURCES:
+                # standard/premium: видят общие ресурсы + закреплённые за своей компанией
                 qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
             else:
+                # basic/free/нет компании: только общие ресурсы
                 qs = qs.filter(assigned_company__isnull=True)
 
         if self.action == 'list':
@@ -1355,6 +1362,13 @@ class ResourceViewSet(viewsets.ModelViewSet):
             '### Conflict rules\n'
             '- Returns **409** if another confirmed booking or an admin block overlaps '
             'the requested interval on the same resource.\n\n'
+            '### Priority booking (Standard/Premium)\n'
+            'If a slot is occupied by a lower-priority plan (basic/free/guest), '
+            'Standard and Premium users can displace the existing booking if it starts more than '
+            '`PRIORITY_OVERRIDE_HOURS` (default: 2h) in the future. '
+            'The displaced booking is set to `cancelled` with `cancel_reason=displaced_by_priority_booking` '
+            'and its owner receives an in-app notification. '
+            'Priority tiers: 3=premium/superadmin, 2=standard, 1=basic/free/guest.\n\n'
             '### Active booking limit\n'
             '- Users cannot exceed 5 simultaneous active (confirmed, future-ending) bookings '
             '(configurable via `MAX_ACTIVE_BOOKINGS_PER_USER` in settings).'
@@ -1369,7 +1383,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         responses={
             201: OpenApiResponse(
                 response=BookingSerializer,
-                description='Booking created successfully.',
+                description='Booking confirmed; lower-priority conflicts displaced if applicable.',
                 examples=[_BOOKING_201_EXAMPLE],
             ),
             400: OpenApiResponse(
@@ -2287,3 +2301,72 @@ class BookingMembersView(APIView):
         qs = qs.order_by('first_name', 'last_name')[:20]
         serializer = ParticipantPickerUserSerializer(qs, many=True, context={'request': request})
         return Response(serializer.data)
+# BookingCancellationAuditViewSet
+# ---------------------------------------------------------------------------
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Bookings'],
+        summary='Лог отмен бронирований',
+        description=(
+            'Возвращает пагинированный список записей аудита отмен бронирований.\n\n'
+            '**Доступ:** `superadmin` видит все записи; `company_admin` — только записи своей '
+            'компании; `employee` / `guest` — 403.\n\n'
+            '**Фильтры:** `booking`, `cancelled_by`, `cancelled_at_after`, `cancelled_at_before`.\n\n'
+            '**Сортировка по умолчанию:** `-cancelled_at`.'
+        ),
+        parameters=[
+            OpenApiParameter(
+                name='booking',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Фильтр по ID бронирования.',
+            ),
+            OpenApiParameter(
+                name='cancelled_by',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Фильтр по ID пользователя, выполнившего отмену.',
+            ),
+            OpenApiParameter(
+                name='cancelled_at_after',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Записи с датой отмены >= указанного значения (ISO 8601).',
+            ),
+            OpenApiParameter(
+                name='cancelled_at_before',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Записи с датой отмены <= указанного значения (ISO 8601).',
+            ),
+        ],
+        responses={
+            200: BookingCancellationAuditSerializer(many=True),
+            401: OpenApiResponse(description='Не аутентифицирован.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Только company_admin или superadmin.', examples=[_FORBIDDEN_403_EXAMPLE]),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['Bookings'],
+        summary='Запись аудита отмены',
+        responses={
+            200: BookingCancellationAuditSerializer,
+            401: OpenApiResponse(description='Не аутентифицирован.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Только company_admin или superadmin.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Не найдено.'),
+        },
+    ),
+)
+class BookingCancellationAuditViewSet(CompanyIsolationMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = BookingCancellationAuditSerializer
+    permission_classes = [IsCompanyAdmin]
+    queryset = BookingCancellationAudit.objects.select_related('cancelled_by').all()
+    filterset_class = BookingCancellationAuditFilter
+    ordering_fields = ['cancelled_at']
+    ordering = ['-cancelled_at']
+    company_lookup = 'booking__company'

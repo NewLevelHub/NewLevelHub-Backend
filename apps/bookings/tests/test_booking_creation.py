@@ -104,9 +104,10 @@ class TestBookingCreate:
         assert body['status'] == 'confirmed'
         assert body['description'] == 'Focus session'
 
-    def test_create_booking_success_for_assigned_company_resource(
+    def test_create_booking_basic_company_rejects_assigned_resource(
         self, api_client, employee, assigned_resource
     ):
+        # basic plan employees may NOT book company-assigned resources
         api_client.force_authenticate(user=employee)
         start_time = _next_weekday_at(11)
         end_time = start_time + timedelta(hours=1)
@@ -121,8 +122,8 @@ class TestBookingCreate:
             format='json',
         )
 
-        assert response.status_code == status.HTTP_201_CREATED
-        assert response.json()['resource'] == assigned_resource.id
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'resource_id' in response.json()['error']['details']
 
     def test_create_booking_rejects_resource_assigned_to_other_company(
         self, api_client, employee, resource_other_company

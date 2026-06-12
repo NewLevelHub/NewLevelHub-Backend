@@ -5,15 +5,21 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import AccessToken, RefreshToken
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from apps.users.authentication import SessionIdleTimeout
+from apps.users.authentication import SessionAbsoluteTimeout, SessionIdleTimeout
 from apps.users.session import (
-    clear_idle_session_marker,
+    clear_session_markers,
+    get_session_created_at_from_token,
+    handle_absolute_session_expiry,
     handle_idle_session_expiry,
+    is_absolute_session_expired,
+    is_absolute_session_marked_expired,
     is_idle_session_expired,
+    SESSION_CREATED_AT_CLAIM,
+    stamp_session_created_at,
 )
 
 
@@ -58,10 +64,11 @@ def _sync_outstanding_exp(refresh: RefreshToken):
 
 
 def issue_refresh_token(user, remember_me: bool = False) -> RefreshToken:
-    clear_idle_session_marker(user)
+    clear_session_markers(user)
     refresh = RefreshToken.for_user(user)
     refresh['remember_me'] = bool(remember_me)
     refresh.set_exp(lifetime=_refresh_lifetime(bool(remember_me)))
+    stamp_session_created_at(refresh)
     _sync_outstanding_exp(refresh)
     return refresh
 
@@ -92,13 +99,21 @@ class RememberMeTokenRefreshSerializer(TokenRefreshSerializer):
         try:
             incoming_refresh = RefreshToken(attrs['refresh'])
             remember_me = bool(incoming_refresh.get('remember_me', False))
+            session_created_at = get_session_created_at_from_token(incoming_refresh)
 
             user_id = incoming_refresh.get('user_id')
             if user_id is not None:
                 user = User.objects.filter(pk=user_id).first()
-                if user and is_idle_session_expired(user):
-                    handle_idle_session_expiry(user)
-                    raise SessionIdleTimeout()
+                if user:
+                    if is_absolute_session_marked_expired(user.pk):
+                        handle_absolute_session_expiry(user, session_created_at)
+                        raise SessionAbsoluteTimeout()
+                    if is_absolute_session_expired(session_created_at):
+                        handle_absolute_session_expiry(user, session_created_at)
+                        raise SessionAbsoluteTimeout()
+                    if is_idle_session_expired(user):
+                        handle_idle_session_expiry(user)
+                        raise SessionIdleTimeout()
 
             data = super().validate(attrs)
         except TokenError as exc:
@@ -108,8 +123,15 @@ class RememberMeTokenRefreshSerializer(TokenRefreshSerializer):
             rotated_refresh = RefreshToken(data['refresh'])
             rotated_refresh['remember_me'] = remember_me
             rotated_refresh.set_exp(lifetime=_refresh_lifetime(remember_me))
+            stamp_session_created_at(rotated_refresh, session_created_at=session_created_at)
             _sync_outstanding_exp(rotated_refresh)
             data['refresh'] = str(rotated_refresh)
+
+        if 'access' in data:
+            access = AccessToken(data['access'])
+            if session_created_at is not None:
+                access[SESSION_CREATED_AT_CLAIM] = int(session_created_at.timestamp())
+            data['access'] = str(access)
 
         data['remember_me'] = remember_me
         return data

@@ -10,6 +10,7 @@ from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import GenericAPIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import (
@@ -133,6 +134,20 @@ def _resolve_calendar_company(request, company_id):
     return get_object_or_404(company_qs, id=company_id)
 
 
+def _resolve_calendar_user_id(request, *, user_id=None, my_only=None):
+    """Employees always see only their own calendar events."""
+    if request.user.role == 'employee':
+        return request.user.id
+
+    if my_only:
+        return request.user.id
+
+    if user_id is not None:
+        return user_id
+
+    return None
+
+
 def _serialize_calendar_user(user):
     return {'id': user.id, 'full_name': user.full_name}
 
@@ -167,7 +182,7 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
             deadline__isnull=False,
             deadline__gte=range_start,
             deadline__lt=range_end,
-        ).select_related('assignee', 'created_by')
+        ).select_related('assignee', 'created_by', 'column__board')
         if user_id is not None:
             # "My" task deadlines in calendar are tied to the current assignee.
             # A task must disappear from "Только мои" after reassignment.
@@ -182,6 +197,8 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
                 'start': task.deadline.isoformat(),
                 'end': task.deadline.isoformat(),
                 'user': _serialize_calendar_user(task_user),
+                'task_id': task.id,
+                'board_id': task.column.board_id,
             })
 
     if event_type in (None, 'leave'):
@@ -222,6 +239,7 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
                 'start': guest_pass.valid_from.isoformat(),
                 'end': guest_pass.valid_until.isoformat(),
                 'user': _serialize_calendar_user(guest_pass.created_by),
+                'guest_pass_id': guest_pass.id,
             })
 
     return sorted(events, key=lambda item: (item['start'], item['end'], item['type']))
@@ -316,6 +334,7 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
 )
 class CompanyViewSet(viewsets.ModelViewSet):
     queryset = Company.objects.all()
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = CompanyFilter
     search_fields = ['name']
@@ -438,7 +457,10 @@ class CompanyViewSet(viewsets.ModelViewSet):
         settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
 
         if request.method == 'PATCH':
-            serializer = CompanySettingsSerializer(settings_obj, data=request.data, partial=True)
+            serializer = CompanySettingsSerializer(
+                settings_obj, data=request.data, partial=True,
+                context=self.get_serializer_context(),
+            )
             serializer.is_valid(raise_exception=True)
             old_vacation_days = settings_obj.vacation_days_per_year
             serializer.save()
@@ -1453,10 +1475,11 @@ class CompanyCalendarView(APIView):
         if date_from > date_to:
             raise_validation_error('detail', 'company.date_from_after_date_to')
 
-        user_id = request.query_params.get('user_id')
-        if user_id not in (None, ''):
+        user_id_raw = request.query_params.get('user_id')
+        parsed_user_id = None
+        if user_id_raw not in (None, ''):
             try:
-                user_id = int(user_id)
+                parsed_user_id = int(user_id_raw)
             except (TypeError, ValueError):
                 raise_validation_error('user_id', 'company.user_id_must_be_integer')
 
@@ -1468,8 +1491,11 @@ class CompanyCalendarView(APIView):
             )
 
         my_only = _parse_bool_query_param(request.query_params.get('my'), 'my')
-        if my_only:
-            user_id = request.user.id
+        user_id = _resolve_calendar_user_id(
+            request,
+            user_id=parsed_user_id,
+            my_only=my_only,
+        )
 
         events = _build_company_calendar_events(
             company=company,
@@ -1499,7 +1525,9 @@ class CompanyCalendarBusyView(APIView):
         except (TypeError, ValueError):
             raise_validation_error('user_id', 'company.user_id_must_be_integer')
 
-        if not User.objects.filter(id=user_id, company_id=company.id).exists():
+        if request.user.role == 'employee':
+            user_id = request.user.id
+        elif not User.objects.filter(id=user_id, company_id=company.id).exists():
             raise_validation_error('user_id', 'company.user_not_in_company')
 
         target_date = _parse_date_query_param(request.query_params.get('date'), 'date')

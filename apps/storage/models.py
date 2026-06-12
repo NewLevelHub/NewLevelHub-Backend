@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
 from apps.core.models import TimeStampedModel, SoftDeleteModel
 from apps.storage.upload_paths import company_storage_file_upload_to
 
@@ -44,6 +45,52 @@ class File(TimeStampedModel, SoftDeleteModel):
 
     def __str__(self):
         return self.name
+
+
+class FolderPermission(TimeStampedModel):
+    PERMISSION_CHOICES = [
+        ('view', 'View only'),
+        ('upload', 'View + Upload'),
+        ('full', 'Full access'),
+    ]
+
+    folder = models.ForeignKey(Folder, on_delete=models.CASCADE, related_name='permissions')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+        null=True, blank=True, related_name='folder_permissions',
+    )
+    role = models.CharField(max_length=30, null=True, blank=True)
+    permission = models.CharField(max_length=10, choices=PERMISSION_CHOICES, default='view')
+    granted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='granted_folder_permissions',
+    )
+
+    class Meta:
+        db_table = 'storage_folder_permissions'
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    Q(user__isnull=False, role__isnull=True)
+                    | Q(user__isnull=True, role__isnull=False)
+                ),
+                name='folder_permission_user_xor_role',
+            ),
+            models.UniqueConstraint(
+                fields=['folder', 'user'],
+                condition=Q(user__isnull=False),
+                name='unique_folder_user_perm',
+            ),
+            models.UniqueConstraint(
+                fields=['folder', 'role'],
+                condition=Q(role__isnull=False),
+                name='unique_folder_role_perm',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['folder', 'user']),
+            models.Index(fields=['folder', 'role']),
+        ]
 
 
 class FileShare(TimeStampedModel):

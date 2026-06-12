@@ -271,20 +271,23 @@ class TestCompanySettingsColorValidation:
     def test_valid_6char_hex_color_accepted(
         self, api_client, company_admin, company_a
     ):
+        # Brand customization requires a premium plan.
+        company_a.plan = 'premium'
+        company_a.save(update_fields=['plan'])
         auth(api_client, company_admin)
         payload = {'brand_primary_color': '#FF5733'}
         response = api_client.patch(settings_url(company_a.id), payload, format='json')
         assert response.status_code == status.HTTP_200_OK
         assert response.data['brand_primary_color'] == '#FF5733'
 
-    def test_valid_3char_hex_color_accepted(
+    def test_3char_hex_color_rejected(
         self, api_client, company_admin, company_a
     ):
+        # Only 6-digit hex colors are accepted (#RRGGBB); 3-digit shorthand is not allowed.
         auth(api_client, company_admin)
         payload = {'brand_primary_color': '#F53'}
         response = api_client.patch(settings_url(company_a.id), payload, format='json')
-        assert response.status_code == status.HTTP_200_OK
-        assert response.data['brand_primary_color'] == '#F53'
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_valid_label_color_accepted(
         self, api_client, company_admin, company_a
@@ -516,6 +519,9 @@ class TestCompanySettingsPartialUpdate:
     def test_patch_multiple_fields_simultaneously(
         self, api_client, company_admin, company_a
     ):
+        # Brand customization requires a premium plan.
+        company_a.plan = 'premium'
+        company_a.save(update_fields=['plan'])
         auth(api_client, company_admin)
         payload = {
             'vacation_days_per_year': 14,

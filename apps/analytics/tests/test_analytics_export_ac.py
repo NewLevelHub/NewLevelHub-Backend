@@ -1,9 +1,12 @@
-"""Acceptance tests for analytics CSV export (superadmin + company admin).
+"""Acceptance tests for analytics CSV/PDF export (superadmin + company admin).
 
 AC:
 - GET /api/v1/analytics/superadmin/export/?format=csv&period=30d — CSV superadmin
+- GET /api/v1/analytics/superadmin/export/?format=pdf&period=30d — PDF superadmin
 - GET /api/v1/analytics/company/export/?format=csv — CSV company admin
-- Content-Type: text/csv; Content-Disposition: attachment; UTF-8 BOM
+- GET /api/v1/analytics/company/export/?format=pdf — PDF company admin
+- Content-Type: text/csv; Content-Disposition: attachment; UTF-8 BOM (CSV)
+- Content-Type: application/pdf; Content-Disposition: attachment (PDF)
 - Only superadmin / company admin paths per endpoint; others — 403
 """
 
@@ -167,15 +170,17 @@ class TestCompanyAnalyticsExportAC:
 
 @pytest.mark.django_db
 class TestAnalyticsExportFormatValidation:
-    def test_superadmin_requires_csv_format(self, api_client, superadmin):
+    def test_superadmin_missing_format_returns_400(self, api_client, superadmin):
         api_client.force_authenticate(user=superadmin)
         r = api_client.get(SUPERADMIN_EXPORT_URL, {'period': '30d'})
         assert r.status_code == status.HTTP_400_BAD_REQUEST
 
-        r2 = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'pdf', 'period': '30d'})
-        assert r2.status_code == status.HTTP_400_BAD_REQUEST
+    def test_superadmin_invalid_format_returns_400(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        r = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'xlsx', 'period': '30d'})
+        assert r.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_company_requires_csv_format(self, api_client, company_admin):
+    def test_company_requires_csv_or_pdf_format(self, api_client, company_admin):
         api_client.force_authenticate(user=company_admin)
         r = api_client.get(COMPANY_EXPORT_URL)
         assert r.status_code == status.HTTP_400_BAD_REQUEST
@@ -221,3 +226,75 @@ class TestAnalyticsExportVsDashboardConsistency:
         assert int(summary['Guest Visits This Month']) == dj['guest_visits_month']
         assert int(summary['CRM Total']) == dj['active_crm_tasks']['total']
         assert int(summary['CRM: Other']) == dj['active_crm_tasks']['other']
+
+
+def _assert_pdf_attachment_response(response):
+    assert response.status_code == status.HTTP_200_OK
+    assert response['Content-Type'] == 'application/pdf'
+    disposition = response['Content-Disposition']
+    assert 'attachment' in disposition
+    assert '.pdf' in disposition
+    # PDF magic bytes
+    assert response.content[:4] == b'%PDF'
+
+
+@pytest.mark.django_db
+class TestSuperadminAnalyticsPdfExportAC:
+    def test_superadmin_pdf_export_ok(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(
+            SUPERADMIN_EXPORT_URL,
+            {'format': 'pdf', 'period': '30d'},
+        )
+        _assert_pdf_attachment_response(response)
+
+    def test_superadmin_pdf_export_custom_period(self, api_client, superadmin):
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(
+            SUPERADMIN_EXPORT_URL,
+            {'format': 'pdf', 'period': 'custom', 'date_from': '2025-01-01', 'date_to': '2025-01-31'},
+        )
+        _assert_pdf_attachment_response(response)
+
+    def test_company_admin_pdf_forbidden(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'pdf', 'period': '30d'})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_employee_pdf_forbidden(self, api_client, employee):
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'pdf', 'period': '30d'})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unauthenticated_pdf_returns_401(self, api_client):
+        response = api_client.get(SUPERADMIN_EXPORT_URL, {'format': 'pdf', 'period': '30d'})
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+class TestCompanyAnalyticsPdfExportAC:
+    def test_company_admin_pdf_export_ok(self, api_client, company_admin):
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'pdf'})
+        _assert_pdf_attachment_response(response)
+
+    def test_superadmin_with_company_pdf_export_ok(self, api_client, superadmin, company):
+        superadmin.company = company
+        superadmin.save(update_fields=['company'])
+        api_client.force_authenticate(user=superadmin)
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'pdf'})
+        _assert_pdf_attachment_response(response)
+
+    def test_employee_pdf_forbidden(self, api_client, employee):
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'pdf'})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_guest_pdf_forbidden(self, api_client, guest_user):
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'pdf'})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_unauthenticated_pdf_returns_401(self, api_client):
+        response = api_client.get(COMPANY_EXPORT_URL, {'format': 'pdf'})
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED

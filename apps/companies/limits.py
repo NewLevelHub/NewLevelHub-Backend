@@ -33,12 +33,13 @@ def get_company_storage_used_bytes(company):
 
     from apps.storage.models import File
 
-    # All storage files belonging to the company:
+    # All storage files belonging to the company (including soft-deleted / in trash).
+    # Design decision: trashed files still occupy S3 storage until permanently deleted,
+    # so they count toward the quota. Users must empty trash to free up space.
     # - company-scoped files (file.company = company)
     # - personal files of company employees (file.company IS NULL, file.owner.company = company)
     storage_files_bytes = (
-        File.objects.filter(is_deleted=False)
-        .filter(
+        File.all_objects.filter(
             Q(company=company)
             | Q(company__isnull=True, owner__company=company)
         )
@@ -63,7 +64,7 @@ def get_guest_storage_used_bytes(user):
     from apps.storage.models import File
 
     return (
-        File.objects.filter(owner=user, company__isnull=True, is_deleted=False)
+        File.all_objects.filter(owner=user, company__isnull=True)
         .aggregate(total=Sum('file_size'))['total'] or 0
     )
 

@@ -1,9 +1,11 @@
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 from apps.users.models import User
 from apps.notifications.utils import create_notification
 from apps.core.exceptions import raise_validation_error
+from apps.core.i18n import get_lang, translate
 from apps.services.models import Floor
 
 from .invite_policy import email_blocks_new_company_invitation
@@ -128,6 +130,7 @@ class CompanySerializer(serializers.ModelSerializer):
     floor_id = serializers.IntegerField(source='floor_fk_id', read_only=True, allow_null=True)
     floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
     floor_name = serializers.SerializerMethodField()
+    logo = serializers.ImageField(use_url=True, required=False, allow_null=True)
 
     def get_company_admin(self, obj):
         admin = obj.members.filter(role='company_admin', is_active=True).first()
@@ -160,6 +163,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
     floor_id = serializers.IntegerField(source='floor_fk_id', read_only=True, allow_null=True)
     floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
     floor_name = serializers.SerializerMethodField()
+    logo = serializers.ImageField(use_url=True, required=False, allow_null=True)
 
     def get_company_admin(self, obj):
         admin = obj.members.filter(role='company_admin', is_active=True).first()
@@ -278,6 +282,24 @@ class CompanyAdminUpdateSerializer(serializers.ModelSerializer):
     def validate_categories(self, value):
         return _validate_categories(value)
 
+    def validate(self, attrs):
+        # Premium plan gating: logo upload is a premium-only feature for company_admin.
+        # This serializer is used exclusively for company_admin (superadmin uses
+        # CompanyUpdateSerializer and is never subject to this gate).
+        # PermissionDenied is used here for the same reason as in CompanySettingsSerializer:
+        # DRF re-wraps ValidationError from validate() as 400, discarding the http_status.
+        if 'logo' in attrs:
+            request = self.context.get('request')
+            if request is not None:
+                user = request.user
+                company = getattr(user, 'company', None)
+                plan = getattr(company, 'plan', None) if company else None
+                if plan != 'premium':
+                    raise PermissionDenied(
+                        translate('company.branding_premium_only', get_lang(request))
+                    )
+        return attrs
+
 
 class WorkingHoursSerializer(serializers.Serializer):
     """Nested serializer for working_hours: {start, end} as time strings (HH:MM)."""
@@ -292,7 +314,7 @@ class WorkingHoursSerializer(serializers.Serializer):
         return attrs
 
 
-HEX_COLOR_REGEX = r'^#([A-Fa-f0-9]{3}|[A-Fa-f0-9]{6})$'
+HEX_COLOR_REGEX = r'^#[0-9A-Fa-f]{6}$'
 
 
 class CompanySettingsSerializer(serializers.ModelSerializer):
@@ -361,6 +383,27 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         if errors:
             raise serializers.ValidationError(errors)
         return value
+
+    def validate(self, attrs):
+        # Premium plan gating: brand_primary_color is a premium-only feature.
+        # Superadmin bypasses the check. company_admin / employee without a
+        # premium plan receive 403 so the client can show a plan-upgrade prompt.
+        # PermissionDenied is used (not LocalizedError/ValidationError) because DRF
+        # catches ValidationError inside validate() and re-wraps it as 400, stripping
+        # the custom http_status. PermissionDenied is not caught by DRF's validation
+        # machinery and propagates directly to the exception handler as 403.
+        if 'brand_primary_color' in attrs:
+            request = self.context.get('request')
+            if request is not None:
+                user = request.user
+                if user.role != 'superadmin':
+                    company = getattr(user, 'company', None)
+                    plan = getattr(company, 'plan', None) if company else None
+                    if plan != 'premium':
+                        raise PermissionDenied(
+                            translate('company.branding_premium_only', get_lang(request))
+                        )
+        return attrs
 
     def to_representation(self, instance):
         # Sanitize JSON fields before DRF field-level to_representation runs.

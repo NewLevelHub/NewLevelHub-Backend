@@ -1,16 +1,49 @@
+from django.db.models import Q
 from rest_framework import serializers
 from apps.core.exceptions import raise_validation_error
-from .models import Folder, File, FileShare
+from .models import Folder, File, FileShare, FolderPermission
 
 
 class FolderSerializer(serializers.ModelSerializer):
     children_count = serializers.IntegerField(source='children.count', read_only=True)
     files_count = serializers.IntegerField(source='files.count', read_only=True)
+    is_restricted = serializers.SerializerMethodField()
+    user_permission = serializers.SerializerMethodField()
 
     class Meta:
         model = Folder
-        fields = ['id', 'name', 'scope', 'parent', 'owner', 'children_count', 'files_count', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'scope', 'parent', 'owner',
+            'children_count', 'files_count', 'is_restricted', 'user_permission',
+            'created_at', 'updated_at',
+        ]
         read_only_fields = ['id', 'owner', 'created_at', 'updated_at']
+
+    def get_is_restricted(self, obj):
+        if hasattr(obj, 'perm_exists'):
+            return obj.perm_exists
+        return obj.permissions.exists()
+
+    def get_user_permission(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+        user = request.user
+        if user.role in ('superadmin', 'company_admin'):
+            return None
+        is_restricted = obj.perm_exists if hasattr(obj, 'perm_exists') else obj.permissions.exists()
+        if not is_restricted:
+            return None
+        # Use DB annotations when available (avoids N+1 in list views).
+        if hasattr(obj, 'user_perm_ann'):
+            return obj.user_perm_ann or getattr(obj, 'role_perm_ann', None)
+        # Fallback: one query that fetches both user- and role-based records.
+        perms = list(obj.permissions.filter(Q(user=user) | Q(role=user.role)))
+        user_perm = next((p for p in perms if p.user_id == user.id), None)
+        if user_perm:
+            return user_perm.permission
+        role_perm = next((p for p in perms if p.role == user.role), None)
+        return role_perm.permission if role_perm else None
 
 
 class FileSerializer(serializers.ModelSerializer):
@@ -107,16 +140,84 @@ class FileShareSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class FolderPermissionSerializer(serializers.ModelSerializer):
+    granted_by_name = serializers.CharField(source='granted_by.full_name', read_only=True)
+    user_name = serializers.CharField(source='user.full_name', read_only=True)
+
+    class Meta:
+        model = FolderPermission
+        fields = ['id', 'folder', 'user', 'user_name', 'role',
+                  'permission', 'granted_by', 'granted_by_name', 'created_at']
+        read_only_fields = ['id', 'folder', 'granted_by', 'created_at']
+
+    def to_internal_value(self, data):
+        normalized = data.copy()
+        if normalized.get('user') in (None, '') and normalized.get('user_id') not in (None, ''):
+            normalized['user'] = normalized.get('user_id')
+        return super().to_internal_value(normalized)
+
+    def validate(self, attrs):
+        user = attrs.get('user')
+        role = attrs.get('role') or None
+        attrs['role'] = role
+
+        if self.instance is None:
+            # CREATE: user or role must be provided, and only one of them.
+            if user is None and role is None:
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'storage.permission_user_or_role_required', 'params': {}}]
+                )
+            if user is not None and role is not None:
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'storage.permission_user_xor_role', 'params': {}}]
+                )
+        else:
+            # UPDATE (PATCH): only validate XOR if both are explicitly supplied.
+            if user is not None and role is not None:
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'storage.permission_user_xor_role', 'params': {}}]
+                )
+
+        if user is not None:
+            folder = self.context.get('folder') or getattr(self.instance, 'folder', None)
+            if folder and folder.company_id and user.company_id != folder.company_id:
+                raise_validation_error('user', 'storage.permission_wrong_company')
+        return attrs
+
+
+class TrashItemSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    item_type = serializers.CharField()
+    deleted_at = serializers.DateTimeField()
+    scope = serializers.CharField()
+    file_size = serializers.IntegerField(allow_null=True)
+    content_type = serializers.CharField(allow_null=True)
+    files_count = serializers.IntegerField(allow_null=True)
+
+
+class StorageBreakdownSerializer(serializers.Serializer):
+    document = serializers.IntegerField()
+    image = serializers.IntegerField()
+    archive = serializers.IntegerField()
+    media = serializers.IntegerField()
+    other = serializers.IntegerField()
+
+
 class PersonalStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
     limit_bytes = serializers.IntegerField(allow_null=True)
+    trash_bytes = serializers.IntegerField()
+    breakdown = StorageBreakdownSerializer()
 
 
 class CompanyStorageSerializer(serializers.Serializer):
     used_bytes = serializers.IntegerField()
     limit_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
+    trash_bytes = serializers.IntegerField()
+    breakdown = StorageBreakdownSerializer()
 
 
 class StorageUsageSerializer(serializers.Serializer):

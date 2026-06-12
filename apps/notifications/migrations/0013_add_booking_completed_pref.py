@@ -1,4 +1,4 @@
-from django.db import migrations, models
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
@@ -28,17 +28,6 @@ class Migration(migrations.Migration):
                     reverse_sql=migrations.RunSQL.noop,
                 ),
             ],
-            state_operations=[
-                migrations.AddField(
-                    model_name='notificationpreference',
-                    name='booking_completed_in_app',
-                    field=models.BooleanField(default=True),
-                ),
-                migrations.AddField(
-                    model_name='notificationpreference',
-                    name='booking_completed_email',
-                    field=models.BooleanField(default=False),
-                ),
-            ],
+            state_operations=[],
         ),
     ]

@@ -10,6 +10,7 @@ from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.generics import GenericAPIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import (
@@ -336,6 +337,7 @@ def _build_company_calendar_events(*, company, date_from, date_to, user_id=None,
 )
 class CompanyViewSet(viewsets.ModelViewSet):
     queryset = Company.objects.all()
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = CompanyFilter
     search_fields = ['name']
@@ -461,7 +463,10 @@ class CompanyViewSet(viewsets.ModelViewSet):
         settings_obj, _ = CompanySettings.objects.get_or_create(company=company)
 
         if request.method == 'PATCH':
-            serializer = CompanySettingsSerializer(settings_obj, data=request.data, partial=True)
+            serializer = CompanySettingsSerializer(
+                settings_obj, data=request.data, partial=True,
+                context=self.get_serializer_context(),
+            )
             serializer.is_valid(raise_exception=True)
             old_vacation_days = settings_obj.vacation_days_per_year
             serializer.save()

@@ -215,11 +215,6 @@ class ResourceSerializer(serializers.ModelSerializer):
         if availability_start and availability_end and availability_start >= availability_end:
             raise_validation_error('availability_start', 'booking.availability_start_after_end')
 
-        assigned_company = data.get('assigned_company')
-        if assigned_company is not None:
-            if getattr(assigned_company, 'plan', 'basic') not in PLANS_WITH_ASSIGNED_RESOURCES:
-                raise_validation_error('assigned_company', 'booking.assigned_company_requires_premium')
-
         return data
 
     def _sync_floor_integer(self, validated_data):

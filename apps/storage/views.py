@@ -564,8 +564,8 @@ class FileShareViewSet(viewsets.ModelViewSet):
         create_notification(
             user=share.shared_with,
             notification_type='announcement_company',
-            title='File shared with you',
-            message=f'{share.shared_by.full_name} shared "{share.file.name}" with you.',
+            title='Вам открыли доступ к файлу',
+            message=f'{share.shared_by.full_name} поделился(-ась) файлом "{share.file.name}" с вами.',
             link=f'/files?shared_file_id={share.file_id}',
         )
 

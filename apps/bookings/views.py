@@ -83,6 +83,10 @@ _RecurringBookingCreatedSchema = inline_serializer(
 )
 
 
+# Plans that allow access to company-assigned (non-shared) resources.
+# basic and free users may only see/book shared resources (assigned_company IS NULL).
+PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
+
 # ---------------------------------------------------------------------------
 # Shared OpenApiExample sets — reused across list / create / retrieve actions
 # ---------------------------------------------------------------------------
@@ -683,9 +687,11 @@ class ResourceViewSet(viewsets.ModelViewSet):
         else:
             qs = qs.filter(is_active=True)
             company = getattr(user, 'company', None)
-            if company:
+            if company and getattr(company, 'plan', 'basic') in PLANS_WITH_ASSIGNED_RESOURCES:
+                # standard/premium: видят общие ресурсы + закреплённые за своей компанией
                 qs = qs.filter(Q(assigned_company__isnull=True) | Q(assigned_company_id=company.id))
             else:
+                # basic/free/нет компании: только общие ресурсы
                 qs = qs.filter(assigned_company__isnull=True)
 
         if self.action == 'list':
@@ -1353,6 +1359,13 @@ class ResourceViewSet(viewsets.ModelViewSet):
             '### Conflict rules\n'
             '- Returns **409** if another confirmed booking or an admin block overlaps '
             'the requested interval on the same resource.\n\n'
+            '### Priority booking (Standard/Premium)\n'
+            'If a slot is occupied by a lower-priority plan (basic/free/guest), '
+            'Standard and Premium users can displace the existing booking if it starts more than '
+            '`PRIORITY_OVERRIDE_HOURS` (default: 2h) in the future. '
+            'The displaced booking is set to `cancelled` with `cancel_reason=displaced_by_priority_booking` '
+            'and its owner receives an in-app notification. '
+            'Priority tiers: 3=premium/superadmin, 2=standard, 1=basic/free/guest.\n\n'
             '### Active booking limit\n'
             '- Users cannot exceed 5 simultaneous active (confirmed, future-ending) bookings '
             '(configurable via `MAX_ACTIVE_BOOKINGS_PER_USER` in settings).'
@@ -1367,7 +1380,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
         responses={
             201: OpenApiResponse(
                 response=BookingSerializer,
-                description='Booking created successfully.',
+                description='Booking confirmed; lower-priority conflicts displaced if applicable.',
                 examples=[_BOOKING_201_EXAMPLE],
             ),
             400: OpenApiResponse(

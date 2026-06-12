@@ -204,6 +204,51 @@ class TestGuestPassesCreateAC:
         response = api_client.post(PASSES_URL, payload, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_employee_basic_plan_limit_enforced(self, api_client, db):
+        # AC: employee on basic plan → 3rd pass for same email is rejected (400).
+        company = Company.objects.create(name='Basic Plan Co', plan='basic')
+        emp = User.objects.create_user(
+            email='basic-emp@test.local', password='pass',
+            first_name='Basic', last_name='Emp',
+            role='employee', company=company, is_email_verified=True,
+        )
+        payload = _payload()
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        api_client.force_authenticate(user=emp)
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_employee_standard_plan_no_limit(self, api_client, db):
+        # AC: employee on standard plan → 3rd pass for same email is accepted (201).
+        company = Company.objects.create(name='Standard Plan Co', plan='standard')
+        emp = User.objects.create_user(
+            email='standard-emp@test.local', password='pass',
+            first_name='Standard', last_name='Emp',
+            role='employee', company=company, is_email_verified=True,
+        )
+        payload = _payload()
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        api_client.force_authenticate(user=emp)
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+
+    def test_employee_premium_plan_no_limit(self, api_client, db):
+        # AC: employee on premium plan → 3rd pass for same email is accepted (201).
+        company = Company.objects.create(name='Premium Plan Co', plan='premium')
+        emp = User.objects.create_user(
+            email='premium-emp@test.local', password='pass',
+            first_name='Premium', last_name='Emp',
+            role='employee', company=company, is_email_verified=True,
+        )
+        payload = _payload()
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        _create_pass(creator=emp, guest_email=payload['guest_email'], status_code='active')
+        api_client.force_authenticate(user=emp)
+        response = api_client.post(PASSES_URL, payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+
     def test_company_admin_has_no_active_pass_limit(self, api_client, company_admin):
         _create_pass(creator=company_admin, guest_email='guest-1@test.local', status_code='active')
         _create_pass(creator=company_admin, guest_email='guest-2@test.local', status_code='active')

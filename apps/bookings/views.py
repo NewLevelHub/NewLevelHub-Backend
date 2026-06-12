@@ -2301,6 +2301,8 @@ class BookingMembersView(APIView):
         qs = qs.order_by('first_name', 'last_name')[:20]
         serializer = ParticipantPickerUserSerializer(qs, many=True, context={'request': request})
         return Response(serializer.data)
+
+
 # BookingCancellationAuditViewSet
 # ---------------------------------------------------------------------------
 

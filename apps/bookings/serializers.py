@@ -18,7 +18,10 @@ from apps.core.error_codes import (
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import get_lang, translate
 from apps.notifications.utils import create_notification
-from .models import Resource, ResourcePhoto, Booking, BookingParticipant, RecurringBooking, ResourceBlock
+from .models import (
+    Resource, ResourcePhoto, Booking, BookingParticipant,
+    RecurringBooking, ResourceBlock, BookingCancellationAudit,
+)
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
 User = get_user_model()
@@ -1003,3 +1006,22 @@ class ResourceBlockSerializer(serializers.ModelSerializer):
         if start_time and end_time and start_time >= end_time:
             raise_validation_error('detail', 'booking.start_time_before_end_time')
         return attrs
+
+
+class AuditCancelledBySerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name']
+        read_only_fields = ['id', 'full_name']
+
+
+class BookingCancellationAuditSerializer(serializers.ModelSerializer):
+    booking_id = serializers.IntegerField(read_only=True)
+    cancelled_by = AuditCancelledBySerializer(read_only=True)
+
+    class Meta:
+        model = BookingCancellationAudit
+        fields = ['id', 'booking_id', 'cancelled_by', 'cancel_reason', 'cancelled_at']
+        read_only_fields = fields

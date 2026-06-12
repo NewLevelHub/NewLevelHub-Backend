@@ -1,0 +1,551 @@
+[
+  {
+    "identifier": "MVP-FAIL-001",
+    "title": "Профиль: UI смены пароля (current → new)",
+    "description": "Backend реализован (`POST /api/v1/auth/me/password/`), но на фронте нет формы смены пароля в профиле. В `endpoints.ts` указан неверный путь `/auth/password/change/`.\n\nMVP: §1.3",
+    "block": "Блок 1 — Профиль",
+    "mvpRef": "1.3",
+    "labels": ["frontend", "auth"],
+    "area": "profile",
+    "acceptanceCriteria": [
+      "На `/profile` секция «Сменить пароль»: текущий пароль, новый пароль, подтверждение",
+      "POST на корректный endpoint `/auth/me/password/`",
+      "После успеха — toast и инвалидация сессий по политике backend",
+      "Ошибки валидации Django password rules отображаются в UI"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-002",
+    "title": "Профиль: история действий пользователя",
+    "description": "MVP требует на странице профиля последние бронирования, задачи и пропуска. Сейчас данные только на отдельных страницах модулей.\n\nMVP: §1.3",
+    "block": "Блок 1 — Профиль",
+    "mvpRef": "1.3",
+    "labels": ["frontend", "fullstack"],
+    "area": "profile",
+    "acceptanceCriteria": [
+      "Секция на `ProfilePage` с 3 мини-списками: последние N бронирований, задач, пропусков",
+      "Ссылки «Посмотреть все» ведут на `/bookings/my`, `/crm/my-tasks`, `/passes`",
+      "API: новый агрегирующий endpoint или reuse существующих list с limit=5"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-003",
+    "title": "Superadmin: страница логов доступа в UI",
+    "description": "`AccessLogPage.tsx` реализован, но `router.tsx` редиректит `/access/logs` → `/passes`. Нет пункта в sidebar.\n\nMVP: §1.4, §5.4",
+    "block": "Блок 1 / Блок 5",
+    "mvpRef": "1.4 / 5.4",
+    "labels": ["frontend"],
+    "area": "access",
+    "acceptanceCriteria": [
+      "Route `/access/logs` рендерит `AccessLogPage` для superadmin (и company_admin по scope)",
+      "Пункт «Лог доступа» в sidebar superadmin",
+      "Фильтры и CSV export работают end-to-end"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-004",
+    "title": "Company admin: смена роли существующего сотрудника",
+    "description": "Роль задаётся только при инвайте. Нет API/UI для promote employee ↔ company_admin.\n\nMVP: §1.4",
+    "block": "Блок 1 — Роли",
+    "mvpRef": "1.4",
+    "labels": ["backend", "frontend"],
+    "area": "companies",
+    "acceptanceCriteria": [
+      "PATCH/POST action на member: изменить role внутри company",
+      "UI на `/team/manage` или members page",
+      "Запрет понизить последнего company_admin без замены"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-005",
+    "title": "Guest coworking: лимит активных пропусков 2 (не 3)",
+    "description": "MVP §5.1: guest ≤2 active passes. Backend `access/serializers.py` разрешает 3 для role=guest.\n\nMVP: §1.4, §5.1",
+    "block": "Блок 5",
+    "mvpRef": "5.1",
+    "labels": ["backend"],
+    "area": "access",
+    "acceptanceCriteria": [
+      "active_count >= 2 блокирует создание для guest",
+      "Тест обновлён",
+      "UI показывает понятное сообщение при лимите"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-006",
+    "title": "CRM: шаблоны досок / рабочие процессы",
+    "description": "MVP: admin настраивает шаблоны досок. Сейчас только 3 дефолтные колонки при create.\n\nMVP: §1.4",
+    "block": "Блок 1 / Блок 4",
+    "mvpRef": "1.4",
+    "labels": ["backend", "frontend"],
+    "area": "crm",
+    "acceptanceCriteria": [
+      "Модель или settings для board templates (columns preset)",
+      "UI выбора шаблона при создании доски",
+      "Минимум 2–3 preset шаблона из коробки"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-007",
+    "title": "Dashboard superadmin: quick action «Создать компанию»",
+    "description": "На `SuperadminWidgets` есть create announcement и add resource, но нет create company.\n\nMVP: §1.5",
+    "block": "Блок 1 — Дашборд",
+    "mvpRef": "1.5",
+    "labels": ["frontend"],
+    "area": "dashboard",
+    "acceptanceCriteria": [
+      "Кнопка/ссылка на `/superadmin/companies/new` в hero quick actions",
+      "i18n ru/en"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-008",
+    "title": "Dashboard company admin: виджет pending approvals",
+    "description": "API dashboard отдаёт `pending_approvals` (leaves, guest_passes), но `CompanyAdminWidgets` не рендерит.\n\nMVP: §1.5",
+    "block": "Блок 1 — Дашборд",
+    "mvpRef": "1.5",
+    "labels": ["frontend"],
+    "area": "dashboard",
+    "acceptanceCriteria": [
+      "Виджет со списком pending leave requests и guest passes",
+      "Ссылки на approve flows",
+      "Empty state если нет ожидающих"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-009",
+    "title": "Dashboard employee: quick action «Создать задачу»",
+    "description": "Employee dashboard имеет book + invite guest, но нет create task.\n\nMVP: §1.5",
+    "block": "Блок 1 — Дашборд",
+    "mvpRef": "1.5",
+    "labels": ["frontend"],
+    "area": "dashboard",
+    "acceptanceCriteria": [
+      "Quick action открывает create task modal или ведёт на `/crm` с modal",
+      "i18n ru/en"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-010",
+    "title": "Dashboard guest: виджет/ссылка карты здания",
+    "description": "Guest dashboard не показывает карту; только sidebar `/building/map`.\n\nMVP: §1.5",
+    "block": "Блок 1 — Дашборд",
+    "mvpRef": "1.5",
+    "labels": ["frontend"],
+    "area": "dashboard",
+    "acceptanceCriteria": [
+      "Mini-widget или prominent link «Карта здания» на guest dashboard",
+      "Ведёт на `/building/map`"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-011",
+    "title": "Компания: поля контактов (email/phone)",
+    "description": "Поля contact удалены миграцией 0012; UI `CompanyDetailPage` рендерит stale fields.\n\nMVP: §2.1, §2.5",
+    "block": "Блок 2",
+    "mvpRef": "2.1",
+    "labels": ["backend", "frontend"],
+    "area": "companies",
+    "acceptanceCriteria": [
+      "Восстановить contact_email/contact_phone на Company или заменить contacts JSON",
+      "Create/edit forms superadmin + company admin",
+      "Убрать мёртвый UI или подключить к API"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-012",
+    "title": "Tariff Basic: бронирование только shared resources",
+    "description": "Basic tier видит assigned resources своей компании. MVP: только hot/shared.\n\nMVP: §2.2",
+    "block": "Блок 2",
+    "mvpRef": "2.2",
+    "labels": ["backend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "Catalog/booking API фильтрует по company.plan=basic → только is_hot_desk / assigned_company is null",
+      "Тесты на basic vs premium visibility"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-013",
+    "title": "Tariff: tiered analytics (basic / standard / premium)",
+    "description": "Один и тот же analytics dashboard для всех company plans.\n\nMVP: §2.2",
+    "block": "Блок 2 / Блок 7",
+    "mvpRef": "2.2",
+    "labels": ["backend", "frontend"],
+    "area": "analytics",
+    "acceptanceCriteria": [
+      "Gating метрик/charts по company.plan",
+      "Basic — ограниченный набор KPI",
+      "Premium — полный dashboard"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-014",
+    "title": "Tariff Standard: приоритетное бронирование",
+    "description": "Нет plan-based booking priority при конфликте слотов.\n\nMVP: §2.2",
+    "block": "Блок 2",
+    "mvpRef": "2.2",
+    "labels": ["backend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "Определена политика priority (waitlist или override window)",
+      "Standard/Premium получают преимущество над basic/guest",
+      "Документировано в API"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-015",
+    "title": "Tariff Standard: гостевые пропуска без лимита",
+    "description": "Лимиты пропусков role-based, не plan-based.\n\nMVP: §2.2",
+    "block": "Блок 2 / Блок 5",
+    "mvpRef": "2.2",
+    "labels": ["backend"],
+    "area": "access",
+    "acceptanceCriteria": [
+      "company.plan=standard → skip employee per-email active limit",
+      "Basic сохраняет лимиты"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-016",
+    "title": "Premium portal: применить brand_primary_color в UI",
+    "description": "`CompanySettingsPage` сохраняет brand color, но `--brand` CSS static в theme.css.\n\nMVP: §2.2",
+    "block": "Блок 2",
+    "mvpRef": "2.2",
+    "labels": ["frontend"],
+    "area": "companies",
+    "acceptanceCriteria": [
+      "При login company member CSS vars `--brand*` берутся из company settings",
+      "Fallback на default theme",
+      "Logo company в header опционально для premium"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-017",
+    "title": "Booking: один человек = один стол (overlap per user)",
+    "description": "Conflict check per resource, не per user overlapping desk bookings.\n\nMVP: §3.1",
+    "block": "Блок 3",
+    "mvpRef": "3.1",
+    "labels": ["backend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "Validation: user cannot have 2 confirmed desk bookings overlapping in time",
+      "409 с понятным error code",
+      "Тест"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-018",
+    "title": "Capsule booking: QR-код доступа",
+    "description": "QR есть только для guest passes, не для booking access.\n\nMVP: §3.1",
+    "block": "Блок 3",
+    "mvpRef": "3.1",
+    "labels": ["backend", "frontend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "При confirm capsule booking генерируется QR/token",
+      "Отображение в My Bookings / booking detail",
+      "Endpoint validate booking QR (reception)"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-019",
+    "title": "Каталог: кнопка «Показать на карте» в модалке ресурса",
+    "description": "**Контекст:** связь каталога бронирования с картой здания (MVP §3.2). Toggle cards/map в каталоге не делаем — достаточно перехода к ресурсу на карте из модалки.\n\n**Scope:**\n- В `ResourceDetailModal` (поток `/bookings/catalog`: клик по карточке → модалка) — кнопка «Показать на карте».\n- По клику: переход на `/building/map` с deep link на ресурс (например `?resource={id}`): нужный этаж, точка на плане; опционально — подсветка/фокус на точке и popup.\n\n**Условие:** кнопка активна только если ресурс **привязан к точке на карте** (map point с `resource_id`). Если привязки нет — кнопку скрыть или показать disabled с понятным текстом.\n\nMVP: §3.2 (упрощённая реализация вместо toggle)",
+    "block": "Блок 3",
+    "mvpRef": "3.2",
+    "labels": ["frontend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "В модалке ресурса из каталога есть кнопка «Показать на карте»",
+      "Клик открывает `/building/map` с выбранным ресурсом (deep link: этаж + точка)",
+      "Опционально: точка подсвечена / открыт popup на карте",
+      "Если ресурс не добавлен на карту здания — кнопка недоступна (hidden/disabled + пояснение)",
+      "Если ресурс на карте есть — переход работает для guest, employee, company_admin"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-020",
+    "title": "Meeting room: поиск участников platform-wide",
+    "description": "Participant picker только company members (`BookingCreatePage`).\n\nMVP: §3.3",
+    "block": "Блок 3",
+    "mvpRef": "3.3",
+    "labels": ["backend", "frontend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "Search users by name/email across platform (or configurable scope)",
+      "Autocomplete UI в BookingModal/CreatePage",
+      "Notifications участникам"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-021",
+    "linearId": "DEV-308",
+    "title": "Каталог: расписание ресурса (таймлайн) + доступ guest к schedule API",
+    "description": "**Контекст:** рабочий путь бронирования — только `/bookings/catalog` (карточки → `ResourceDetailModal` → `BookingModal`). Страница `/bookings/resources/:id` в навигации не используется (orphan route).\n\n**Проблема:** в каталоге нет таймлайна занятости/свободных слотов (MVP §3.3). API `GET /bookings/resources/{id}/schedule/` для guest возвращает 403 (`IsCompanyMember`), хотя слоты не содержат PII.\n\n**Scope:**\n- Frontend: показать расписание на день (и при необходимости неделю) в потоке каталога — в `ResourceDetailModal` и/или при бронировании; не завязывать фичу на `/bookings/resources/:id`.\n- Backend: разрешить guest (и остальным ролям бронирования) читать schedule для активных bookable resources; ответ без PII.\n\nMVP: §3.3",
+    "block": "Блок 3",
+    "mvpRef": "3.3",
+    "labels": ["backend", "frontend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "В каталоге (`/bookings/catalog`) при просмотре ресурса виден таймлайн занятых/свободных слотов на выбранный день",
+      "Guest, employee, company_admin могут GET schedule для bookable resources без 403",
+      "Ответ schedule не раскрывает чужие PII (только время и статус слота)",
+      "Тест: guest может получить schedule (test_schedule_guest или аналог)",
+      "Основной UX не требует перехода на `/bookings/resources/:id`"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-022",
+    "title": "CRM board: фильтр по исполнителю в UI",
+    "description": "Backend TaskFilter.assignee_id есть; BoardFilterBar без assignee select.\n\nMVP: §4.1",
+    "block": "Блок 4",
+    "mvpRef": "4.1",
+    "labels": ["frontend"],
+    "area": "crm",
+    "acceptanceCriteria": [
+      "Select assignee + «только мои» в BoardFilterBar",
+      "Query param передаётся в tasks API",
+      "Комбинируется с priority/deadline/search"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-023",
+    "title": "CRM board: фильтр по label в UI",
+    "description": "Backend label_ids filter; не exposed в BoardFilterBar.\n\nMVP: §4.1",
+    "block": "Блок 4",
+    "mvpRef": "4.1",
+    "labels": ["frontend"],
+    "area": "crm",
+    "acceptanceCriteria": [
+      "Multi-select labels в filter bar",
+      "Комбинируется с другими фильтрами"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-024",
+    "title": "Календарь команды: day timeline 8:00–22:00",
+    "description": "CalendarPage — list-by-day для всех view modes, не time grid.\n\nMVP: §4.3",
+    "block": "Блок 4",
+    "mvpRef": "4.3",
+    "labels": ["frontend"],
+    "area": "calendar",
+    "acceptanceCriteria": [
+      "Day view: vertical timeline 8–22 с positioned events",
+      "Week view: grid columns by day",
+      "Сохранены фильтры employee/type/myOnly"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-025",
+    "title": "Календарь: click slot → booking, click task → task detail",
+    "description": "Events static `<li>`, без navigation handlers.\n\nMVP: §4.3",
+    "block": "Блок 4",
+    "mvpRef": "4.3",
+    "labels": ["frontend"],
+    "area": "calendar",
+    "acceptanceCriteria": [
+      "Click free slot opens booking modal with prefilled time",
+      "Click CRM deadline navigates to task detail",
+      "Click booking opens booking detail"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-026",
+    "title": "Storage: ACL на уровне папок",
+    "description": "Sharing per-file only; MVP требует restricted folders.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["backend", "frontend"],
+    "area": "storage",
+    "acceptanceCriteria": [
+      "Folder-level permissions (roles/users)",
+      "Admin UI на company folders",
+      "Enforcement на list/upload"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-027",
+    "title": "Storage: preview PDF/изображений в браузере",
+    "description": "FileBrowserPage — download only, no preview/iframe.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["frontend"],
+    "area": "storage",
+    "acceptanceCriteria": [
+      "Preview panel для image/pdf mime types",
+      "Fallback download для остальных",
+      "Mobile-friendly"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-028",
+    "title": "Storage: UI перемещения файлов между папками",
+    "description": "Backend FileViewSet.move есть; UI отсутствует.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["frontend"],
+    "area": "storage",
+    "acceptanceCriteria": [
+      "Move action в context menu файла",
+      "Folder picker modal",
+      "Optimistic update + error rollback"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-029",
+    "title": "Storage: корзина (trash) UI + restore",
+    "description": "Soft delete + Celery cleanup; нет trash bin UI.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["frontend", "backend"],
+    "area": "storage",
+    "acceptanceCriteria": [
+      "Trash view listing is_deleted files/folders",
+      "Restore и permanent delete actions",
+      "Countdown/purge info (30 days)"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-030",
+    "title": "Storage: UI сортировки файлов",
+    "description": "Fixed API ordering; нет user-facing sort controls.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["frontend"],
+    "area": "storage",
+    "acceptanceCriteria": [
+      "Sort by date/name/size/type в FileBrowserPage",
+      "Persist sort in query params или local state"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-031",
+    "title": "CRM: attach file from storage (без upload duplicate)",
+    "description": "Backend storage_file_id; frontend upload-only в CrmTaskAttachmentsSection.\n\nMVP: §4.4",
+    "block": "Блок 4",
+    "mvpRef": "4.4",
+    "labels": ["frontend"],
+    "area": "crm",
+    "acceptanceCriteria": [
+      "Picker «Из хранилища» в task attachments",
+      "Uses storage_file_id API",
+      "No duplicate file blob in storage"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-032",
+    "title": "HR onboarding: обязательные шаги + admin UI прогресса",
+    "description": "**Контекст (MVP §4.6):** онбординг сотрудника — чеклист при первом входе. Сейчас шаги полностью настраиваются админом в шаблонах; API `GET /hr/onboarding/progress/team/` есть, UI для админа нет.\n\n**Часть 1 — обязательные системные шаги**\nВ каждом активном шаблоне онбординга **всегда** присутствуют фиксированные шаги (нельзя удалить/редактировать title, url, порядок относительно друг друга):\n1. Познакомиться с командой → ссылка на справочник команды\n2. Изучить доски проектов → ссылка на CRM\n3. Забронировать рабочее место → ссылка на бронирование\n4. Прочитать правила бизнес-центра → документ/страница правил\n5. Настроить уведомления → настройки уведомлений\n\nАдмин может **только добавлять** свои дополнительные шаги (кастомные). Редактирование/удаление системных шагов в UI и API запрещено.\n\n**Часть 2 — прогресс для админа**\nАдмин компании видит прогресс онбординга сотрудников (API уже есть).\n\nMVP: §4.6",
+    "block": "Блок 4",
+    "mvpRef": "4.6",
+    "labels": ["backend", "frontend"],
+    "area": "hr",
+    "acceptanceCriteria": [
+      "В шаблоне онбординга всегда есть 5 системных шагов (team, CRM, booking, BC rules, notifications) с корректными ссылками",
+      "Админ может добавлять только кастомные шаги; системные нельзя редактировать/удалить (UI disabled + 400 на API)",
+      "При создании/активации шаблона системные шаги подставляются автоматически, если отсутствуют",
+      "Сотрудник в `/onboarding` видит системные + кастомные шаги; ссылки на системных ведут в нужные разделы",
+      "Admin UI: список сотрудников «Иван 4/6 шагов» (GET /hr/onboarding/progress/team/)",
+      "Drill-down: по клику — какие шаги выполнены / не выполнены (расширить API при необходимости)",
+      "Ссылка на экран прогресса из настроек компании или управления командой"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-033",
+    "title": "Service requests: quick cleaning на dashboard и карте",
+    "description": "CleaningModal только на ServiceRequestListPage.\n\nMVP: §6.2",
+    "block": "Блок 6",
+    "mvpRef": "6.2",
+    "labels": ["frontend"],
+    "area": "services",
+    "acceptanceCriteria": [
+      "Кнопка «Вызвать уборку» на role dashboards (employee/guest minimum)",
+      "Кнопка на MapPage toolbar",
+      "Reuse CleaningModal + quick-cleaning API"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-034",
+    "title": "Notifications: booking_completed при auto-complete",
+    "description": "Notification type defined; auto_complete_bookings task не создаёт notification.\n\nMVP: §7.1",
+    "block": "Блок 7",
+    "mvpRef": "7.1",
+    "labels": ["backend"],
+    "area": "notifications",
+    "acceptanceCriteria": [
+      "auto_complete_bookings emits booking_completed in-app (+ email per prefs)",
+      "Тест task",
+      "Respects NotificationPreference"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-035",
+    "title": "Notifications: new_employee при join компании",
+    "description": "Type new_employee exists; not created when member registers via invite.\n\nMVP: §7.1",
+    "block": "Блок 7",
+    "mvpRef": "7.1",
+    "labels": ["backend"],
+    "area": "notifications",
+    "acceptanceCriteria": [
+      "On successful invite registration notify company admins",
+      "In-app + optional email",
+      "Тест"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-036",
+    "title": "Superadmin analytics: chart resource utilization by type",
+    "description": "API returns resource_utilization; SuperadminAnalyticsPage не chartит aggregate by type.\n\nMVP: §7.2",
+    "block": "Блок 7",
+    "mvpRef": "7.2",
+    "labels": ["frontend"],
+    "area": "analytics",
+    "acceptanceCriteria": [
+      "Bar/stacked chart desks/rooms/parking/capsules 30d",
+      "Uses existing API field or extend payload",
+      "Responsive layout"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-037",
+    "title": "Superadmin analytics: peak hours heatmap (dow × hour)",
+    "description": "Backend _build_peak_hours; no heatmap visualization.\n\nMVP: §7.2",
+    "block": "Блок 7",
+    "mvpRef": "7.2",
+    "labels": ["frontend"],
+    "area": "analytics",
+    "acceptanceCriteria": [
+      "Heatmap grid 7×24 или compact chart",
+      "Tooltip with booking count",
+      "Period filters apply"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-038",
+    "title": "Superadmin analytics: top-5 companies table",
+    "description": "API top_companies; UI intentionally hidden (~line 1148 SuperadminAnalyticsPage).\n\nMVP: §7.2",
+    "block": "Блок 7",
+    "mvpRef": "7.2",
+    "labels": ["frontend"],
+    "area": "analytics",
+    "acceptanceCriteria": [
+      "Render top_companies table",
+      "Columns: company, bookings, activity metric",
+      "Link to company detail"
+    ]
+  },
+  {
+    "identifier": "MVP-FAIL-039",
+    "title": "Superadmin analytics: PDF export",
+    "description": "Only CSV export implemented; PDF rejected in tests.\n\nMVP: §7.2",
+    "block": "Блок 7",
+    "mvpRef": "7.2",
+    "labels": ["backend", "frontend"],
+    "area": "analytics",
+    "acceptanceCriteria": [
+      "GET export?format=pdf returns PDF report",
+      "Download button in UI",
+      "Contains overview KPIs + key charts snapshot or tables"
+    ]
+  }
+]

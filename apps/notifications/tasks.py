@@ -22,7 +22,7 @@ _PREF_FIELD_MAP = {
     'booking_confirmed': 'booking_confirmed_email',
     'booking_reminder': 'booking_reminder_email',
     'booking_cancelled': 'booking_cancelled_email',
-    'booking_completed': 'booking_email',          # no dedicated field yet → legacy group
+    'booking_completed': 'booking_completed_email',
     # Task — granular per-type fields
     'task_assigned': 'task_assigned_email',
     'task_moved': 'task_moved_email',

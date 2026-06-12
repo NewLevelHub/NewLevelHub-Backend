@@ -53,9 +53,10 @@ from .serializers import (
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
+    BookingCancellationAuditSerializer,
     _EQUIPMENT_KEYS,
 )
-from .filters import ResourceFilter, BookingFilter
+from .filters import ResourceFilter, BookingFilter, BookingCancellationAuditFilter
 from .schedule import get_schedule_status, week_range_for_date
 from .tasks import create_bookings_for_recurring
 
@@ -2344,3 +2345,75 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         ).delete()
         recurring_booking.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ---------------------------------------------------------------------------
+# BookingCancellationAuditViewSet
+# ---------------------------------------------------------------------------
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=['Bookings'],
+        summary='Лог отмен бронирований',
+        description=(
+            'Возвращает пагинированный список записей аудита отмен бронирований.\n\n'
+            '**Доступ:** `superadmin` видит все записи; `company_admin` — только записи своей '
+            'компании; `employee` / `guest` — 403.\n\n'
+            '**Фильтры:** `booking`, `cancelled_by`, `cancelled_at_after`, `cancelled_at_before`.\n\n'
+            '**Сортировка по умолчанию:** `-cancelled_at`.'
+        ),
+        parameters=[
+            OpenApiParameter(
+                name='booking',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Фильтр по ID бронирования.',
+            ),
+            OpenApiParameter(
+                name='cancelled_by',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Фильтр по ID пользователя, выполнившего отмену.',
+            ),
+            OpenApiParameter(
+                name='cancelled_at_after',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Записи с датой отмены >= указанного значения (ISO 8601).',
+            ),
+            OpenApiParameter(
+                name='cancelled_at_before',
+                type=OpenApiTypes.DATETIME,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Записи с датой отмены <= указанного значения (ISO 8601).',
+            ),
+        ],
+        responses={
+            200: BookingCancellationAuditSerializer(many=True),
+            401: OpenApiResponse(description='Не аутентифицирован.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Только company_admin или superadmin.', examples=[_FORBIDDEN_403_EXAMPLE]),
+        },
+    ),
+    retrieve=extend_schema(
+        tags=['Bookings'],
+        summary='Запись аудита отмены',
+        responses={
+            200: BookingCancellationAuditSerializer,
+            401: OpenApiResponse(description='Не аутентифицирован.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='Только company_admin или superadmin.', examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='Не найдено.'),
+        },
+    ),
+)
+class BookingCancellationAuditViewSet(CompanyIsolationMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = BookingCancellationAuditSerializer
+    permission_classes = [IsCompanyAdmin]
+    queryset = BookingCancellationAudit.objects.select_related('cancelled_by').all()
+    filterset_class = BookingCancellationAuditFilter
+    ordering_fields = ['cancelled_at']
+    ordering = ['-cancelled_at']
+    company_lookup = 'booking__company'

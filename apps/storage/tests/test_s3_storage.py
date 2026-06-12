@@ -215,7 +215,7 @@ class TestCleanupDeleteRetry:
             'DeleteObject',
         )
 
-        with patch('apps.storage.tasks.time.sleep'):
+        with patch('apps.storage.s3_helpers.time.sleep'):
             with pytest.raises(ClientError):
                 _delete_fieldfile_with_retry(mock_field, max_attempts=3)
 

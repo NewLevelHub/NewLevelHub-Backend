@@ -101,7 +101,12 @@ def test_ac_booking_create_emits_booking_confirmed(api_client):
         available_days=list(range(7)),
     )
     resource = Resource.objects.get(name='Room AC')
-    start = timezone.now() + timedelta(days=1)
+    # Pin to noon local time: prevents start+1h from crossing midnight and
+    # triggering same_day_only validation when test runs between 23:00-23:59.
+    local_tz = timezone.get_current_timezone()
+    start = (timezone.now().astimezone(local_tz) + timedelta(days=1)).replace(
+        hour=12, minute=0, second=0, microsecond=0
+    )
     end = start + timedelta(hours=1)
     _auth(api_client, employee)
     resp = api_client.post(

@@ -75,8 +75,14 @@ def desk_resource(db):
     )
 
 
-def _capsule_slot(hours_from_now=2, duration_hours=2):
-    start = timezone.now() + timedelta(hours=hours_from_now)
+def _capsule_slot(duration_hours=2, days_ahead=1):
+    """Return a tz-aware capsule slot inside 08:00–22:00 availability.
+
+    Relative offsets from timezone.now() are flaky in CI when the run crosses
+    midnight or lands outside the resource operating window.
+    """
+    start = timezone.localtime() + timedelta(days=days_ahead)
+    start = start.replace(hour=10, minute=0, second=0, microsecond=0)
     end = start + timedelta(hours=duration_hours)
     return start, end
 

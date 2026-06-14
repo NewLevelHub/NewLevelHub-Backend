@@ -228,6 +228,7 @@
   "hr.leave_reviewer_is_author": "Вы не можете назначить себя согласующим собственной заявки.",
   "hr.leave_review_self_forbidden": "Вы не можете рассматривать собственную заявку на отпуск.",
   "hr.leave_review_not_assigned": "Эту заявку может рассматривать только назначенный администратор.",
+  "hr.onboarding_system_step_immutable": "Системный шаг нельзя изменить или удалить.",
   "services.coordinate_out_of_range": "Значение должно быть от 0.0 до 100.0.",
   "services.resource_required_for_type": "Ресурс обязателен для типа точки \"{point_type}\".",
   "services.company_required_for_office": "Компания обязательна для типа точки \"office\".",

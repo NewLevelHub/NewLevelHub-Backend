@@ -132,8 +132,12 @@ class TestOnboardingTemplatesAC:
 
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data['name'] == 'Backend onboarding'
-        assert len(response.data['steps']) == 2
-        assert response.data['steps'][0]['order'] == 1
+        # 6 system steps are auto-injected + 2 custom = 8 total
+        assert len(response.data['steps']) == 8
+        # First 6 are system steps
+        assert all(s['is_system'] for s in response.data['steps'][:6])
+        # Custom steps follow after position 6
+        assert not response.data['steps'][6]['is_system']
 
     def test_company_admin_can_get_templates(self, api_client, company_admin, company):
         create_template_with_steps(company=company)
@@ -287,7 +291,7 @@ class TestMyOnboardingProgressAC:
         assert set(response.data.keys()) == {'completed', 'steps'}
         assert isinstance(response.data['completed'], bool)
         assert isinstance(response.data['steps'], list)
-        assert set(response.data['steps'][0].keys()) == {'id', 'title', 'is_completed'}
+        assert set(response.data['steps'][0].keys()) == {'id', 'title', 'is_completed', 'url'}
 
     def test_progress_shows_only_default_template_steps(self, api_client, employee, company):
         """Если у пользователя есть строки прогресса от нескольких шаблонов,
@@ -357,7 +361,8 @@ class TestTeamOnboardingProgressAC:
 
         assert response.status_code == status.HTTP_200_OK
         assert isinstance(response.data, list)
-        assert set(response.data[0].keys()) == {'user', 'completed_steps', 'total_steps'}
+        expected_keys = {'user', 'first_name', 'last_name', 'avatar', 'role', 'completed_steps', 'total_steps'}
+        assert set(response.data[0].keys()) == expected_keys
 
     def test_employee_forbidden_for_team_progress(self, api_client, employee):
         auth(api_client, employee)

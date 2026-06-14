@@ -1107,7 +1107,7 @@ class TestResourceFilterByCompany:
         assert assigned_id in ids
 
     def test_filter_by_wrong_company_excludes_resource(
-        self, api_client, superadmin, company, premium_company
+        self, api_client, superadmin, premium_company, company
     ):
         api_client.force_authenticate(user=superadmin)
         assigned = api_client.post(

@@ -50,6 +50,7 @@ from .serializers import (
     ResourceDayScheduleSlotSerializer,
     BookingSerializer,
     BookingCreateSerializer,
+    BulkCancelSerializer,
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
@@ -1833,6 +1834,110 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             link=f'/bookings/{booking.id}',
         )
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Bulk cancel bookings',
+        description=(
+            'Cancels multiple bookings in a single request.\n\n'
+            '**Access rules:**\n'
+            '- Any authenticated company member or guest may call this endpoint.\n'
+            '- `employee` / `guest`: only their own bookings are cancelled; '
+            'bookings belonging to other users are silently skipped.\n'
+            '- `company_admin` / `superadmin`: may cancel any booking within their '
+            'company scope (superadmin sees all companies).\n\n'
+            'Already-cancelled bookings and bookings that have already started are '
+            'silently skipped and reported in `skipped_ids`.\n\n'
+            'The entire operation is wrapped in a single `transaction.atomic()` so '
+            'either all cancellations succeed or none are persisted.'
+        ),
+        request=BulkCancelSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkCancelResponse',
+                fields={
+                    'cancelled': fields.IntegerField(),
+                    'skipped': fields.IntegerField(),
+                    'skipped_ids': fields.ListField(child=fields.IntegerField()),
+                },
+            ),
+            400: OpenApiResponse(description='Invalid booking_ids (empty or > 50).'),
+            401: OpenApiResponse(description='Not authenticated.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-cancel')
+    def bulk_cancel(self, request):
+        serializer = BulkCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        booking_ids = serializer.validated_data['booking_ids']
+        reason = serializer.validated_data.get('reason', '')
+        user = request.user
+        is_admin = user.role in ('superadmin', 'company_admin')
+
+        now = timezone.now()
+        cancelled_ids = []
+        skipped_ids = []
+
+        # Resolve accessible queryset — reuses existing company-isolation / guest logic.
+        accessible_qs = self.get_queryset().filter(pk__in=booking_ids).select_related('resource', 'user')
+
+        # Index by id for O(1) lookup; bookings not in accessible_qs are unreachable
+        # (wrong company, wrong user for guest) and automatically land in skipped_ids.
+        accessible_map = {b.pk: b for b in accessible_qs}
+
+        with transaction.atomic():
+            for bid in booking_ids:
+                booking = accessible_map.get(bid)
+
+                if booking is None:
+                    # Not accessible (isolation) — skip silently.
+                    skipped_ids.append(bid)
+                    continue
+
+                if booking.status == 'cancelled':
+                    skipped_ids.append(bid)
+                    continue
+
+                if booking.start_time <= now:
+                    skipped_ids.append(bid)
+                    continue
+
+                if not is_admin and booking.user_id != user.pk:
+                    # Non-admin may only cancel their own bookings.
+                    skipped_ids.append(bid)
+                    continue
+
+                booking.status = 'cancelled'
+                booking.cancelled_by = user
+                booking.cancel_reason = reason
+                booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+
+                BookingCancellationAudit.objects.create(
+                    booking=booking,
+                    cancelled_by=user,
+                    cancel_reason=reason,
+                    cancelled_at=now,
+                )
+
+                create_notification(
+                    user=booking.user,
+                    notification_type='booking_cancelled',
+                    title=f'Бронирование отменено: {booking.resource.name}',
+                    message=reason or translate('booking.bulk_cancelled', get_lang(request)),
+                    link=f'/bookings/{booking.id}',
+                )
+
+                cancelled_ids.append(bid)
+
+        return Response(
+            {
+                'cancelled': len(cancelled_ids),
+                'skipped': len(skipped_ids),
+                'skipped_ids': skipped_ids,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @extend_schema(
         tags=['Bookings'],

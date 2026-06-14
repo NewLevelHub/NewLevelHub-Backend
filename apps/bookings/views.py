@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, NotFound
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
@@ -54,6 +55,7 @@ from .serializers import (
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
+    ParticipantPickerUserSerializer,
     BookingCancellationAuditSerializer,
     _EQUIPMENT_KEYS,
 )
@@ -1652,6 +1654,13 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
                 end_time=new_end,
                 exclude_booking_id=current.id,
             )
+            validator._ensure_no_user_desk_overlap(
+                user=request.user,
+                resource=resource,
+                start_time=new_start,
+                end_time=new_end,
+                exclude_booking_id=current.id,
+            )
 
             booking = serializer.save()
             self._create_change_audit(
@@ -2489,6 +2498,57 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
 
 # ---------------------------------------------------------------------------
+# BookingMembersView — participant picker autocomplete
+# ---------------------------------------------------------------------------
+
+from apps.core.permissions import IsCompanyMember  # noqa: E402
+
+
+@extend_schema(
+    tags=['Bookings'],
+    summary='Search platform users for participant picker',
+    description=(
+        'Returns up to 20 active platform users matching the `q` query '
+        '(first name, last name, or email). The current user and superadmins are excluded. '
+        'Guests are included — they can be invited as meeting-room participants.\n\n'
+        '**Access:** `company_admin` or `employee` with a company, or `superadmin`.'
+    ),
+    parameters=[
+        OpenApiParameter(
+            name='q',
+            type=OpenApiTypes.STR,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Search term matched against first name, last name, or email.',
+        ),
+    ],
+    responses={
+        200: ParticipantPickerUserSerializer(many=True),
+        401: OpenApiResponse(description='Not authenticated.'),
+        403: OpenApiResponse(description='Company members only.'),
+    },
+)
+class BookingMembersView(APIView):
+    permission_classes = [IsCompanyMember]
+
+    def get(self, request):
+        q = request.query_params.get('q', '').strip()
+        qs = User.objects.filter(
+            is_active=True,
+        ).exclude(id=request.user.id).exclude(role='superadmin')
+
+        if q:
+            qs = qs.filter(
+                Q(first_name__icontains=q)
+                | Q(last_name__icontains=q)
+                | Q(email__icontains=q)
+            )
+
+        qs = qs.order_by('first_name', 'last_name')[:20]
+        serializer = ParticipantPickerUserSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
 # BookingCancellationAuditViewSet
 # ---------------------------------------------------------------------------
 

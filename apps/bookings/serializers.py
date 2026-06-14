@@ -11,6 +11,7 @@ from apps.companies.models import Company
 from apps.services.models import Floor
 from apps.core.error_codes import (
     BOOKING_ADVANCE_DAYS_EXCEEDED,
+    BOOKING_DESK_USER_OVERLAP,
     BOOKING_DURATION_TOO_SHORT,
     BOOKING_DURATION_TOO_LONG,
     BOOKING_PARKING_WHOLE_DAY_ONLY,
@@ -658,22 +659,36 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 http_status=409,
             )
 
+    def _ensure_no_user_desk_overlap(self, *, user, resource, start_time, end_time, exclude_booking_id=None):
+        if resource.resource_type != 'desk':
+            return
+        qs = Booking.objects.filter(
+            user=user,
+            resource__resource_type='desk',
+            status='confirmed',
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        )
+        if exclude_booking_id is not None:
+            qs = qs.exclude(pk=exclude_booking_id)
+        if qs.exists():
+            raise LocalizedError(
+                code=BOOKING_DESK_USER_OVERLAP,
+                i18n_key='booking.desk_user_overlap',
+                http_status=409,
+            )
+
     def validate_participant_ids(self, value):
         if not value:
             return value
-        request = self.context.get('request')
-        if request and hasattr(request, 'user'):
-            company = request.user.company
-            if company:
-                invalid = list(
-                    User.objects.filter(
-                        id__in=value
-                    ).exclude(company=company).values_list('id', flat=True)
-                )
-                if invalid:
-                    raise serializers.ValidationError(
-                        [{'_i18n': True, 'key': 'booking.participants_wrong_company', 'params': {'ids': str(invalid)}}]
-                    )
+        existing_ids = set(
+            User.objects.filter(id__in=value, is_active=True).values_list('id', flat=True)
+        )
+        missing = [uid for uid in value if uid not in existing_ids]
+        if missing:
+            raise serializers.ValidationError(
+                f'Users not found or inactive: {missing}'
+            )
         return value
 
     def _check_timezone_aware(self, field_name):
@@ -734,6 +749,12 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 start_time=start_time,
                 end_time=end_time,
                 user=user,
+            )
+            self._ensure_no_user_desk_overlap(
+                user=user,
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
             )
             self._validate_availability_window(
                 resource=resource,
@@ -1001,6 +1022,26 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
 
         attrs['resource'] = resource
         return attrs
+
+
+class ParticipantPickerUserSerializer(serializers.ModelSerializer):
+    """Lightweight user snapshot for the participant picker autocomplete."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'full_name', 'avatar', 'position']
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
 
 
 class ResourceBlockSerializer(serializers.ModelSerializer):

@@ -524,11 +524,12 @@ class TestResourceCatalogAssignedVisibility:
     ):
         # basic plan: assigned resources are hidden even if assigned to own company
         # Resource created via ORM to bypass API-level tariff restriction
-        from apps.bookings.models import Resource as Res
-        resource = Res.objects.create(
-            resource_type='desk', name='Dedicated basic', floor=1, assigned_company=company
-        )
-        rid = resource.id
+        rid = Resource.objects.create(
+            name='Dedicated basic',
+            resource_type='desk',
+            floor=1,
+            assigned_company=company,
+        ).id
         api_client.force_authenticate(user=employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}
@@ -556,11 +557,12 @@ class TestResourceCatalogAssignedVisibility:
         self, api_client, premium_employee, company
     ):
         # Resource assigned to a basic company — created via ORM to bypass API tariff restriction
-        from apps.bookings.models import Resource as Res
-        resource = Res.objects.create(
-            resource_type='desk', name='Other co desk', floor=1, assigned_company=company
-        )
-        rid = resource.id
+        rid = Resource.objects.create(
+            name='Other co desk',
+            resource_type='desk',
+            floor=1,
+            assigned_company=company,
+        ).id
         api_client.force_authenticate(user=premium_employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}

@@ -10,4 +10,5 @@ router.register('cancellation-audit', views.BookingCancellationAuditViewSet, bas
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('members/', views.BookingMembersView.as_view(), name='booking-members'),
 ]

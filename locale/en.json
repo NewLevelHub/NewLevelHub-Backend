@@ -67,6 +67,8 @@
   "booking.start_time_must_be_future": "Booking start time must be in the future.",
   "booking.recurring_slot_conflict": "An active recurring series already exists for this slot.",
   "booking.recurring_no_creatable_dates": "No bookable dates in the selected range: all slots are already in the past. Extend repeat-until to the next week or choose a later time.",
+  "booking.bulk_ids_required": "Provide a non-empty list of resource IDs.",
+  "booking.bulk_resources_not_found": "None of the provided IDs were found.",
   "booking.priority_override_applied": "Booking confirmed: slot was freed by your plan's priority.",
   "booking.displaced_by_priority": "Your booking was cancelled: the slot was claimed by a higher-priority plan holder.",
   "booking.cancel_reason.displaced_by_priority_booking": "Booking cancelled: slot claimed by a higher-priority plan holder.",

@@ -421,6 +421,14 @@ class ResourceListSerializer(serializers.ModelSerializer):
         return window_end
 
 
+class BulkIdsSerializer(serializers.Serializer):
+    ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=True,
+        allow_empty=False,
+    )
+
+
 class ResourceBulkCreateSerializer(serializers.Serializer):
     template = serializers.DictField()
     count = serializers.IntegerField(min_value=1)

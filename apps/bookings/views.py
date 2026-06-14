@@ -41,6 +41,7 @@ from .models import (
     BookingChangeAudit,
 )
 from .serializers import (
+    BulkIdsSerializer,
     ResourceSerializer,
     ResourcePhotoSerializer,
     ResourceDetailSerializer,
@@ -766,6 +767,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'schedule':
             return [IsAuthenticated()]
+        if self.action in ('bulk_activate', 'bulk_deactivate', 'bulk_delete'):
+            return [IsCompanyAdmin()]
         if self.action in (
             'create',
             'update',
@@ -881,6 +884,144 @@ class ResourceViewSet(viewsets.ModelViewSet):
         resource.save(update_fields=['is_active', 'updated_at'])
         self._cancel_future_bookings(resource)
         return Response(ResourceSerializer(resource).data)
+
+    def _get_bulk_queryset(self, user):
+        """
+        Return a Resource queryset scoped to the requesting user:
+          - superadmin → all resources
+          - company_admin → only resources assigned to their company
+
+        Resource has no direct company FK; the tenancy field is ``assigned_company``.
+        A company_admin should only be able to operate on resources explicitly
+        assigned to their own company.
+        """
+        qs = Resource.objects.all()
+        if user.role == 'superadmin':
+            return qs
+        return qs.filter(assigned_company_id=user.company_id)
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk activate resources (company_admin / superadmin)',
+        description=(
+            'Sets ``is_active=True`` on every resource whose ID appears in ``ids`` '
+            'and that is visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"activated": <count>}`` with the number of resources actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkActivateResponse',
+                fields={'activated': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-activate',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_activate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user)
+        if not scoped_qs.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = scoped_qs.filter(pk__in=ids, is_active=False).update(is_active=True)
+        return Response({'activated': count})
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk deactivate resources (company_admin / superadmin)',
+        description=(
+            'Sets ``is_active=False`` on every resource whose ID appears in ``ids`` '
+            'and that is visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"deactivated": <count>}`` with the number of resources actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkDeactivateResponse',
+                fields={'deactivated': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-deactivate',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_deactivate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user)
+        if not scoped_qs.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = scoped_qs.filter(pk__in=ids, is_active=True).update(is_active=False)
+        return Response({'deactivated': count})
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk soft-delete resources (company_admin / superadmin)',
+        description=(
+            'Soft-deletes every resource whose ID appears in ``ids`` and that is '
+            'visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"deleted": <count>}`` with the number of resources removed. '
+            'Returns 400 if ``ids`` is missing or empty; returns 404 if none of the '
+            'provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkDeleteResponse',
+                fields={'deleted': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['delete'], url_path='bulk-delete',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_delete(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user).filter(pk__in=ids)
+        if not scoped_qs.exists():
+            raise NotFound()
+
+        count, _ = scoped_qs.delete()
+        return Response({'deleted': count})
 
     @extend_schema(
         tags=['Resources'],

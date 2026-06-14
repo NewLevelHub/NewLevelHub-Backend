@@ -2,7 +2,7 @@ import json
 
 from django.db import models
 from rest_framework import viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, NotFound, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -27,6 +27,7 @@ from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.crm.tasks import maybe_notify_deadline_tomorrow_once
 from apps.notifications.utils import create_notification
 from apps.storage.s3_helpers import presigned_get_url_for_fieldfile
+from .board_templates import BOARD_TEMPLATES, DEFAULT_TEMPLATE_ID
 from .models import Board, Column, Label, Task, Comment, TaskHistory, Checklist, ChecklistItem, TaskAttachment
 from .services import check_wip_limit
 from .serializers import (
@@ -108,7 +109,10 @@ def _normalize_positions(column):
         summary='Create board',
         description=(
             'Creates a new board for the authenticated user\'s company. '
-            'Three default columns ("To Do", "In Progress", "Done") are automatically created. '
+            'Columns are automatically created based on the selected template. '
+            'Optional field `template_id` sets the initial column structure. '
+            'Available templates: basic (default), sales, recruitment, project. '
+            'Use GET /crm/board-templates/ to get the full list with column names. '
             'Returns 400 if the company has reached its plan limit of non-archived boards.'
         ),
         request=BoardSerializer,
@@ -206,13 +210,12 @@ class BoardViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mode
     def perform_create(self, serializer):
         board = serializer.save(company=self.request.user.company, created_by=self.request.user)
         lang = get_lang(self.request)
-        default_columns = [
-            translate('crm.default_column_todo', lang),
-            translate('crm.default_column_in_progress', lang),
-            translate('crm.default_column_done', lang),
-        ]
-        for i, name in enumerate(default_columns):
-            Column.objects.create(board=board, name=name, position=i)
+        template_id = self.request.data.get('template_id') or DEFAULT_TEMPLATE_ID
+        template = BOARD_TEMPLATES.get(template_id)
+        if template is None:
+            template = BOARD_TEMPLATES[DEFAULT_TEMPLATE_ID]
+        for i, key in enumerate(template['column_keys']):
+            Column.objects.create(board=board, name=translate(key, lang), position=i)
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1875,3 +1878,22 @@ class TaskAttachmentViewSet(viewsets.GenericViewSet):
 
         attachment.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    tags=['CRM'],
+    summary='List available board templates',
+    responses={200: OpenApiResponse(description='List of board templates with column names.')},
+)
+@api_view(['GET'])
+@permission_classes([IsCompanyMember])
+def board_templates_list(request):
+    lang = get_lang(request)
+    result = []
+    for template_id, template in BOARD_TEMPLATES.items():
+        result.append({
+            'id': template_id,
+            'name': translate(template['name_key'], lang),
+            'columns': [translate(key, lang) for key in template['column_keys']],
+        })
+    return Response(result)

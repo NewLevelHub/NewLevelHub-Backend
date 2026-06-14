@@ -42,6 +42,7 @@ from .models import (
     BookingChangeAudit,
 )
 from .serializers import (
+    BulkIdsSerializer,
     ResourceSerializer,
     ResourcePhotoSerializer,
     ResourceDetailSerializer,
@@ -50,6 +51,7 @@ from .serializers import (
     ResourceDayScheduleSlotSerializer,
     BookingSerializer,
     BookingCreateSerializer,
+    BulkCancelSerializer,
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
@@ -767,6 +769,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action == 'schedule':
             return [IsAuthenticated()]
+        if self.action in ('bulk_activate', 'bulk_deactivate', 'bulk_delete'):
+            return [IsCompanyAdmin()]
         if self.action in (
             'create',
             'update',
@@ -882,6 +886,144 @@ class ResourceViewSet(viewsets.ModelViewSet):
         resource.save(update_fields=['is_active', 'updated_at'])
         self._cancel_future_bookings(resource)
         return Response(ResourceSerializer(resource).data)
+
+    def _get_bulk_queryset(self, user):
+        """
+        Return a Resource queryset scoped to the requesting user:
+          - superadmin → all resources
+          - company_admin → only resources assigned to their company
+
+        Resource has no direct company FK; the tenancy field is ``assigned_company``.
+        A company_admin should only be able to operate on resources explicitly
+        assigned to their own company.
+        """
+        qs = Resource.objects.all()
+        if user.role == 'superadmin':
+            return qs
+        return qs.filter(assigned_company_id=user.company_id)
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk activate resources (company_admin / superadmin)',
+        description=(
+            'Sets ``is_active=True`` on every resource whose ID appears in ``ids`` '
+            'and that is visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"activated": <count>}`` with the number of resources actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkActivateResponse',
+                fields={'activated': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-activate',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_activate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user)
+        if not scoped_qs.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = scoped_qs.filter(pk__in=ids, is_active=False).update(is_active=True)
+        return Response({'activated': count})
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk deactivate resources (company_admin / superadmin)',
+        description=(
+            'Sets ``is_active=False`` on every resource whose ID appears in ``ids`` '
+            'and that is visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"deactivated": <count>}`` with the number of resources actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkDeactivateResponse',
+                fields={'deactivated': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-deactivate',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_deactivate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user)
+        if not scoped_qs.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = scoped_qs.filter(pk__in=ids, is_active=True).update(is_active=False)
+        return Response({'deactivated': count})
+
+    @extend_schema(
+        tags=['Bookings — Resources'],
+        summary='Bulk soft-delete resources (company_admin / superadmin)',
+        description=(
+            'Soft-deletes every resource whose ID appears in ``ids`` and that is '
+            'visible to the requesting user.\n\n'
+            '**Scoping:**\n'
+            '- ``superadmin`` — operates on any resource.\n'
+            '- ``company_admin`` — operates only on resources assigned to their company '
+            '(``assigned_company = user.company``).\n\n'
+            'Returns ``{"deleted": <count>}`` with the number of resources removed. '
+            'Returns 400 if ``ids`` is missing or empty; returns 404 if none of the '
+            'provided IDs are found in the scoped queryset.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkDeleteResponse',
+                fields={'deleted': fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.', examples=[_AUTH_401_EXAMPLE]),
+            403: OpenApiResponse(description='company_admin or superadmin only.',
+                                 examples=[_FORBIDDEN_403_EXAMPLE]),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['delete'], url_path='bulk-delete',
+            permission_classes=[IsCompanyAdmin])
+    def bulk_delete(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        scoped_qs = self._get_bulk_queryset(request.user).filter(pk__in=ids)
+        if not scoped_qs.exists():
+            raise NotFound()
+
+        count, _ = scoped_qs.delete()
+        return Response({'deleted': count})
 
     @extend_schema(
         tags=['Resources'],
@@ -1701,6 +1843,110 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             link=f'/bookings/{booking.id}',
         )
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
+
+    @extend_schema(
+        tags=['Bookings'],
+        summary='Bulk cancel bookings',
+        description=(
+            'Cancels multiple bookings in a single request.\n\n'
+            '**Access rules:**\n'
+            '- Any authenticated company member or guest may call this endpoint.\n'
+            '- `employee` / `guest`: only their own bookings are cancelled; '
+            'bookings belonging to other users are silently skipped.\n'
+            '- `company_admin` / `superadmin`: may cancel any booking within their '
+            'company scope (superadmin sees all companies).\n\n'
+            'Already-cancelled bookings and bookings that have already started are '
+            'silently skipped and reported in `skipped_ids`.\n\n'
+            'The entire operation is wrapped in a single `transaction.atomic()` so '
+            'either all cancellations succeed or none are persisted.'
+        ),
+        request=BulkCancelSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkCancelResponse',
+                fields={
+                    'cancelled': fields.IntegerField(),
+                    'skipped': fields.IntegerField(),
+                    'skipped_ids': fields.ListField(child=fields.IntegerField()),
+                },
+            ),
+            400: OpenApiResponse(description='Invalid booking_ids (empty or > 50).'),
+            401: OpenApiResponse(description='Not authenticated.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-cancel')
+    def bulk_cancel(self, request):
+        serializer = BulkCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        booking_ids = serializer.validated_data['booking_ids']
+        reason = serializer.validated_data.get('reason', '')
+        user = request.user
+        is_admin = user.role in ('superadmin', 'company_admin')
+
+        now = timezone.now()
+        cancelled_ids = []
+        skipped_ids = []
+
+        # Resolve accessible queryset — reuses existing company-isolation / guest logic.
+        accessible_qs = self.get_queryset().filter(pk__in=booking_ids).select_related('resource', 'user')
+
+        # Index by id for O(1) lookup; bookings not in accessible_qs are unreachable
+        # (wrong company, wrong user for guest) and automatically land in skipped_ids.
+        accessible_map = {b.pk: b for b in accessible_qs}
+
+        with transaction.atomic():
+            for bid in booking_ids:
+                booking = accessible_map.get(bid)
+
+                if booking is None:
+                    # Not accessible (isolation) — skip silently.
+                    skipped_ids.append(bid)
+                    continue
+
+                if booking.status == 'cancelled':
+                    skipped_ids.append(bid)
+                    continue
+
+                if booking.start_time <= now:
+                    skipped_ids.append(bid)
+                    continue
+
+                if not is_admin and booking.user_id != user.pk:
+                    # Non-admin may only cancel their own bookings.
+                    skipped_ids.append(bid)
+                    continue
+
+                booking.status = 'cancelled'
+                booking.cancelled_by = user
+                booking.cancel_reason = reason
+                booking.save(update_fields=['status', 'cancelled_by', 'cancel_reason', 'updated_at'])
+
+                BookingCancellationAudit.objects.create(
+                    booking=booking,
+                    cancelled_by=user,
+                    cancel_reason=reason,
+                    cancelled_at=now,
+                )
+
+                create_notification(
+                    user=booking.user,
+                    notification_type='booking_cancelled',
+                    title=f'Бронирование отменено: {booking.resource.name}',
+                    message=reason or translate('booking.bulk_cancelled', get_lang(request)),
+                    link=f'/bookings/{booking.id}',
+                )
+
+                cancelled_ids.append(bid)
+
+        return Response(
+            {
+                'cancelled': len(cancelled_ids),
+                'skipped': len(skipped_ids),
+                'skipped_ids': skipped_ids,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @extend_schema(
         tags=['Bookings'],

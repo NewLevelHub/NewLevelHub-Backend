@@ -523,6 +523,7 @@ class TestResourceCatalogAssignedVisibility:
         self, api_client, employee, company
     ):
         # basic plan: assigned resources are hidden even if assigned to own company
+        # Resource created via ORM to bypass API-level tariff restriction
         rid = Resource.objects.create(
             name='Dedicated basic',
             resource_type='desk',
@@ -555,6 +556,7 @@ class TestResourceCatalogAssignedVisibility:
     def test_premium_does_not_see_other_company_assigned(
         self, api_client, premium_employee, company
     ):
+        # Resource assigned to a basic company — created via ORM to bypass API tariff restriction
         rid = Resource.objects.create(
             name='Other co desk',
             resource_type='desk',
@@ -1107,7 +1109,7 @@ class TestResourceFilterByCompany:
         assert assigned_id in ids
 
     def test_filter_by_wrong_company_excludes_resource(
-        self, api_client, superadmin, company, premium_company
+        self, api_client, superadmin, premium_company, company
     ):
         api_client.force_authenticate(user=superadmin)
         assigned = api_client.post(

@@ -8,7 +8,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rest_framework import status, viewsets, filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
@@ -19,7 +19,9 @@ from drf_spectacular.utils import (
     OpenApiResponse,
     OpenApiParameter,
     OpenApiTypes,
+    inline_serializer,
 )
+import rest_framework.fields as drf_fields
 
 from apps.bookings.models import Booking
 from apps.access.models import GuestPass
@@ -35,6 +37,7 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, Ou
 from .filters import CompanyFilter, CompanyMemberFilter, CompanyDirectoryFilter
 from .models import Company, CompanySettings, Invitation
 from .serializers import (
+    BulkIdsSerializer,
     CompanySerializer,
     CompanyDetailSerializer,
     CompanyCreateSerializer,
@@ -50,6 +53,7 @@ from .serializers import (
     CompanyMemberActivitySerializer,
     MemberDeactivateSerializer,
     MemberRemoveSerializer,
+    MemberChangeRoleSerializer,
     OnboardingStatusSerializer,
 )
 from .tasks import send_invitation_email
@@ -341,10 +345,14 @@ class CompanyViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'created_at', 'plan']
 
     def get_permissions(self):
-        if self.action in ('create', 'destroy', 'deactivate', 'activate'):
+        if self.action in (
+            'create', 'destroy', 'deactivate', 'activate',
+            'bulk_activate', 'bulk_deactivate', 'bulk_delete',
+        ):
             return [IsSuperAdmin()]
         if self.action in ('update', 'partial_update',
-                           'deactivate_member', 'activate_member', 'remove_member'):
+                           'deactivate_member', 'activate_member', 'remove_member',
+                           'change_member_role'):
             # Both superadmin and company_admin may perform these actions; the
             # views themselves enforce additional role-based checks (e.g.
             # only superadmin can remove another company_admin).
@@ -829,6 +837,85 @@ class CompanyViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @extend_schema(
+        tags=['Companies'],
+        summary='Change a company member\'s role (company_admin / superadmin)',
+        request=MemberChangeRoleSerializer,
+        responses={
+            200: OpenApiResponse(description='Role changed successfully'),
+            400: OpenApiResponse(
+                description=(
+                    'Invalid role / cannot change own role / '
+                    'cannot change guest or superadmin role / '
+                    'last admin demotion forbidden'
+                )
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company or user not found'),
+        },
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.INT,
+                description='ID of the member whose role should be changed.',
+            ),
+        ],
+    )
+    @action(
+        detail=True,
+        methods=['patch'],
+        url_path='members/(?P<user_id>[0-9]+)/role',
+        url_name='change-member-role',
+    )
+    def change_member_role(self, request, pk=None, user_id=None):
+        lang = get_lang(request)
+        company = self.get_object()
+        target = get_object_or_404(User, pk=user_id, company=company)
+
+        # Self-change is not allowed for anyone.
+        if target.pk == request.user.pk:
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_CHANGE_OWN_ROLE,
+                i18n_key='company.cannot_change_own_role',
+            )
+
+        # Guests and superadmins cannot have their role changed via this endpoint.
+        if target.role in ('guest', 'superadmin'):
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_CHANGE_ROLE_OF_GUEST_OR_SUPERADMIN,
+                i18n_key='company.cannot_change_role_of_guest_or_superadmin',
+            )
+
+        serializer = MemberChangeRoleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_role = serializer.validated_data['role']
+
+        # No-op: role is already set to the requested value.
+        if target.role == new_role:
+            return Response({'detail': translate('company.role_changed', lang)}, status=status.HTTP_200_OK)
+
+        # Demoting a company_admin: guard against removing the last admin.
+        if target.role == 'company_admin' and new_role == 'employee':
+            # Only superadmin may demote even when they are the last admin.
+            if request.user.role != 'superadmin':
+                remaining_admins = User.objects.filter(
+                    company=company,
+                    role='company_admin',
+                    is_active=True,
+                ).count()
+                if remaining_admins <= 1:
+                    raise LocalizedError(
+                        code=error_codes.COMPANY_LAST_ADMIN_DEMOTION_FORBIDDEN,
+                        i18n_key='company.last_admin_demotion_forbidden',
+                    )
+
+        target.role = new_role
+        target.save(update_fields=['role'])
+
+        return Response({'detail': translate('company.role_changed', lang)}, status=status.HTTP_200_OK)
+
     # ------------------------------------------------------------------
     # Onboarding actions
     # ------------------------------------------------------------------
@@ -920,6 +1007,115 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if request.query_params.get('confirm') != 'true':
             raise_validation_error('non_field_errors', 'company.confirm_required')
         return super().destroy(request, *args, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Bulk actions (superadmin only)
+    # ------------------------------------------------------------------
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Bulk activate companies (superadmin)',
+        description=(
+            'Sets ``is_active=True`` on every company whose ID appears in ``ids``.\n\n'
+            'Returns ``{"activated": <count>}`` with the number of companies actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs exist.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='CompanyBulkActivateResponse',
+                fields={'activated': drf_fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Superadmin only.'),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-activate',
+            permission_classes=[IsSuperAdmin])
+    def bulk_activate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        if not Company.objects.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = Company.objects.filter(pk__in=ids, is_active=False).update(is_active=True)
+        return Response({'activated': count})
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Bulk deactivate companies (superadmin)',
+        description=(
+            'Sets ``is_active=False`` on every company whose ID appears in ``ids``.\n\n'
+            'Returns ``{"deactivated": <count>}`` with the number of companies actually '
+            'updated. Returns 400 if ``ids`` is missing or empty; returns 404 if none of '
+            'the provided IDs exist.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='CompanyBulkDeactivateResponse',
+                fields={'deactivated': drf_fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Superadmin only.'),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='bulk-deactivate',
+            permission_classes=[IsSuperAdmin])
+    def bulk_deactivate(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        if not Company.objects.filter(pk__in=ids).exists():
+            raise NotFound()
+
+        count = Company.objects.filter(pk__in=ids, is_active=True).update(is_active=False)
+        return Response({'deactivated': count})
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Bulk soft-delete companies (superadmin)',
+        description=(
+            'Soft-deletes every company whose ID appears in ``ids`` by setting '
+            '``is_deleted=True`` and ``deleted_at`` to the current timestamp.\n\n'
+            'Returns ``{"deleted": <count>}`` with the number of companies removed. '
+            'Returns 400 if ``ids`` is missing or empty; returns 404 if none of the '
+            'provided IDs exist.'
+        ),
+        request=BulkIdsSerializer,
+        responses={
+            200: inline_serializer(
+                name='CompanyBulkDeleteResponse',
+                fields={'deleted': drf_fields.IntegerField()},
+            ),
+            400: OpenApiResponse(description='ids list missing or empty.'),
+            401: OpenApiResponse(description='Not authenticated.'),
+            403: OpenApiResponse(description='Superadmin only.'),
+            404: OpenApiResponse(description='None of the provided IDs were found.'),
+        },
+    )
+    @action(detail=False, methods=['delete'], url_path='bulk-delete',
+            permission_classes=[IsSuperAdmin])
+    def bulk_delete(self, request):
+        serializer = BulkIdsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+
+        qs = Company.objects.filter(pk__in=ids)
+        if not qs.exists():
+            raise NotFound()
+
+        count = qs.count()
+        qs.update(is_deleted=True, deleted_at=timezone.now())
+        return Response({'deleted': count})
 
 
 @extend_schema_view(

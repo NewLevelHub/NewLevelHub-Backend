@@ -10,17 +10,17 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
 
 from apps.companies.models import Company, CompanySettings
-from apps.core.exceptions import raise_validation_error
+from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import translate, get_lang
 from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
 from apps.users.models import User
-from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, UserOnboardingProgress
+from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
     LeaveBalanceSetSerializer, LeaveBalanceTeamSerializer,
-    OnboardingTemplateSerializer,
+    OnboardingStepSerializer, OnboardingTemplateSerializer,
 )
 
 
@@ -411,9 +411,76 @@ class OnboardingTemplateViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='set-default')
     @transaction.atomic
     def set_default(self, request, pk=None):
+        from .tasks import initialize_user_onboarding_progress
         template = self.get_object()
         template.set_as_default()
+        employees = template.company.members.filter(role='employee')
+        for employee in employees:
+            initialize_user_onboarding_progress(employee)
         return Response(self.get_serializer(template).data)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=['HR'], summary='List onboarding steps for a template'),
+    retrieve=extend_schema(tags=['HR'], summary='Get onboarding step'),
+    create=extend_schema(
+        tags=['HR'],
+        summary='Add custom onboarding step',
+        responses={201: OnboardingStepSerializer, 403: OpenApiResponse(description='Company admin only')},
+    ),
+    partial_update=extend_schema(
+        tags=['HR'],
+        summary='Update custom onboarding step',
+        responses={
+            200: OnboardingStepSerializer,
+            400: OpenApiResponse(description='System steps are immutable'),
+        },
+    ),
+    destroy=extend_schema(
+        tags=['HR'],
+        summary='Delete custom onboarding step',
+        responses={
+            204: OpenApiResponse(description='Deleted'),
+            400: OpenApiResponse(description='System steps are immutable'),
+        },
+    ),
+)
+class OnboardingStepViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
+    serializer_class = OnboardingStepSerializer
+    permission_classes = [IsCompanyAdmin]
+    pagination_class = None
+    http_method_names = ['get', 'post', 'patch', 'delete', 'head', 'options']
+    company_lookup = 'template__company'
+    queryset = OnboardingStep.objects.select_related('template').order_by('position')
+
+    def get_queryset(self):
+        return super().get_queryset().filter(
+            template_id=self.kwargs['template_pk']
+        )
+
+    def perform_create(self, serializer):
+        template_pk = self.kwargs['template_pk']
+        template = get_object_or_404(
+            OnboardingTemplate.objects.filter(company=self.request.user.company),
+            pk=template_pk,
+        )
+        serializer.save(template=template, is_system=False)
+
+    def _guard_system_step(self, instance):
+        if instance.is_system:
+            raise LocalizedError(
+                code='SYSTEM_STEP_IMMUTABLE',
+                i18n_key='hr.onboarding_system_step_immutable',
+                http_status=400,
+            )
+
+    def perform_update(self, serializer):
+        self._guard_system_step(serializer.instance)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._guard_system_step(instance)
+        instance.delete()
 
 
 def _get_active_template(user):
@@ -443,6 +510,7 @@ def _build_progress_response(user):
             'id': item.step_id,
             'title': item.step.title,
             'is_completed': item.is_completed,
+            'url': item.step.url or None,
         }
         for item in progress_items
     ]
@@ -497,23 +565,119 @@ def onboarding_team_progress(request):
     if not request.user.company_id:
         return Response([])
 
+    template = _get_active_template(request.user)
+    base_qs = request.user.company.members.exclude(role='superadmin')
+
+    if template is None:
+        payload = [
+            {
+                'user': m.id,
+                'first_name': m.first_name,
+                'last_name': m.last_name,
+                'avatar': m.avatar.url if m.avatar else None,
+                'role': m.role,
+                'completed_steps': 0,
+                'total_steps': 0,
+            }
+            for m in base_qs.order_by('id')
+        ]
+        return Response(payload)
+
     team_members = (
-        request.user.company.members.exclude(role='superadmin')
+        base_qs
         .annotate(
             completed_steps=Count(
                 'onboarding_progress',
-                filter=Q(onboarding_progress__is_completed=True),
+                filter=Q(
+                    onboarding_progress__is_completed=True,
+                    onboarding_progress__step__template=template,
+                ),
             ),
-            total_steps=Count('onboarding_progress'),
+            total_steps=Count(
+                'onboarding_progress',
+                filter=Q(onboarding_progress__step__template=template),
+            ),
         )
         .order_by('id')
     )
     payload = [
         {
             'user': member.id,
+            'first_name': member.first_name,
+            'last_name': member.last_name,
+            'avatar': member.avatar.url if member.avatar else None,
+            'role': member.role,
             'completed_steps': member.completed_steps,
             'total_steps': member.total_steps,
         }
         for member in team_members
     ]
     return Response(payload)
+
+
+@extend_schema(
+    tags=['HR'],
+    summary='Team member onboarding progress drill-down',
+    responses={
+        200: OpenApiResponse(description='Step-by-step progress for a specific employee'),
+        403: OpenApiResponse(description='Company admin only'),
+        404: OpenApiResponse(description='Member not found in company'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsCompanyAdmin])
+def onboarding_team_member_progress(request, user_id):
+    if not request.user.company_id:
+        return Response({'completed': True, 'steps': []})
+
+    member = get_object_or_404(
+        request.user.company.members.exclude(role='superadmin'),
+        pk=user_id,
+    )
+
+    template = _get_active_template(request.user)
+    progress_qs = UserOnboardingProgress.objects.filter(user=member)
+    if template is not None:
+        progress_qs = progress_qs.filter(step__template=template)
+
+    progress_items = list(
+        progress_qs
+        .select_related('step')
+        .order_by('step__position')
+    )
+
+    if not progress_items:
+        return Response({
+            'user': {
+                'id': member.id,
+                'first_name': member.first_name,
+                'last_name': member.last_name,
+                'avatar': member.avatar.url if member.avatar else None,
+            },
+            'completed_steps': 0,
+            'total_steps': 0,
+            'steps': [],
+        })
+
+    completed_count = sum(1 for item in progress_items if item.is_completed)
+    steps = [
+        {
+            'id': item.step_id,
+            'title': item.step.title,
+            'is_system': item.step.is_system,
+            'is_completed': item.is_completed,
+            'completed_at': item.completed_at,
+        }
+        for item in progress_items
+    ]
+    return Response({
+        'user': {
+            'id': member.id,
+            'first_name': member.first_name,
+            'last_name': member.last_name,
+            'avatar': member.avatar.url if member.avatar else None,
+        },
+        'completed_steps': completed_count,
+        'total_steps': len(progress_items),
+        'steps': steps,
+    })

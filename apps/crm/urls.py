@@ -8,6 +8,7 @@ router.register('tasks', views.TaskViewSet, basename='task')
 router.register('labels', views.LabelViewSet, basename='label')
 
 urlpatterns = [
+    path('board-templates/', views.board_templates_list, name='board-templates-list'),
     path('', include(router.urls)),
     path(
         'boards/<int:board_pk>/columns/',

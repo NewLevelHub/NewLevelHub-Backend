@@ -78,7 +78,7 @@ def _guest_pass_payload():
 
 @pytest.mark.django_db
 def test_ac_booking_create_emits_booking_confirmed(api_client):
-    company = Company.objects.create(name='Booking AC Co', plan='basic', max_employees=50)
+    company = Company.objects.create(name='Booking AC Co', plan='standard', max_employees=50)
     employee = User.objects.create_user(
         email='booking-ac-emp@test.local',
         password='pass',

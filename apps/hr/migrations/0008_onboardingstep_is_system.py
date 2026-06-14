@@ -23,12 +23,16 @@ class Migration(migrations.Migration):
                         DROP COLUMN IF EXISTS is_system;
                     """,
                 ),
+                migrations.RunSQL(
+                    sql="CREATE INDEX IF NOT EXISTS hr_onboarding_steps_is_system_idx ON hr_onboarding_steps (is_system);",
+                    reverse_sql="DROP INDEX IF EXISTS hr_onboarding_steps_is_system_idx;",
+                ),
             ],
             state_operations=[
                 migrations.AddField(
                     model_name='onboardingstep',
                     name='is_system',
-                    field=models.BooleanField(default=False),
+                    field=models.BooleanField(default=False, db_index=True),
                 ),
             ],
         ),

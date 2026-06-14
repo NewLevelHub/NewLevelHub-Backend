@@ -14,5 +14,26 @@ urlpatterns = [
         views.complete_onboarding_step,
         name='onboarding-progress-step-complete',
     ),
+    # Drill-down must be declared before the team list to avoid Django matching user_id as 'team'.
+    path(
+        'onboarding/progress/team/<int:user_id>/',
+        views.onboarding_team_member_progress,
+        name='onboarding-team-member-progress',
+    ),
     path('onboarding/progress/team/', views.onboarding_team_progress, name='onboarding-team-progress'),
+    # Nested step management under a template.
+    path(
+        'onboarding/templates/<int:template_pk>/steps/',
+        views.OnboardingStepViewSet.as_view({'get': 'list', 'post': 'create'}),
+        name='onboarding-template-steps-list',
+    ),
+    path(
+        'onboarding/templates/<int:template_pk>/steps/<int:pk>/',
+        views.OnboardingStepViewSet.as_view({
+            'get': 'retrieve',
+            'patch': 'partial_update',
+            'delete': 'destroy',
+        }),
+        name='onboarding-template-steps-detail',
+    ),
 ]

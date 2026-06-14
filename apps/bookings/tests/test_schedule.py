@@ -1,6 +1,6 @@
 """Integration tests for GET /api/v1/bookings/resources/{id}/schedule/?date= and ?week=."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from django.utils import timezone
@@ -58,9 +58,17 @@ def resource(db):
 
 
 def _make_booking(resource, admin, start_offset_hours, duration_hours=2):
-    """Create a confirmed booking relative to now."""
-    now = timezone.now()
-    start = now + timedelta(hours=start_offset_hours)
+    """Create a confirmed booking pinned to 10 AM today (local time).
+
+    Using a fixed local time avoids flakiness when start_offset_hours would
+    push the booking past midnight — the schedule query for 'today' would then
+    find nothing. start_offset_hours is kept as a parameter for call-site
+    readability but only affects the hour within today (10 + offset).
+    """
+    local_tz = timezone.get_current_timezone()
+    today = timezone.now().astimezone(local_tz).date()
+    start_hour = min(10 + int(start_offset_hours), 20)  # cap at 20:00 to leave room
+    start = timezone.make_aware(datetime.combine(today, time(start_hour, 0)), local_tz)
     end = start + timedelta(hours=duration_hours)
     return Booking.objects.create(
         resource=resource,

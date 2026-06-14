@@ -1,0 +1,17 @@
+[
+  {
+    "identifier": "DEV-308",
+    "title": "Каталог: расписание ресурса (таймлайн) + доступ guest к schedule API",
+    "description": "**Контекст:** рабочий путь бронирования — только `/bookings/catalog` (карточки → `ResourceDetailModal` → `BookingModal`). Страница `/bookings/resources/:id` в навигации не используется (orphan route).\n\n**Проблема:** в каталоге нет таймлайна занятости/свободных слотов (MVP §3.3). API `GET /bookings/resources/{id}/schedule/` для guest возвращает 403 (`IsCompanyMember`), хотя слоты не содержат PII.\n\n**Scope:**\n- Frontend: показать расписание на день (и при необходимости неделю) в потоке каталога — в `ResourceDetailModal` и/или при бронировании; не завязывать фичу на `/bookings/resources/:id`.\n- Backend: разрешить guest (и остальным ролям бронирования) читать schedule для активных bookable resources; ответ без PII.\n\nMVP: §3.3",
+    "block": "Блок 3",
+    "labels": ["backend", "frontend"],
+    "area": "bookings",
+    "acceptanceCriteria": [
+      "В каталоге (`/bookings/catalog`) при просмотре ресурса виден таймлайн занятых/свободных слотов на выбранный день",
+      "Guest, employee, company_admin могут GET schedule для bookable resources без 403",
+      "Ответ schedule не раскрывает чужие PII (только время и статус слота)",
+      "Тест: guest может получить schedule (test_schedule_guest или аналог)",
+      "Основной UX не требует перехода на `/bookings/resources/:id`"
+    ]
+  }
+]

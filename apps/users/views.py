@@ -64,14 +64,16 @@ from .jwt import (
     issue_refresh_token,
     set_refresh_cookie,
 )
-from .session import touch_last_activity
+from .session import touch_last_activity, SESSION_CREATED_AT_CLAIM
 
 logger = logging.getLogger(__name__)
 
 
 def _get_tokens(user, remember_me=False):
     refresh = issue_refresh_token(user, remember_me=remember_me)
-    return {'access': str(refresh.access_token), 'refresh': str(refresh)}
+    access = refresh.access_token
+    access[SESSION_CREATED_AT_CLAIM] = refresh[SESSION_CREATED_AT_CLAIM]
+    return {'access': str(access), 'refresh': str(refresh)}
 
 
 def _profile_response(user, request):

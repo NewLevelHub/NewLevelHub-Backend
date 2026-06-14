@@ -181,6 +181,9 @@ ACCESS_TOKEN_LIFETIME = timedelta(minutes=int(os.getenv('ACCESS_TOKEN_LIFETIME',
 REFRESH_TOKEN_LIFETIME = timedelta(days=int(os.getenv('REFRESH_TOKEN_LIFETIME', 7)))
 REMEMBER_ME_LIFETIME = timedelta(days=int(os.getenv('REMEMBER_ME_LIFETIME', 30)))
 IDLE_SESSION_TIMEOUT = timedelta(minutes=int(os.getenv('IDLE_SESSION_TIMEOUT_MINUTES', 5)))
+ABSOLUTE_SESSION_TIMEOUT = timedelta(
+    minutes=int(os.getenv('ABSOLUTE_SESSION_TIMEOUT_MINUTES', 15))
+)
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': ACCESS_TOKEN_LIFETIME,
@@ -294,6 +297,7 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 # Public API origin for email image/link URLs (Celery). Example: https://api.staging.newlevelhub.kz
 BACKEND_URL = (os.getenv('BACKEND_URL') or '').strip() or FRONTEND_URL
 MAX_ACTIVE_BOOKINGS_PER_USER = int(os.getenv('MAX_ACTIVE_BOOKINGS_PER_USER', 5))
+PRIORITY_OVERRIDE_HOURS = int(os.getenv('PRIORITY_OVERRIDE_HOURS', 2))
 REMINDER_MINUTES_BEFORE = int(os.getenv('REMINDER_MINUTES_BEFORE', 15))
 NO_SHOW_MINUTES = int(os.getenv('NO_SHOW_MINUTES', 15))
 SOON_AVAILABLE_MINUTES = int(os.getenv('SOON_AVAILABLE_MINUTES', 15))

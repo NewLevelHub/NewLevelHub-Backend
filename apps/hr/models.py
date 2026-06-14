@@ -94,6 +94,7 @@ class OnboardingStep(TimeStampedModel):
     description = models.TextField(blank=True, default='')
     url = models.URLField(blank=True, default='')
     position = models.PositiveIntegerField(default=0)
+    is_system = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         db_table = 'hr_onboarding_steps'

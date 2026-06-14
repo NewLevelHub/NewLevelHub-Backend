@@ -11,16 +11,37 @@ from apps.companies.models import Company
 from apps.services.models import Floor
 from apps.core.error_codes import (
     BOOKING_ADVANCE_DAYS_EXCEEDED,
+    BOOKING_DESK_USER_OVERLAP,
     BOOKING_DURATION_TOO_SHORT,
     BOOKING_DURATION_TOO_LONG,
     BOOKING_PARKING_WHOLE_DAY_ONLY,
 )
 from apps.core.exceptions import LocalizedError, raise_validation_error
+from apps.core.i18n import get_lang, translate
 from apps.notifications.utils import create_notification
-from .models import Resource, ResourcePhoto, Booking, BookingParticipant, RecurringBooking, ResourceBlock
+from .models import (
+    Resource, ResourcePhoto, Booking, BookingParticipant,
+    RecurringBooking, ResourceBlock, BookingCancellationAudit,
+)
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
 User = get_user_model()
+
+# Plans that allow access to company-assigned (non-shared) resources.
+# basic and free users may only book shared resources (assigned_company IS NULL).
+PLANS_WITH_ASSIGNED_RESOURCES = {'standard', 'premium'}
+
+_CANCEL_REASON_I18N_PREFIX = 'booking.cancel_reason.'
+
+
+def _booking_priority(user) -> int:
+    """Return booking priority tier for the user: 3=premium/superadmin, 2=standard, 1=basic/guest."""
+    if getattr(user, 'role', None) == 'superadmin':
+        return 3
+    company = getattr(user, 'company', None)
+    plan = getattr(company, 'plan', 'basic') if company else 'basic'
+    return {'premium': 3, 'standard': 2}.get(plan, 1)
+
 
 # Type-specific validation constants
 _MEETING_ROOM_MIN_MINUTES = 30
@@ -194,6 +215,11 @@ class ResourceSerializer(serializers.ModelSerializer):
         if availability_start and availability_end and availability_start >= availability_end:
             raise_validation_error('availability_start', 'booking.availability_start_after_end')
 
+        assigned_company = data.get('assigned_company')
+        if assigned_company is not None:
+            if getattr(assigned_company, 'plan', 'basic') not in PLANS_WITH_ASSIGNED_RESOURCES:
+                raise_validation_error('assigned_company', 'booking.assigned_company_requires_premium')
+
         return data
 
     def _sync_floor_integer(self, validated_data):
@@ -294,6 +320,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
     assigned_company_name = serializers.CharField(
         source='assigned_company.name', read_only=True, allow_null=True, default=None,
     )
+    floor_id = serializers.IntegerField(source='floor_fk.id', read_only=True, allow_null=True)
     floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
     floor_name = serializers.CharField(source='floor_fk.name', read_only=True, allow_null=True)
 
@@ -303,7 +330,7 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'id',
             'type',
             'name',
-            'floor',
+            'floor_id',
             'floor_number',
             'floor_name',
             'zone',
@@ -395,6 +422,14 @@ class ResourceListSerializer(serializers.ModelSerializer):
         return window_end
 
 
+class BulkIdsSerializer(serializers.Serializer):
+    ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=True,
+        allow_empty=False,
+    )
+
+
 class ResourceBulkCreateSerializer(serializers.Serializer):
     template = serializers.DictField()
     count = serializers.IntegerField(min_value=1)
@@ -442,12 +477,16 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             raise_validation_error('resource_id', 'booking.resource_not_found')
 
     def _validate_access(self, *, resource, user):
-        if (
-            not user.is_superadmin()
-            and resource.assigned_company_id
-            and resource.assigned_company_id != user.company_id
-        ):
+        if user.is_superadmin():
+            return
+        # Cross-company block: resource is locked to a different company.
+        if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
             raise_validation_error('resource_id', 'booking.resource_wrong_company')
+        # Plan-based block: basic/free companies may not book assigned resources.
+        company = getattr(user, 'company', None)
+        plan = getattr(company, 'plan', 'basic') if company else 'basic'
+        if resource.assigned_company_id and plan not in PLANS_WITH_ASSIGNED_RESOURCES:
+            raise_validation_error('resource_id', 'booking.resource_requires_premium')
 
     def _validate_availability_window(self, *, resource, start_time, end_time):
         local_start = timezone.localtime(start_time)
@@ -575,7 +614,10 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         if active_count >= active_limit:
             raise_validation_error('detail', 'booking.active_limit_exceeded', {'limit': active_limit})
 
-    def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None):
+    def _ensure_no_conflicts(self, *, resource, start_time, end_time, exclude_booking_id=None, user=None):
+        override_hours = int(getattr(settings, 'PRIORITY_OVERRIDE_HOURS', 2))
+        override_cutoff = timezone.now() + timedelta(hours=override_hours)
+
         booking_overlap_qs = Booking.objects.filter(
             resource=resource,
             status='confirmed',
@@ -584,13 +626,26 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         )
         if exclude_booking_id is not None:
             booking_overlap_qs = booking_overlap_qs.exclude(pk=exclude_booking_id)
-        has_booking_overlap = booking_overlap_qs.exists()
-        if has_booking_overlap:
-            raise LocalizedError(
-                code='BOOKING_CONFLICT',
-                i18n_key='booking.conflict',
-                http_status=409,
-            )
+
+        if booking_overlap_qs.exists():
+            if user is not None:
+                requester_priority = _booking_priority(user)
+                # Attempt override: all conflicting bookings must be lower priority
+                # and start after the override cutoff window.
+                displaceable = booking_overlap_qs.filter(
+                    priority__lt=requester_priority,
+                    start_time__gt=override_cutoff,
+                )
+                non_displaceable = booking_overlap_qs.exclude(
+                    priority__lt=requester_priority,
+                    start_time__gt=override_cutoff,
+                )
+                if non_displaceable.exists() or not displaceable.exists():
+                    raise LocalizedError(code='BOOKING_CONFLICT', i18n_key='booking.conflict', http_status=409)
+                # All conflicting bookings can be displaced — store them for cancellation in create()
+                self._bookings_to_displace = list(displaceable)
+            else:
+                raise LocalizedError(code='BOOKING_CONFLICT', i18n_key='booking.conflict', http_status=409)
 
         has_block_overlap = ResourceBlock.objects.filter(
             resource=resource,
@@ -604,22 +659,36 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 http_status=409,
             )
 
+    def _ensure_no_user_desk_overlap(self, *, user, resource, start_time, end_time, exclude_booking_id=None):
+        if resource.resource_type != 'desk':
+            return
+        qs = Booking.objects.filter(
+            user=user,
+            resource__resource_type='desk',
+            status='confirmed',
+            start_time__lt=end_time,
+            end_time__gt=start_time,
+        )
+        if exclude_booking_id is not None:
+            qs = qs.exclude(pk=exclude_booking_id)
+        if qs.exists():
+            raise LocalizedError(
+                code=BOOKING_DESK_USER_OVERLAP,
+                i18n_key='booking.desk_user_overlap',
+                http_status=409,
+            )
+
     def validate_participant_ids(self, value):
         if not value:
             return value
-        request = self.context.get('request')
-        if request and hasattr(request, 'user'):
-            company = request.user.company
-            if company:
-                invalid = list(
-                    User.objects.filter(
-                        id__in=value
-                    ).exclude(company=company).values_list('id', flat=True)
-                )
-                if invalid:
-                    raise serializers.ValidationError(
-                        [{'_i18n': True, 'key': 'booking.participants_wrong_company', 'params': {'ids': str(invalid)}}]
-                    )
+        existing_ids = set(
+            User.objects.filter(id__in=value, is_active=True).values_list('id', flat=True)
+        )
+        missing = [uid for uid in value if uid not in existing_ids]
+        if missing:
+            raise serializers.ValidationError(
+                f'Users not found or inactive: {missing}'
+            )
         return value
 
     def _check_timezone_aware(self, field_name):
@@ -664,6 +733,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         import logging
         from apps.notifications.tasks import send_notification_email
+        self._bookings_to_displace = []
         validated_data.pop('resource_id', None)
         participant_ids = validated_data.pop('participant_ids', [])
         user = self.context['request'].user
@@ -675,6 +745,13 @@ class BookingCreateSerializer(serializers.ModelSerializer):
             resource = Resource.objects.select_for_update().get(pk=resource_id)
             self._validate_access(resource=resource, user=user)
             self._ensure_no_conflicts(
+                resource=resource,
+                start_time=start_time,
+                end_time=end_time,
+                user=user,
+            )
+            self._ensure_no_user_desk_overlap(
+                user=user,
                 resource=resource,
                 start_time=start_time,
                 end_time=end_time,
@@ -693,6 +770,7 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             validated_data['resource'] = resource
             validated_data['user'] = user
+            validated_data['priority'] = _booking_priority(user)
             # Guests have no company; set company only for company-bound users.
             if user.role != 'guest':
                 validated_data['company'] = user.company or resource.assigned_company
@@ -700,6 +778,23 @@ class BookingCreateSerializer(serializers.ModelSerializer):
 
             from .qr_image import ensure_capsule_booking_qr
             ensure_capsule_booking_qr(booking)
+
+            # Cancel any displaced lower-priority bookings and notify their owners.
+            for displaced_booking in self._bookings_to_displace:
+                displaced_booking.status = 'cancelled'
+                displaced_booking.cancel_reason = 'displaced_by_priority_booking'
+                displaced_booking.cancelled_by = user
+                displaced_booking.save(update_fields=['status', 'cancel_reason', 'cancelled_by'])
+                create_notification(
+                    user=displaced_booking.user,
+                    notification_type='booking_cancelled',
+                    title='Бронирование отменено',
+                    message=(
+                        f'Ваше бронирование {displaced_booking.resource.name} было отменено '
+                        f'в пользу пользователя с более высоким приоритетом.'
+                    ),
+                    link=f'/bookings/{displaced_booking.id}',
+                )
 
             # In-app confirmation for the booking owner (preferences + DND via helper)
             create_notification(
@@ -797,6 +892,7 @@ class BookingSerializer(serializers.ModelSerializer):
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
     qr_image = serializers.ImageField(read_only=True)
+    cancel_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
@@ -811,6 +907,21 @@ class BookingSerializer(serializers.ModelSerializer):
             'id', 'user', 'company', 'checked_in_at', 'qr_code', 'qr_image',
             'created_at', 'updated_at',
         ]
+
+    def get_cancel_reason(self, obj):
+        reason = obj.cancel_reason
+        if not reason:
+            return reason
+        i18n_key = f'{_CANCEL_REASON_I18N_PREFIX}{reason}'
+        lang = get_lang(self.context.get('request'))
+        translated = translate(i18n_key, lang)
+        # translate() falls back to common.server_error text when the key is missing;
+        # if the translated value differs from the i18n_key itself we have a real translation.
+        # Additionally guard against the server_error fallback by comparing to it.
+        server_error_text = translate('common.server_error', lang)
+        if translated == server_error_text:
+            return reason
+        return translated
 
     def get_booked_by(self, obj):
         return BookingUserSerializer(obj.user, context=self.context).data
@@ -878,12 +989,15 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         if attrs['repeat_until'] < today:
             raise_validation_error('repeat_until', 'booking.repeat_until_in_past')
 
-        if (
-            not user.is_superadmin()
-            and resource.assigned_company_id
-            and resource.assigned_company_id != user.company_id
-        ):
-            raise_validation_error('resource_id', 'booking.resource_wrong_company')
+        if not user.is_superadmin():
+            # Cross-company block: resource is locked to a different company.
+            if resource.assigned_company_id and resource.assigned_company_id != user.company_id:
+                raise_validation_error('resource_id', 'booking.resource_wrong_company')
+            # Plan-based block: basic/free companies may not book assigned resources.
+            company = getattr(user, 'company', None)
+            plan = getattr(company, 'plan', 'basic') if company else 'basic'
+            if resource.assigned_company_id and plan not in PLANS_WITH_ASSIGNED_RESOURCES:
+                raise_validation_error('resource_id', 'booking.resource_requires_premium')
 
         available_days = resource.available_days or list(range(7))
         if attrs['day_of_week'] not in available_days:
@@ -924,6 +1038,26 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class ParticipantPickerUserSerializer(serializers.ModelSerializer):
+    """Lightweight user snapshot for the participant picker autocomplete."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'full_name', 'avatar', 'position']
+        read_only_fields = fields
+
+    def get_avatar(self, obj):
+        if not obj.avatar:
+            return None
+        request = self.context.get('request')
+        url = obj.avatar.url
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+
 class ResourceBlockSerializer(serializers.ModelSerializer):
     class Meta:
         model = ResourceBlock
@@ -936,3 +1070,31 @@ class ResourceBlockSerializer(serializers.ModelSerializer):
         if start_time and end_time and start_time >= end_time:
             raise_validation_error('detail', 'booking.start_time_before_end_time')
         return attrs
+
+
+class BulkCancelSerializer(serializers.Serializer):
+    booking_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        min_length=1,
+        max_length=50,
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class AuditCancelledBySerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name']
+        read_only_fields = ['id', 'full_name']
+
+
+class BookingCancellationAuditSerializer(serializers.ModelSerializer):
+    booking_id = serializers.IntegerField(read_only=True)
+    cancelled_by = AuditCancelledBySerializer(read_only=True)
+
+    class Meta:
+        model = BookingCancellationAudit
+        fields = ['id', 'booking_id', 'cancelled_by', 'cancel_reason', 'cancelled_at']
+        read_only_fields = fields

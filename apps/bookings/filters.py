@@ -6,7 +6,7 @@ from django.db.models import Exists, OuterRef
 from django.utils import timezone as tz_utils
 from django.utils.dateparse import parse_datetime
 
-from .models import Resource, Booking, ResourceBlock
+from .models import Resource, Booking, ResourceBlock, BookingCancellationAudit
 from .serializers import _EQUIPMENT_KEYS
 
 # IsoDateTimeFilter skips calling the filter method entirely when the datetime
@@ -150,6 +150,17 @@ class ResourceFilter(django_filters.FilterSet):
             )
 
         return queryset
+
+
+class BookingCancellationAuditFilter(django_filters.FilterSet):
+    booking = django_filters.NumberFilter(field_name='booking_id')
+    cancelled_by = django_filters.NumberFilter(field_name='cancelled_by_id')
+    cancelled_at_after = django_filters.DateTimeFilter(field_name='cancelled_at', lookup_expr='gte')
+    cancelled_at_before = django_filters.DateTimeFilter(field_name='cancelled_at', lookup_expr='lte')
+
+    class Meta:
+        model = BookingCancellationAudit
+        fields = ['booking', 'cancelled_by', 'cancelled_at_after', 'cancelled_at_before']
 
 
 class _CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):

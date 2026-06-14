@@ -104,9 +104,10 @@ class TestBookingCreate:
         assert body['status'] == 'confirmed'
         assert body['description'] == 'Focus session'
 
-    def test_create_booking_success_for_assigned_company_resource(
+    def test_create_booking_basic_company_rejects_assigned_resource(
         self, api_client, employee, assigned_resource
     ):
+        # basic plan employees may NOT book company-assigned resources
         api_client.force_authenticate(user=employee)
         start_time = _next_weekday_at(11)
         end_time = start_time + timedelta(hours=1)
@@ -121,8 +122,8 @@ class TestBookingCreate:
             format='json',
         )
 
-        assert response.status_code == status.HTTP_201_CREATED
-        assert response.json()['resource'] == assigned_resource.id
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'resource_id' in response.json()['error']['details']
 
     def test_create_booking_rejects_resource_assigned_to_other_company(
         self, api_client, employee, resource_other_company
@@ -218,3 +219,71 @@ class TestBookingCreate:
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert 'error' in response.json()
+
+    def test_user_cannot_book_two_overlapping_desks(self, api_client, employee, shared_resource, company):
+        """Two different desk resources overlapping in time for the same user → 409."""
+        api_client.force_authenticate(user=employee)
+        desk_b = Resource.objects.create(
+            name='Desk B',
+            resource_type='desk',
+            assigned_company=None,
+            available_days=[0, 1, 2, 3, 4],
+        )
+        start_time = _next_weekday_at(10)
+        end_time = start_time + timedelta(hours=2)
+        Booking.objects.create(
+            resource=shared_resource,
+            user=employee,
+            company=company,
+            start_time=start_time,
+            end_time=end_time,
+            status='confirmed',
+        )
+
+        response = api_client.post(
+            RESERVATIONS_URL,
+            {
+                'resource_id': desk_b.id,
+                'start_time': (start_time + timedelta(hours=1)).isoformat(),
+                'end_time': (end_time + timedelta(hours=1)).isoformat(),
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_409_CONFLICT
+        body = response.json()
+        assert body['error']['code'] == 'BOOKING_DESK_USER_OVERLAP'
+
+    def test_user_can_book_two_desks_non_overlapping(self, api_client, employee, shared_resource, company):
+        """Two desk bookings with no time overlap for the same user → 201."""
+        api_client.force_authenticate(user=employee)
+        desk_b = Resource.objects.create(
+            name='Desk B Non-overlap',
+            resource_type='desk',
+            assigned_company=None,
+            available_days=[0, 1, 2, 3, 4],
+        )
+        start_a = _next_weekday_at(10)
+        end_a = start_a + timedelta(hours=1)
+        Booking.objects.create(
+            resource=shared_resource,
+            user=employee,
+            company=company,
+            start_time=start_a,
+            end_time=end_a,
+            status='confirmed',
+        )
+
+        start_b = end_a
+        end_b = start_b + timedelta(hours=1)
+        response = api_client.post(
+            RESERVATIONS_URL,
+            {
+                'resource_id': desk_b.id,
+                'start_time': start_b.isoformat(),
+                'end_time': end_b.isoformat(),
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED

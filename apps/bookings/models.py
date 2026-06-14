@@ -117,6 +117,11 @@ class Booking(TimeStampedModel):
     start_time = models.DateTimeField(db_index=True)
     end_time = models.DateTimeField(db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='confirmed', db_index=True)
+    priority = models.PositiveSmallIntegerField(
+        default=1,
+        db_index=True,
+        help_text='Booking priority tier: 1=basic/guest, 2=standard, 3=premium/superadmin',
+    )
     description = models.TextField(blank=True, default='')
 
     cancelled_by = models.ForeignKey(

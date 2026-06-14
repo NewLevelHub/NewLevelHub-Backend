@@ -168,6 +168,47 @@ class TestSuperadminOverview:
         assert r_desk.json()['overview']['bookings_today'] == 1
         assert r_room.json()['overview']['bookings_today'] == 1
 
+    def test_resource_type_filters_peak_hours(self, api_client, superadmin, db):
+        """resource_type param must filter peak_hours (bookings_in_period), not just bookings_today."""
+        now = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        desk = Resource.objects.create(name='Desk', resource_type='desk', is_active=True)
+        room = Resource.objects.create(name='Room', resource_type='meeting_room', is_active=True, capacity=4)
+
+        # one booking on desk, one on room — both in period
+        start = now - timedelta(days=1)
+        Booking.objects.create(
+            resource=desk, user=superadmin,
+            start_time=start, end_time=start + timedelta(hours=1),
+            status='confirmed',
+        )
+        Booking.objects.create(
+            resource=room, user=superadmin,
+            start_time=start, end_time=start + timedelta(hours=1),
+            status='confirmed',
+        )
+
+        api_client.force_authenticate(user=superadmin)
+        with patch('django.utils.timezone.now', return_value=now):
+            r_desk = api_client.get(SUPERADMIN_URL, {'period': '7d', 'resource_type': 'desk'})
+            r_room = api_client.get(SUPERADMIN_URL, {'period': '7d', 'resource_type': 'meeting_room'})
+
+        assert r_desk.status_code == 200
+        assert r_room.status_code == 200
+
+        # resource IDs in top_resources must match filter
+        desk_resource_ids = {row['resource_id'] for row in r_desk.json()['top_resources']}
+        room_resource_ids = {row['resource_id'] for row in r_room.json()['top_resources']}
+        assert desk.id in desk_resource_ids
+        assert room.id not in desk_resource_ids
+        assert room.id in room_resource_ids
+        assert desk.id not in room_resource_ids
+
+        # peak_hours total booking_count must reflect only the filtered resource type
+        desk_total = sum(row['booking_count'] for row in r_desk.json()['peak_hours'])
+        room_total = sum(row['booking_count'] for row in r_room.json()['peak_hours'])
+        assert desk_total == 1
+        assert room_total == 1
+
     def test_company_not_found_404(self, api_client, superadmin):
         api_client.force_authenticate(user=superadmin)
         r = api_client.get(SUPERADMIN_URL, {'period': '7d', 'company_id': 999999999})

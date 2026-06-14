@@ -43,6 +43,20 @@ def _dt(hours_from_now):
     return timezone.now() + timedelta(hours=hours_from_now)
 
 
+def _priority_slot(duration_hours=2, hour=10):
+    """Return (start, end) pinned to a future local day within resource operating hours.
+
+    Relative offsets from ``now()`` can spill past ``available_until`` (23:00) when the
+    suite runs late in the day.  Displacement tests then pass conflict resolution but fail
+    ``_validate_availability_window`` with 400 instead of the expected 201.
+    """
+    local_now = timezone.localtime()
+    target_day = local_now + timedelta(days=1)
+    start = target_day.replace(hour=hour, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=duration_hours)
+    return start, end
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -135,10 +149,13 @@ def shared_resource(db):
     )
 
 
-def _existing_booking(user, resource, start_offset_hours=4, duration_hours=2, priority=1):
+def _existing_booking(user, resource, start_offset_hours=None, duration_hours=2, priority=1):
     """Create a confirmed booking owned by user at the given offset."""
-    start = _dt(start_offset_hours)
-    end = start + timedelta(hours=duration_hours)
+    if start_offset_hours is None:
+        start, end = _priority_slot(duration_hours=duration_hours)
+    else:
+        start = _dt(start_offset_hours)
+        end = start + timedelta(hours=duration_hours)
     return Booking.objects.create(
         resource=resource,
         user=user,
@@ -156,7 +173,7 @@ def _existing_booking(user, resource, start_offset_hours=4, duration_hours=2, pr
 
 @pytest.mark.django_db
 def test_ac1_standard_displaces_basic_future_slot(api_client, standard_user, basic_user, shared_resource):
-    existing = _existing_booking(basic_user, shared_resource, start_offset_hours=4, priority=1)
+    existing = _existing_booking(basic_user, shared_resource, priority=1)
     start = existing.start_time
     end = existing.end_time
 
@@ -269,7 +286,7 @@ def test_ac4_slot_too_soon_no_displace(api_client, premium_user, basic_user, sha
 
 @pytest.mark.django_db
 def test_ac5_premium_displaces_basic_cancelled_status(api_client, premium_user, basic_user, shared_resource):
-    existing = _existing_booking(basic_user, shared_resource, start_offset_hours=5, priority=1)
+    existing = _existing_booking(basic_user, shared_resource, priority=1)
     start = existing.start_time
     end = existing.end_time
 
@@ -296,7 +313,7 @@ def test_ac5_premium_displaces_basic_cancelled_status(api_client, premium_user, 
 
 @pytest.mark.django_db
 def test_ac6_premium_displaces_basic_notification_sent(api_client, premium_user, basic_user, shared_resource):
-    existing = _existing_booking(basic_user, shared_resource, start_offset_hours=5, priority=1)
+    existing = _existing_booking(basic_user, shared_resource, priority=1)
     start = existing.start_time
     end = existing.end_time
 
@@ -325,8 +342,7 @@ def test_ac6_premium_displaces_basic_notification_sent(api_client, premium_user,
 
 @pytest.mark.django_db
 def test_ac7_new_booking_has_correct_priority_standard(api_client, standard_user, shared_resource):
-    start = _dt(4)
-    end = start + timedelta(hours=2)
+    start, end = _priority_slot()
 
     api_client.force_authenticate(standard_user)
     payload = {
@@ -345,8 +361,7 @@ def test_ac7_new_booking_has_correct_priority_standard(api_client, standard_user
 
 @pytest.mark.django_db
 def test_ac7_new_booking_has_correct_priority_premium(api_client, premium_user, shared_resource):
-    start = _dt(4)
-    end = start + timedelta(hours=2)
+    start, end = _priority_slot()
 
     api_client.force_authenticate(premium_user)
     payload = {

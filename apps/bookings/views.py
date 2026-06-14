@@ -1,14 +1,15 @@
 from datetime import date, datetime, time, timedelta
 
 from django.db.models import Prefetch, Q
-from django.http import Http404
+from django.http import FileResponse, Http404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from rest_framework import serializers, viewsets, status
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied, NotFound
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import (
@@ -24,9 +25,10 @@ import rest_framework.fields as fields
 
 from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import translate, get_lang
+from apps.access.models import AccessLog
 from apps.core.permissions import (
     IsSuperAdmin, IsCompanyAdmin, IsOwnerOrAdmin, IsOwnerOrSuperAdmin,
-    IsGuestOrCompanyMember,
+    IsGuestOrCompanyMember, IsSuperAdminOrReception,
 )
 from apps.notifications.utils import create_notification
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
@@ -51,6 +53,7 @@ from .serializers import (
     ResourceDayScheduleSlotSerializer,
     BookingSerializer,
     BookingCreateSerializer,
+    BookingValidateQrSerializer,
     BulkCancelSerializer,
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
@@ -61,6 +64,7 @@ from .serializers import (
 )
 from .filters import ResourceFilter, BookingFilter, BookingCancellationAuditFilter
 from .schedule import get_schedule_status, week_range_for_date
+from .qr_image import generate_booking_qr_image
 from .tasks import create_bookings_for_recurring
 
 
@@ -1675,7 +1679,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         return Response(BookingSerializer(booking, context=self.get_serializer_context()).data)
 
     def get_queryset(self):
-        qs = super().get_queryset().select_related('user')
+        qs = super().get_queryset().select_related('user', 'resource')
         user = self.request.user
         if user.role == 'superadmin':
             return qs.order_by('-created_at', '-id')
@@ -1685,6 +1689,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
             ).values_list('booking_id', flat=True)
             return (
                 Booking.objects.filter(Q(user=user) | Q(pk__in=participant_booking_ids))
+                .select_related('user', 'resource')
                 .order_by('-created_at', '-id')
             )
         if not user.company_id:
@@ -1694,7 +1699,7 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         ).values_list('booking_id', flat=True)
         return (
             Booking.objects.filter(Q(pk__in=qs) | Q(pk__in=participant_booking_ids))
-            .select_related('user')
+            .select_related('user', 'resource')
             .order_by('-created_at', '-id')
         )
 
@@ -2214,6 +2219,88 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
 
     @extend_schema(
         tags=['Bookings'],
+        summary='Validate capsule booking QR (reception desk)',
+        request=BookingValidateQrSerializer,
+        responses={
+            200: inline_serializer(
+                name='BookingQRValidateResponse',
+                fields={
+                    'valid': fields.BooleanField(),
+                    'user_name': fields.CharField(required=False),
+                    'resource_name': fields.CharField(required=False),
+                    'capsule_zone': fields.CharField(required=False),
+                    'start_time': fields.DateTimeField(required=False),
+                    'end_time': fields.DateTimeField(required=False),
+                    'reason': fields.CharField(required=False),
+                    'available_from': fields.DateTimeField(required=False),
+                },
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Only superadmin and reception can validate'),
+        },
+    )
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='validate-qr',
+        permission_classes=[IsSuperAdminOrReception],
+    )
+    def validate_qr(self, request):
+        serializer = BookingValidateQrSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        qr_code = serializer.validated_data['qr_code']
+        try:
+            booking = Booking.objects.select_related('user', 'resource').get(qr_code=qr_code)
+        except Booking.DoesNotExist:
+            return Response({'valid': False, 'reason': 'not_found'})
+
+        if booking.resource.resource_type != 'capsule':
+            return Response({'valid': False, 'reason': 'not_found'})
+
+        now = timezone.now()
+
+        if booking.status == 'cancelled':
+            return Response({'valid': False, 'reason': 'cancelled'})
+        if booking.status == 'completed':
+            return Response({'valid': False, 'reason': 'completed'})
+        if booking.status == 'no_show':
+            return Response({'valid': False, 'reason': 'no_show'})
+        if booking.status != 'confirmed':
+            return Response({'valid': False, 'reason': 'not_found'})
+
+        if now < booking.start_time:
+            return Response({
+                'valid': False,
+                'reason': 'not_yet_active',
+                'available_from': booking.start_time.isoformat(),
+            })
+
+        if now > booking.end_time:
+            return Response({'valid': False, 'reason': 'expired'})
+
+        with transaction.atomic():
+            locked = Booking.objects.select_for_update().select_related('user', 'resource').get(pk=booking.pk)
+            if locked.checked_in_at is None:
+                locked.checked_in_at = now
+                locked.save(update_fields=['checked_in_at'])
+            AccessLog.objects.create(
+                booking=locked,
+                user=locked.user,
+                checked_by=request.user,
+                method='qr',
+            )
+
+        return Response({
+            'valid': True,
+            'user_name': booking.user.full_name,
+            'resource_name': booking.resource.name,
+            'capsule_zone': booking.resource.capsule_zone,
+            'start_time': booking.start_time,
+            'end_time': booking.end_time,
+        })
+
+    @extend_schema(
+        tags=['Bookings'],
         summary='Manually trigger auto-complete bookings (superadmin)',
         description=(
             'Runs the auto_complete_bookings Celery task synchronously. '
@@ -2284,6 +2371,40 @@ class BookingViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.Mo
         from .tasks import mark_no_show_bookings
         count = mark_no_show_bookings()
         return Response({'no_show_marked': count})
+
+
+@extend_schema(
+    tags=['Bookings'],
+    summary='Get capsule booking QR image (public)',
+    responses={
+        200: OpenApiResponse(description='PNG image'),
+        404: OpenApiResponse(description='Booking or image not found'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def booking_qr_image(request, qr_code):
+    """Serve QR PNG by booking UUID for display in apps and email clients."""
+    try:
+        booking = Booking.objects.select_related('resource').get(qr_code=qr_code)
+    except Booking.DoesNotExist:
+        raise Http404
+
+    if booking.resource.resource_type != 'capsule' or booking.status == 'cancelled':
+        raise Http404
+
+    if not booking.qr_image:
+        generate_booking_qr_image(booking)
+
+    try:
+        image_file = booking.qr_image.open('rb')
+    except FileNotFoundError:
+        generate_booking_qr_image(booking)
+        image_file = booking.qr_image.open('rb')
+
+    response = FileResponse(image_file, content_type='image/png')
+    response['Cache-Control'] = 'private, max-age=3600'
+    return response
 
 
 # ---------------------------------------------------------------------------

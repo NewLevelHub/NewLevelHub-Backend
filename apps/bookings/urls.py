@@ -9,6 +9,11 @@ router.register('recurring', views.RecurringBookingViewSet, basename='recurring-
 router.register('cancellation-audit', views.BookingCancellationAuditViewSet, basename='cancellation-audit')
 
 urlpatterns = [
+    path(
+        'reservations/qr/<uuid:qr_code>/image/',
+        views.booking_qr_image,
+        name='booking-qr-image',
+    ),
     path('', include(router.urls)),
     path('members/', views.BookingMembersView.as_view(), name='booking-members'),
 ]

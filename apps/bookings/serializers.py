@@ -776,6 +776,9 @@ class BookingCreateSerializer(serializers.ModelSerializer):
                 validated_data['company'] = user.company or resource.assigned_company
             booking = super().create(validated_data)
 
+            from .qr_image import ensure_capsule_booking_qr
+            ensure_capsule_booking_qr(booking)
+
             # Cancel any displaced lower-priority bookings and notify their owners.
             for displaced_booking in self._bookings_to_displace:
                 displaced_booking.status = 'cancelled'
@@ -876,23 +879,34 @@ class BookingUserSerializer(serializers.ModelSerializer):
         return url
 
 
+class BookingValidateQrSerializer(serializers.Serializer):
+    qr_code = serializers.UUIDField()
+
+
 class BookingSerializer(serializers.ModelSerializer):
     resource_name = serializers.CharField(source='resource.name', read_only=True)
+    resource_type = serializers.CharField(source='resource.resource_type', read_only=True)
+    capsule_zone = serializers.CharField(source='resource.capsule_zone', read_only=True)
     user_name = serializers.CharField(source='user.full_name', read_only=True)
     booked_by = serializers.SerializerMethodField()
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
+    qr_image = serializers.ImageField(read_only=True)
     cancel_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Booking
         fields = [
-            'id', 'resource', 'resource_name', 'user', 'user_name', 'booked_by', 'company',
+            'id', 'resource', 'resource_name', 'resource_type', 'capsule_zone',
+            'user', 'user_name', 'booked_by', 'company',
             'start_time', 'end_time', 'status', 'description',
             'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
-            'checked_in_at', 'created_at', 'updated_at',
+            'checked_in_at', 'qr_code', 'qr_image', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'user', 'company', 'checked_in_at', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'user', 'company', 'checked_in_at', 'qr_code', 'qr_image',
+            'created_at', 'updated_at',
+        ]
 
     def get_cancel_reason(self, obj):
         reason = obj.cancel_reason

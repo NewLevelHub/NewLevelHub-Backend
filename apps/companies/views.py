@@ -50,6 +50,7 @@ from .serializers import (
     CompanyMemberActivitySerializer,
     MemberDeactivateSerializer,
     MemberRemoveSerializer,
+    MemberChangeRoleSerializer,
     OnboardingStatusSerializer,
 )
 from .tasks import send_invitation_email
@@ -344,7 +345,8 @@ class CompanyViewSet(viewsets.ModelViewSet):
         if self.action in ('create', 'destroy', 'deactivate', 'activate'):
             return [IsSuperAdmin()]
         if self.action in ('update', 'partial_update',
-                           'deactivate_member', 'activate_member', 'remove_member'):
+                           'deactivate_member', 'activate_member', 'remove_member',
+                           'change_member_role'):
             # Both superadmin and company_admin may perform these actions; the
             # views themselves enforce additional role-based checks (e.g.
             # only superadmin can remove another company_admin).
@@ -828,6 +830,85 @@ class CompanyViewSet(viewsets.ModelViewSet):
             {'detail': translate('company.user_removed_from_company', lang), 'tasks_reassigned': tasks_count},
             status=status.HTTP_200_OK,
         )
+
+    @extend_schema(
+        tags=['Companies'],
+        summary='Change a company member\'s role (company_admin / superadmin)',
+        request=MemberChangeRoleSerializer,
+        responses={
+            200: OpenApiResponse(description='Role changed successfully'),
+            400: OpenApiResponse(
+                description=(
+                    'Invalid role / cannot change own role / '
+                    'cannot change guest or superadmin role / '
+                    'last admin demotion forbidden'
+                )
+            ),
+            401: OpenApiResponse(description='Not authenticated'),
+            403: OpenApiResponse(description='Company admin or superadmin only'),
+            404: OpenApiResponse(description='Company or user not found'),
+        },
+        parameters=[
+            OpenApiParameter(
+                name='user_id',
+                location=OpenApiParameter.PATH,
+                type=OpenApiTypes.INT,
+                description='ID of the member whose role should be changed.',
+            ),
+        ],
+    )
+    @action(
+        detail=True,
+        methods=['patch'],
+        url_path='members/(?P<user_id>[0-9]+)/role',
+        url_name='change-member-role',
+    )
+    def change_member_role(self, request, pk=None, user_id=None):
+        lang = get_lang(request)
+        company = self.get_object()
+        target = get_object_or_404(User, pk=user_id, company=company)
+
+        # Self-change is not allowed for anyone.
+        if target.pk == request.user.pk:
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_CHANGE_OWN_ROLE,
+                i18n_key='company.cannot_change_own_role',
+            )
+
+        # Guests and superadmins cannot have their role changed via this endpoint.
+        if target.role in ('guest', 'superadmin'):
+            raise LocalizedError(
+                code=error_codes.COMPANY_CANNOT_CHANGE_ROLE_OF_GUEST_OR_SUPERADMIN,
+                i18n_key='company.cannot_change_role_of_guest_or_superadmin',
+            )
+
+        serializer = MemberChangeRoleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_role = serializer.validated_data['role']
+
+        # No-op: role is already set to the requested value.
+        if target.role == new_role:
+            return Response({'detail': translate('company.role_changed', lang)}, status=status.HTTP_200_OK)
+
+        # Demoting a company_admin: guard against removing the last admin.
+        if target.role == 'company_admin' and new_role == 'employee':
+            # Only superadmin may demote even when they are the last admin.
+            if request.user.role != 'superadmin':
+                remaining_admins = User.objects.filter(
+                    company=company,
+                    role='company_admin',
+                    is_active=True,
+                ).count()
+                if remaining_admins <= 1:
+                    raise LocalizedError(
+                        code=error_codes.COMPANY_LAST_ADMIN_DEMOTION_FORBIDDEN,
+                        i18n_key='company.last_admin_demotion_forbidden',
+                    )
+
+        target.role = new_role
+        target.save(update_fields=['role'])
+
+        return Response({'detail': translate('company.role_changed', lang)}, status=status.HTTP_200_OK)
 
     # ------------------------------------------------------------------
     # Onboarding actions

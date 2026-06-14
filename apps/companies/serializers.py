@@ -672,6 +672,14 @@ class MemberRemoveSerializer(serializers.Serializer):
     )
 
 
+class MemberChangeRoleSerializer(serializers.Serializer):
+    """Request body for changing a company member's role."""
+    role = serializers.ChoiceField(
+        choices=['company_admin', 'employee'],
+        help_text='New role for the member. Allowed: company_admin, employee.',
+    )
+
+
 class OnboardingStepSerializer(serializers.Serializer):
     """A single onboarding step."""
     key = serializers.CharField()

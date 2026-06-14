@@ -154,7 +154,7 @@ class TestResourceCreate:
         )
         assert r.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_superadmin_create_desk(self, api_client, superadmin, company):
+    def test_superadmin_create_desk(self, api_client, superadmin, premium_company):
         api_client.force_authenticate(user=superadmin)
         r = api_client.post(
             RESOURCES_URL,
@@ -166,16 +166,16 @@ class TestResourceCreate:
                 'has_dock': True,
                 'has_power_outlet': True,
                 'is_hot_desk': True,
-                'assigned_company': company.id,
+                'assigned_company': premium_company.id,
             },
             format='json',
         )
         assert r.status_code == status.HTTP_201_CREATED
         body = r.json()
         assert body['type'] == 'desk'
-        assert body['assigned_company'] == company.id
+        assert body['assigned_company'] == premium_company.id
 
-    def test_superadmin_create_parking(self, api_client, superadmin, company):
+    def test_superadmin_create_parking(self, api_client, superadmin, premium_company):
         api_client.force_authenticate(user=superadmin)
         r = api_client.post(
             RESOURCES_URL,
@@ -184,7 +184,7 @@ class TestResourceCreate:
                 'name': 'P-01',
                 'floor': 1,
                 'parking_type': 'vip',
-                'assigned_company': company.id,
+                'assigned_company': premium_company.id,
             },
             format='json',
         )
@@ -520,21 +520,16 @@ class TestResourceCatalogOrdering:
 @pytest.mark.django_db
 class TestResourceCatalogAssignedVisibility:
     def test_basic_does_not_see_own_company_assigned(
-        self, api_client, superadmin, employee, company
+        self, api_client, employee, company
     ):
         # basic plan: assigned resources are hidden even if assigned to own company
-        api_client.force_authenticate(user=superadmin)
-        c = api_client.post(
-            RESOURCES_URL,
-            {
-                'type': 'desk',
-                'name': 'Dedicated basic',
-                'floor': 1,
-                'assigned_company': company.id,
-            },
-            format='json',
+        resource = Resource.objects.create(
+            resource_type='desk',
+            name='Dedicated basic',
+            floor=1,
+            assigned_company=company,
         )
-        rid = c.json()['id']
+        rid = resource.id
         api_client.force_authenticate(user=employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}
@@ -559,20 +554,15 @@ class TestResourceCatalogAssignedVisibility:
         assert rid in ids
 
     def test_premium_does_not_see_other_company_assigned(
-        self, api_client, superadmin, premium_employee, company
+        self, api_client, premium_employee, company
     ):
-        api_client.force_authenticate(user=superadmin)
-        c = api_client.post(
-            RESOURCES_URL,
-            {
-                'type': 'desk',
-                'name': 'Other co desk',
-                'floor': 1,
-                'assigned_company': company.id,
-            },
-            format='json',
+        resource = Resource.objects.create(
+            resource_type='desk',
+            name='Other co desk',
+            floor=1,
+            assigned_company=company,
         )
-        rid = c.json()['id']
+        rid = resource.id
         api_client.force_authenticate(user=premium_employee)
         r = api_client.get(RESOURCES_URL)
         ids = {x['id'] for x in _list_results(r)}
@@ -1082,12 +1072,12 @@ class TestResourceFilterByCompany:
     """Superadmin must be able to filter resources by assigned_company via ?assigned_company= or ?company_id=."""
 
     def test_filter_by_assigned_company_returns_assigned_resource(
-        self, api_client, superadmin, company
+        self, api_client, superadmin, premium_company
     ):
         api_client.force_authenticate(user=superadmin)
         assigned = api_client.post(
             RESOURCES_URL,
-            {'type': 'desk', 'name': 'CompanyDesk', 'floor': 1, 'assigned_company': company.id},
+            {'type': 'desk', 'name': 'CompanyDesk', 'floor': 1, 'assigned_company': premium_company.id},
             format='json',
         )
         unassigned = api_client.post(
@@ -1098,38 +1088,38 @@ class TestResourceFilterByCompany:
         assigned_id = assigned.json()['id']
         unassigned_id = unassigned.json()['id']
 
-        r = api_client.get(RESOURCES_URL, {'assigned_company': company.id})
+        r = api_client.get(RESOURCES_URL, {'assigned_company': premium_company.id})
         assert r.status_code == status.HTTP_200_OK
         ids = {x['id'] for x in _list_results(r)}
         assert assigned_id in ids
         assert unassigned_id not in ids
 
-    def test_filter_by_company_id_alias(self, api_client, superadmin, company):
+    def test_filter_by_company_id_alias(self, api_client, superadmin, premium_company):
         api_client.force_authenticate(user=superadmin)
         assigned = api_client.post(
             RESOURCES_URL,
-            {'type': 'desk', 'name': 'AliasDesk', 'floor': 2, 'assigned_company': company.id},
+            {'type': 'desk', 'name': 'AliasDesk', 'floor': 2, 'assigned_company': premium_company.id},
             format='json',
         )
         assigned_id = assigned.json()['id']
 
-        r = api_client.get(RESOURCES_URL, {'company_id': company.id})
+        r = api_client.get(RESOURCES_URL, {'company_id': premium_company.id})
         assert r.status_code == status.HTTP_200_OK
         ids = {x['id'] for x in _list_results(r)}
         assert assigned_id in ids
 
     def test_filter_by_wrong_company_excludes_resource(
-        self, api_client, superadmin, company, premium_company
+        self, api_client, superadmin, premium_company, company
     ):
         api_client.force_authenticate(user=superadmin)
         assigned = api_client.post(
             RESOURCES_URL,
-            {'type': 'desk', 'name': 'WrongCoDeskDEV63', 'floor': 1, 'assigned_company': company.id},
+            {'type': 'desk', 'name': 'WrongCoDeskDEV63', 'floor': 1, 'assigned_company': premium_company.id},
             format='json',
         )
         assigned_id = assigned.json()['id']
 
-        r = api_client.get(RESOURCES_URL, {'assigned_company': premium_company.id})
+        r = api_client.get(RESOURCES_URL, {'assigned_company': company.id})
         assert r.status_code == status.HTTP_200_OK
         ids = {x['id'] for x in _list_results(r)}
         assert assigned_id not in ids

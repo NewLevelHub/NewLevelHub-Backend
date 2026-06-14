@@ -131,7 +131,10 @@ class TestCapsuleBookingQrGeneration:
 
 @pytest.mark.django_db
 class TestBookingQrValidate:
-    def _make_capsule_booking(self, user, capsule_resource, *, start_offset_hours=0, duration_hours=2, status_code='confirmed'):
+    def _make_capsule_booking(
+        self, user, capsule_resource, *,
+        start_offset_hours=0, duration_hours=2, status_code='confirmed',
+    ):
         start = timezone.now() + timedelta(hours=start_offset_hours)
         end = start + timedelta(hours=duration_hours)
         booking = Booking.objects.create(

@@ -168,29 +168,33 @@ class TestSuperadminOverview:
         assert r_desk.json()['overview']['bookings_today'] == 1
         assert r_room.json()['overview']['bookings_today'] == 1
 
-    def test_resource_type_filters_peak_hours(self, api_client, superadmin, db):
+    def test_resource_type_filters_peak_hours(self, api_client, superadmin, company_a, employee):
         """resource_type param must filter peak_hours (bookings_in_period), not just bookings_today."""
         now = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
         desk = Resource.objects.create(name='Desk', resource_type='desk', is_active=True)
         room = Resource.objects.create(name='Room', resource_type='meeting_room', is_active=True, capacity=4)
 
-        # one booking on desk, one on room — both in period
+        # one booking on desk, one on room — both in period, scoped to company_a
         start = now - timedelta(days=1)
         Booking.objects.create(
-            resource=desk, user=superadmin,
+            resource=desk, user=employee, company=company_a,
             start_time=start, end_time=start + timedelta(hours=1),
             status='confirmed',
         )
         Booking.objects.create(
-            resource=room, user=superadmin,
+            resource=room, user=employee, company=company_a,
             start_time=start, end_time=start + timedelta(hours=1),
             status='confirmed',
         )
 
         api_client.force_authenticate(user=superadmin)
         with patch('django.utils.timezone.now', return_value=now):
-            r_desk = api_client.get(SUPERADMIN_URL, {'period': '7d', 'resource_type': 'desk'})
-            r_room = api_client.get(SUPERADMIN_URL, {'period': '7d', 'resource_type': 'meeting_room'})
+            r_desk = api_client.get(
+                SUPERADMIN_URL, {'period': '7d', 'resource_type': 'desk', 'company_id': company_a.id},
+            )
+            r_room = api_client.get(
+                SUPERADMIN_URL, {'period': '7d', 'resource_type': 'meeting_room', 'company_id': company_a.id},
+            )
 
         assert r_desk.status_code == 200
         assert r_room.status_code == 200

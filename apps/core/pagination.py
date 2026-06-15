@@ -1,3 +1,4 @@
+# Pagination classes used across all apps.
 from rest_framework.pagination import CursorPagination, PageNumberPagination
 
 

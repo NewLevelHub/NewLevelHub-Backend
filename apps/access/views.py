@@ -85,6 +85,7 @@ class GuestPassViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.
     ).order_by('-created_at')
     http_method_names = ['get', 'post']
     filterset_class = GuestPassFilter
+    search_fields = ['guest_name', 'guest_email']
 
     def get_permissions(self):
         if self.action in ('list', 'retrieve', 'create', 'validations'):

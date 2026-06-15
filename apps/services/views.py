@@ -469,14 +469,14 @@ class FloorViewSet(viewsets.ModelViewSet):
         # is expressed on Resource.assigned_company.
         if user.role != 'superadmin':
             points_qs = points_qs.filter(
-                Q(company__isnull=True) |
-                Q(company__plan__in=['basic', 'standard']) |
-                Q(company__plan='premium', company_id=user.company_id)
+                Q(company__isnull=True)
+                | Q(company__plan__in=['basic', 'standard'])
+                | Q(company__plan='premium', company_id=user.company_id)
             ).filter(
-                Q(resource__isnull=True) |
-                Q(resource__assigned_company__isnull=True) |
-                Q(resource__assigned_company__plan__in=['basic', 'standard']) |
-                Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
+                Q(resource__isnull=True)
+                | Q(resource__assigned_company__isnull=True)
+                | Q(resource__assigned_company__plan__in=['basic', 'standard'])
+                | Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
             )
 
         serializer = MapPointSerializer(
@@ -613,14 +613,14 @@ class MapPointViewSet(viewsets.ModelViewSet):
         if user.role == 'superadmin':
             return qs
         return qs.filter(
-            Q(company__isnull=True) |
-            Q(company__plan__in=['basic', 'standard']) |
-            Q(company__plan='premium', company_id=user.company_id)
+            Q(company__isnull=True)
+            | Q(company__plan__in=['basic', 'standard'])
+            | Q(company__plan='premium', company_id=user.company_id)
         ).filter(
-            Q(resource__isnull=True) |
-            Q(resource__assigned_company__isnull=True) |
-            Q(resource__assigned_company__plan__in=['basic', 'standard']) |
-            Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
+            Q(resource__isnull=True)
+            | Q(resource__assigned_company__isnull=True)
+            | Q(resource__assigned_company__plan__in=['basic', 'standard'])
+            | Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
         )
 
     def get_permissions(self):

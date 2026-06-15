@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils import timezone
 
+# Base abstract models used across all apps for timestamps and soft deletion.
+
 
 class TimeStampedModel(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

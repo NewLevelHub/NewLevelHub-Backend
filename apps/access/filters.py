@@ -12,7 +12,7 @@ class AccessLogFilter(django_filters.FilterSet):
         model = AccessLog
         fields = ['company_id', 'date_from', 'date_to', 'method', 'is_entry']
 
-
+# GuestPassFilter
 class GuestPassFilter(django_filters.FilterSet):
     company_id = django_filters.NumberFilter(field_name='company_id')
     company_name = django_filters.CharFilter(field_name='company__name', lookup_expr='icontains')

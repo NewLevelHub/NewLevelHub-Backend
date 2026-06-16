@@ -457,9 +457,30 @@ class FloorViewSet(viewsets.ModelViewSet):
         else:
             at_time = timezone.now()
 
-        points = MapPoint.objects.select_related('resource', 'company').filter(floor=floor)
+        user = request.user
+        points_qs = MapPoint.objects.select_related(
+            'resource', 'resource__assigned_company', 'company',
+        ).filter(floor=floor)
+        # Superadmin sees all points.
+        # Premium-company points are private: visible only to that company's members.
+        # We check both MapPoint.company (office-type points) and
+        # resource.assigned_company (desk/meeting_room/etc. points) because for
+        # bookable resource types MapPoint.company may be null while the exclusivity
+        # is expressed on Resource.assigned_company.
+        if user.role != 'superadmin':
+            points_qs = points_qs.filter(
+                Q(company__isnull=True)
+                | Q(company__plan__in=['basic', 'standard'])
+                | Q(company__plan='premium', company_id=user.company_id)
+            ).filter(
+                Q(resource__isnull=True)
+                | Q(resource__assigned_company__isnull=True)
+                | Q(resource__assigned_company__plan__in=['basic', 'standard'])
+                | Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
+            )
+
         serializer = MapPointSerializer(
-            points,
+            points_qs,
             many=True,
             context={'now': at_time, 'request': request},
         )
@@ -586,6 +607,22 @@ class MapPointViewSet(viewsets.ModelViewSet):
     filter_backends = [SearchFilter]
     search_fields = ['label']
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = MapPoint.objects.select_related('resource', 'resource__assigned_company', 'company')
+        if user.role == 'superadmin':
+            return qs
+        return qs.filter(
+            Q(company__isnull=True)
+            | Q(company__plan__in=['basic', 'standard'])
+            | Q(company__plan='premium', company_id=user.company_id)
+        ).filter(
+            Q(resource__isnull=True)
+            | Q(resource__assigned_company__isnull=True)
+            | Q(resource__assigned_company__plan__in=['basic', 'standard'])
+            | Q(resource__assigned_company__plan='premium', resource__assigned_company_id=user.company_id)
+        )
+
     def get_permissions(self):
         if self.action in ('create', 'update', 'partial_update', 'destroy'):
             return [IsSuperAdmin()]
@@ -617,8 +654,8 @@ class MapPointViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         points = (
-            MapPoint.objects
-            .select_related('resource', 'floor')
+            self.get_queryset()
+            .select_related('floor')
             .filter(Q(label__icontains=q) | Q(resource__name__icontains=q))
         )
         serializer = MapPointSearchSerializer(points, many=True)

@@ -120,7 +120,8 @@ jobs:
 
             docker pull "$BACKEND_IMAGE"
 
-docker rm -f nlh_backend_prod nlh_nginx_prod nlh_celery_prod nlh_celery_beat_prod nlh_dozzle_prod 2>/dev/null || true
+            docker rm -f nlh_backend_prod nlh_nginx_prod nlh_celery_prod nlh_celery_beat_prod 2>/dev/null || true
+            docker rm -f nlh_dozzle_prod 2>/dev/null || true
 
             DEPLOY_SERVICES="backend nginx celery celery_beat"
             if [ -f "dozzle/users.yml" ]; then

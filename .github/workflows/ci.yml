@@ -415,10 +415,36 @@ jobs:
             fi
 
             echo "--- [5a/5] Writing nginx config ---"
-            sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+            CERT_PATH="/etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem"
+            if [ -f "$CERT_PATH" ]; then
+              sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
                 server_name ${PR_SLUG}.staging.newlevelhub.kz;
+                return 301 https://\$host\$request_uri;
+            }
+
+            server {
+                listen 443 ssl;
+                server_name ${PR_SLUG}.staging.newlevelhub.kz;
+
+                ssl_certificate /etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem;
+                ssl_certificate_key /etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/privkey.pem;
+
+                location /dozzle/ {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT}/dozzle/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 3600;
+                    proxy_send_timeout 3600;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
 
                 location / {
                     proxy_pass http://127.0.0.1:${PREVIEW_PORT};
@@ -431,14 +457,46 @@ jobs:
                 }
             }
             NGINXEOF
+            else
+              sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+            server {
+                listen 80;
+                server_name ${PR_SLUG}.staging.newlevelhub.kz;
+
+                location /dozzle/ {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT}/dozzle/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 3600;
+                    proxy_send_timeout 3600;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
+                location / {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT};
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 300;
+                    client_max_body_size 100M;
+                }
+            }
+            NGINXEOF
+            fi
 
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
             echo "--- [5b/5] Ensuring SSL certificate ---"
-            CERT_PATH="/etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem"
             if [ -f "$CERT_PATH" ]; then
-              echo "Certificate already exists for ${PR_SLUG}; skipping certbot issue step"
+              echo "Certificate already exists — nginx config includes SSL"
             else
               sleep 2
               sudo certbot --nginx \

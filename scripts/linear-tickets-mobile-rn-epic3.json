@@ -1,0 +1,257 @@
+[
+  {
+    "identifier": "DEV-377",
+    "title": "[MOB-301] Bootstrap health check — ping/health на Splash",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-301.\n**Док:** `mobile-api-docs/mobile_api_core.md` → GET /health/, GET /ping/\n\nПеренести pre-flight проверку API из placeholder `HomeScreen` в bootstrap flow приложения.\n\n**Уже есть (Epic 0):**\n- `src/core/network/coreApi.ts` — `ping()`, `health()`\n- `src/core/network/connectivityProbe.ts` — `ConnectivityProbe.run()`\n- `src/features/auth/screens/SplashScreen.tsx`\n\n**Что сделать:**\n1. В `authStore.bootstrap()` или отдельном `appBootstrap.ts` вызывать `ConnectivityProbe` **до** `GET /auth/me/`\n2. Результаты:\n   - `ok` → продолжить bootstrap (tokens → me)\n   - `health_unavailable` (503) → экран «Сервис временно недоступен» (MOB-302)\n   - `ping_failed` → экран «Нет сети» с retry\n3. Убрать debug-карточку ping/health с `HomeScreen`\n\n**Файлы:**\n- `src/core/bootstrap/appBootstrap.ts`\n- `src/core/auth/authStore.ts` — интеграция probe\n- `src/features/auth/screens/SplashScreen.tsx` — loading / retry UI\n\n**RN статус:** 🟡 Частично — probe есть, но только на Home, не в bootstrap",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": false,
+    "dependsOn": ["DEV-355", "DEV-368"],
+    "acceptanceCriteria": [
+      "При cold start сначала `GET /ping/`, затем `GET /health/`",
+      "503 health → не вызывается `GET /auth/me/`, показывается экран недоступности",
+      "Сетевая ошибка ping → экран с кнопкой «Повторить»",
+      "Успешный probe → обычный auth bootstrap без регрессий",
+      "Debug-карточка API probe удалена с `HomeScreen`",
+      "Unit-тест `ConnectivityProbe` для 3 веток: ok, health_unavailable, ping_failed"
+    ]
+  },
+  {
+    "identifier": "DEV-378",
+    "title": "[MOB-302] Экран «Сервис недоступен» — offline / 503 UX",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-301 (часть UI) + MOB-1302 (offline preview).\n**Док:** `mobile_api_core.md` → ошибки /health/\n\nПолноэкранные состояния при недоступности бэкенда.\n\n**Сценарии:**\n| Состояние | Когда | UI |\n|-----------|-------|----|\n| `service_unavailable` | health 503, database unavailable | «Сервис временно недоступен» |\n| `no_connection` | ping failed, timeout, нет сети | «Проверьте подключение к интернету» |\n\n**Компонент:** `src/shared/ui/AppErrorView` (из MOB-008) с `onRetry`\n\n**Экран:** `src/features/core/screens/ServiceUnavailableScreen.tsx`\n\n**Retry:** повторный `ConnectivityProbe.run()` → при ok переход к bootstrap\n\n**Опционально:** `expo-network` / `@react-native-community/netinfo` для offline-индикатора в шапке (phase 1.5)",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "ui"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-360"],
+    "acceptanceCriteria": [
+      "`AppErrorView` реализован: icon, title, message, кнопка «Повторить»",
+      "Экран показывается при 503 health без попытки login/me",
+      "Экран показывается при network error ping",
+      "Retry успешно возвращает пользователя в bootstrap flow",
+      "Тексты на русском, соответствуют mobile_api_core.md",
+      "Используется UI-kit, не raw `View`/`Text`"
+    ]
+  },
+  {
+    "identifier": "DEV-379",
+    "title": "[MOB-303] Dashboard API layer — types, endpoints, fetchDashboard",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-303.\n**Док:** `mobile-api-docs/mobile_api_core.md` → GET /dashboard/\n\nData layer главного экрана: один запрос — разные поля по роли.\n\n**API:** `GET /api/v1/dashboard/` (🔒 Bearer)\n\n**Файлы:**\n- `src/shared/api/endpoints.ts` — добавить `core.dashboard`, `core.calendarEvents`\n- `src/features/core/types/dashboard.ts` — TypeScript types\n- `src/features/core/api/dashboardApi.ts` — `fetchDashboard()`\n- `src/features/core/api/mapDashboard.ts` — парсинг + `resolveMediaUrl` для avatar\n\n**Базовые типы:**\n```ts\ninterface DashboardUser {\n  id: number;\n  full_name: string;\n  avatar: string | null;\n}\n\ninterface DashboardBase {\n  role: UserRole;\n  user: DashboardUser;\n}\n```\n\n**Discriminated union по `role`:**\n- `SuperadminDashboard`\n- `CompanyAdminDashboard`\n- `EmployeeDashboard`\n- `GuestDashboard` (включая reception, service_manager)\n\n**Важно из доки:**\n- `user.avatar` — относительный путь → `resolveMediaUrl()`\n- «Сегодня» считается в Asia/Almaty на сервере\n- guest/reception/service_manager — одинаковый набор полей\n\n**RN статус:** 🔴 Не начато",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": false,
+    "dependsOn": ["DEV-354", "DEV-358"],
+    "acceptanceCriteria": [
+      "`fetchDashboard()` вызывает `GET /dashboard/` через `apiClient`",
+      "TypeScript union по `role` покрывает все 6 ролей из `USER_ROLES`",
+      "`mapDashboard()` парсит nested arrays: bookings, tasks, announcements, pending_approvals",
+      "Avatar paths резолвятся через `resolveMediaUrl()`",
+      "Unit-тесты `mapDashboard` с fixture JSON для employee, company_admin, superadmin, guest",
+      "401 обрабатывается auth interceptor (без дублирования в feature)"
+    ]
+  },
+  {
+    "identifier": "DEV-380",
+    "title": "[MOB-304] useDashboard hook — React Query, pull-to-refresh, cache",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302 (data fetching).\n**Док:** `mobile_api_core.md` → кэширование dashboard\n\nReact Query обёртка для dashboard с рекомендованным TTL.\n\n**Пакет:** `@tanstack/react-query`\n\n**Файл:** `src/features/core/hooks/useDashboard.ts`\n\n**Поведение:**\n- `queryKey: ['dashboard']`\n- `staleTime: 2 * 60 * 1000` (2 мин, как в доке)\n- `refetchOnWindowFocus: true` (app foreground)\n- `refetch()` для pull-to-refresh\n- Loading / error / success states\n\n**Интеграция:**\n- После login/register — `queryClient.invalidateQueries(['dashboard'])`\n- После logout — `queryClient.clear()`\n\n**Ошибки:** через `parseApiError` → `AppErrorView` на экране Home",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-379"],
+    "acceptanceCriteria": [
+      "`useDashboard()` возвращает `{ data, isLoading, isRefetching, error, refetch }`",
+      "staleTime 2 минуты настроен",
+      "Pull-to-refresh вызывает `refetch()`",
+      "После logout dashboard cache очищен",
+      "Повторный заход на Home не дёргает API если данные fresh",
+      "Error state типизирован как `ApiException | null`"
+    ]
+  },
+  {
+    "identifier": "DEV-381",
+    "title": "[MOB-305] Dashboard UI-kit — переиспользуемые виджеты",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302/303 (UI components).\n\nОбщие компоненты для role-specific dashboard screens.\n\n**Файлы:** `src/features/core/components/`\n\n| Компонент | Назначение |\n|-----------|------------|\n| `DashboardHeader` | Avatar (`expo-image`), greeting, unread badge |\n| `KpiCard` / `KpiRow` | Числовые метрики (bookings_today, employee_count…) |\n| `AnnouncementCard` | title, body, category chip, relative date |\n| `BookingCard` | resource_name, time range, status badge |\n| `TaskCard` | title, board_name, due_date, priority, overdue |\n| `PendingApprovalCard` | leave / guest_pass preview для admin |\n| `FloorLoadBar` | progress bar occupancy_pct (superadmin) |\n| `QuickActionChip` | superadmin quick_actions → nav stub |\n| `SectionHeader` | «Мои задачи», «Ближайшие брони» + «Все» |\n\n**Локализация статусов:**\n- booking: confirmed, cancelled, pending\n- leave_type: vacation, day_off, sick_leave, remote\n- priority: low, medium, high\n\n**Empty states:** секция скрывается если массив пустой (как в доке)\n\n**Tap handlers:** placeholder `navigation.navigate(...)` — реальные экраны в Epic 4+",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "ui"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-360", "DEV-379"],
+    "acceptanceCriteria": [
+      "Все 9 компонентов экспортированы из `components/index.ts`",
+      "`DashboardHeader` показывает avatar или initials placeholder",
+      "`BookingCard` форматирует ISO datetime в локальное время (Intl)",
+      "Status/priority/leave_type → русские labels",
+      "Пустые секции не рендерят заголовок",
+      "Storybook/demo или snapshot-тест хотя бы для `KpiCard` + `BookingCard`"
+    ]
+  },
+  {
+    "identifier": "DEV-382",
+    "title": "[MOB-306] Employee dashboard — главный экран сотрудника",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302 (employee branch).\n**Док:** `mobile_api_core.md` → ответ для `employee`\n\nПервый «живой» главный экран после login — MVP employee.\n\n**Виджеты (по доке):**\n1. `DashboardHeader` + `unread_notifications_count` badge\n2. KPI row: `my_tasks_today`, `my_bookings_today`\n3. `my_upcoming_bookings` (до 5)\n4. `my_tasks` (до 5)\n5. `announcement_feed` (до 5)\n6. `ActivityFeed` из MOB-205 (если готов) — compact\n\n**Файл:** `src/features/home/screens/HomeScreen.tsx` — заменить placeholder\n\n**Layout:** `ScrollView` + `RefreshControl` + секции\n\n**Навигация (stubs):**\n- Tap booking → `Routes.Bookings` (placeholder, Epic 4)\n- Tap task → `Routes.Crm` (placeholder, Epic 9)\n- Tap notification badge → `Routes.Notifications` (placeholder, Epic 5)\n- Tap announcement → Services (Epic 8)",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "mvp"],
+    "area": "mobile-core",
+    "parallel": false,
+    "dependsOn": ["DEV-380", "DEV-381", "DEV-373"],
+    "acceptanceCriteria": [
+      "Employee login → Home показывает реальные данные с `GET /dashboard/`",
+      "KPI, bookings, tasks, announcements отображаются по fixture/staging",
+      "Pull-to-refresh обновляет dashboard",
+      "Loading skeleton / `AppLoader` при первой загрузке",
+      "Error → `AppErrorView` с retry",
+      "Роли guest/admin/superadmin на этом экране не ломают layout (см. MOB-307–309)"
+    ]
+  },
+  {
+    "identifier": "DEV-383",
+    "title": "[MOB-307] Company admin dashboard — approvals и team bookings",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302 (company_admin branch).\n**Док:** `mobile_api_core.md` → ответ для `company_admin`\n\nГлавный экран для `company_admin`.\n\n**Виджеты:**\n1. KPI: `employee_count`, `active_tasks`, `bookings_today`, `free_resources_now`\n2. `pending_approvals.leaves` — список с approve/reject stub (Epic 6)\n3. `pending_approvals.guest_passes`\n4. `team_bookings_today` (до 10)\n5. `my_tasks`\n6. `announcement_feed`\n\n**Файл:** `src/features/home/screens/CompanyAdminHomeScreen.tsx` или role-switch в `HomeScreen`\n\n**Рекомендация:** `HomeScreen` делегирует в `DashboardByRole`:\n```tsx\nswitch (data.role) {\n  case 'employee': return <EmployeeDashboard data={data} />;\n  case 'company_admin': return <CompanyAdminDashboard data={data} />;\n  ...\n}\n```\n\n**Admin actions:** кнопки «Согласовать» / «Отклонить» — disabled + tooltip «Скоро» до Epic 6",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-382"],
+    "acceptanceCriteria": [
+      "company_admin видит KPI и pending_approvals",
+      "Leaves и guest_passes рендерятся через `PendingApprovalCard`",
+      "`team_bookings_today` с initials аватара",
+      "Пустые pending_approvals — секция скрыта",
+      "Staging account company_admin проходит ручной smoke",
+      "Навигация на HR/Access — stub routes без crash"
+    ]
+  },
+  {
+    "identifier": "DEV-384",
+    "title": "[MOB-308] Superadmin dashboard — platform KPI и quick_actions",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302 (superadmin branch).\n**Док:** `mobile_api_core.md` → ответ для `superadmin`, quick_actions\n\nГлавный экран для `superadmin`.\n\n**Виджеты:**\n1. Platform KPI: `total_companies`, `total_users`, `bookings_today`, `bookings_week_delta`, `space_load_pct`, `open_service_requests`, `new_companies_last_7d`\n2. `floor_load` — список этажей с `FloorLoadBar`\n3. `bookings_recent`, `announcements_recent`, `recent_events`\n4. `quick_actions` chips → navigation stubs:\n   - `invite_user` → Companies (Epic 11)\n   - `create_announcement` → Services (Epic 8)\n   - `manage_bookings` → Bookings (Epic 4)\n   - `view_analytics` → Analytics (Epic 12)\n   - `manage_companies` → Admin Companies\n\n**Файл:** `src/features/home/components/SuperadminDashboard.tsx`",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "admin"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-382"],
+    "acceptanceCriteria": [
+      "superadmin видит platform KPI и floor_load",
+      "`bookings_week_delta` показывает +/- с цветом",
+      "`quick_actions` рендерятся как tappable chips",
+      "Tap quick_action не падает (stub navigate или toast «Скоро»)",
+      "`recent_events` до 10 элементов",
+      "Staging superadmin smoke (если есть аккаунт)"
+    ]
+  },
+  {
+    "identifier": "DEV-385",
+    "title": "[MOB-309] Guest dashboard — quick_booking и bc_announcements",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-302 (guest branch).\n**Док:** `mobile_api_core.md` → guest / reception / service_manager\n\nГлавный экран для ролей без company scope.\n\n**Виджеты:**\n1. `my_bookings_today`\n2. `quick_booking` — available_desks, available_rooms → CTA «Забронировать» (Epic 4)\n3. `bc_announcements` (scope: building)\n\n**Важно:** `reception` и `service_manager` получают **тот же UI**, что `guest`\n\n**Файл:** `src/features/home/components/GuestDashboard.tsx`\n\n**Role badge:** показывать реальную роль в header (Гость / Ресепшн / Сервис)",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-382"],
+    "acceptanceCriteria": [
+      "guest/reception/service_manager рендерят `GuestDashboard`",
+      "`quick_booking` CTA ведёт на Bookings stub",
+      "`bc_announcements` с category chip",
+      "Нет CRM/HR/team calendar табов (см. MOB-312)",
+      "Guest staging account smoke",
+      "Role label в header соответствует `user.role`"
+    ]
+  },
+  {
+    "identifier": "DEV-386",
+    "title": "[MOB-310] Calendar API — types, fetchCalendarEvents",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-304 (data layer).\n**Док:** `mobile-api-docs/mobile_api_core.md` → GET /calendar/events/\n\nData layer командного календаря отсутствий.\n\n**API:** `GET /api/v1/calendar/events/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`\n\n**Response:** плоский массив (без `results`, без пагинации)\n\n**Файлы:**\n- `src/features/core/types/calendar.ts`\n- `src/features/core/api/calendarApi.ts`\n- `src/features/core/api/mapCalendarEvent.ts`\n\n**Тип события:**\n```ts\ninterface CalendarLeaveEvent {\n  id: string;\n  event_type: 'leave';\n  source_id: number;\n  title: string;\n  start: string; // YYYY-MM-DD\n  end: string;\n  all_day: boolean;\n  status: 'approved';\n  user_id: number;\n  user_name: string;\n  leave_type: 'vacation' | 'day_off' | 'sick_leave' | 'remote';\n  comment: string | null;\n}\n```\n\n**Ошибки:**\n- 400 invalid date → `ApiException`\n- 403 guest/reception/service_manager/без компании → `CalendarForbiddenError` для UI hide\n\n**Доступ по роли:** superadmin, company_admin, employee с компанией",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-379"],
+    "acceptanceCriteria": [
+      "`fetchCalendarEvents({ dateFrom, dateTo })` строит query params",
+      "Парсится массив событий, не object wrapper",
+      "Unit-тест map с fixture из доки",
+      "403 → typed error для скрытия экрана/таба",
+      "400 → field error на невалидные даты",
+      "Endpoint добавлен в `shared/api/endpoints.ts`"
+    ]
+  },
+  {
+    "identifier": "DEV-387",
+    "title": "[MOB-311] Team calendar screen — месячный вид отсутствий",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-304.\n**Док:** `mobile_api_core.md` → календарь\n\nЭкран командного календаря: одобренные отпуска коллег.\n\n**Пакеты (выбрать один):**\n- `react-native-calendars` — month view + marked dates\n- или кастомный month grid на `FlatList`\n\n**Файлы:**\n- `src/features/core/hooks/useCalendarEvents.ts` — React Query, key включает month\n- `src/features/core/screens/TeamCalendarScreen.tsx`\n- `src/features/core/components/CalendarEventList.tsx` — события выбранного дня\n\n**UX:**\n1. Month picker ← → меняет `date_from` / `date_to`\n2. Дни с событиями — dot/mark на календаре\n3. Tap день → список событий снизу\n4. Tap событие → stub «Детали в HR» (Epic 6) с `source_id`\n5. Pull-to-refresh\n\n**Доступ:**\n- Скрыт для guest/reception/service_manager (403 или role check)\n- Доступен из Home: ссылка «Календарь команды» для employee/admin\n\n**Leave type colors:** vacation=blue, sick_leave=red, remote=green, day_off=gray",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": false,
+    "dependsOn": ["DEV-386", "DEV-382"],
+    "acceptanceCriteria": [
+      "Месячный календарь с навигацией prev/next month",
+      "API вызывается с корректным date range на месяц",
+      "События отображаются на выбранный день",
+      "leave_type → цвет + русский label",
+      "guest не видит пункт меню / экран календаря",
+      "403 от API → graceful hide, не crash",
+      "Pull-to-refresh обновляет события"
+    ]
+  },
+  {
+    "identifier": "DEV-388",
+    "title": "[MOB-312] Bottom tab navigation — Home, Bookings, CRM, Profile",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-305.\n\nПерейти от single-stack Home к tab-based app shell для authenticated users.\n\n**Пакеты:**\n- `@react-navigation/bottom-tabs`\n- `@react-navigation/native-stack` (nested)\n\n**Структура:**\n```\nMainTabs (BottomTabNavigator)\n├── HomeTab → HomeStack\n│   ├── Home (dashboard by role)\n│   └── TeamCalendar (MOB-311)\n├── BookingsTab → PlaceholderScreen «Скоро» (Epic 4)\n├── CrmTab → Placeholder (Epic 9) — скрыт для guest/reception\n└── ProfileTab → ProfileStack\n    ├── Profile (MOB-206)\n    ├── ProfileEdit\n    └── ChangePassword\n```\n\n**Role-based tab visibility:**\n| Tab | employee | company_admin | superadmin | guest |\n|-----|----------|---------------|------------|-------|\n| Home | ✓ | ✓ | ✓ | ✓ |\n| Bookings | ✓ | ✓ | ✓ | ✓ |\n| CRM | ✓ | ✓ | ✓ | ✗ |\n| Profile | ✓ | ✓ | ✓ | ✓ |\n\n**Badge:** `unread_notifications_count` с dashboard на Home tab icon (Epic 5 доработает)\n\n**Файлы:**\n- `src/app/navigation/MainTabNavigator.tsx`\n- `src/app/navigation/HomeStack.tsx`\n- `src/app/navigation/ProfileStack.tsx`\n- Обновить `RootNavigator.tsx` — auth stack → MainTabs\n\n**Иконки:** `@expo/vector-icons` (Ionicons)",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "navigation"],
+    "area": "mobile-core",
+    "parallel": false,
+    "dependsOn": ["DEV-382", "DEV-374"],
+    "acceptanceCriteria": [
+      "Authenticated user попадает в `MainTabs`, не в flat Home stack",
+      "4 таба с корректными иконками и русскими labels",
+      "CRM tab скрыт для guest/reception/service_manager",
+      "Profile tab открывает `ProfileScreen` (не placeholder)",
+      "Home → TeamCalendar push внутри HomeStack",
+      "Bookings/CRM placeholders не crash при tap",
+      "Logout из Profile возвращает на auth stack",
+      "Deep links (verify/invite/reset) работают из auth stack без регрессий"
+    ]
+  },
+  {
+    "identifier": "DEV-389",
+    "title": "[MOB-313] Dashboard role router — единая точка рендера по role",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-303 (composition).\n\nРефакторинг: одна точка входа для role-specific dashboard UI.\n\n**Файл:** `src/features/home/components/DashboardByRole.tsx`\n\n```tsx\nexport function DashboardByRole({ data }: { data: DashboardResponse }) {\n  switch (data.role) {\n    case USER_ROLES.SUPERADMIN:\n      return <SuperadminDashboard data={data} />;\n    case USER_ROLES.COMPANY_ADMIN:\n      return <CompanyAdminDashboard data={data} />;\n    case USER_ROLES.EMPLOYEE:\n      return <EmployeeDashboard data={data} />;\n    case USER_ROLES.GUEST:\n    case USER_ROLES.RECEPTION:\n    case USER_ROLES.SERVICE_MANAGER:\n      return <GuestDashboard data={data} />;\n    default:\n      return <AppErrorView message=\"Неизвестная роль\" />;\n  }\n}\n```\n\n**TypeScript:** exhaustiveness check через `satisfies` / `assertNever`\n\n**Тест:** unit test на все ветки switch с минимальными fixtures",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-383", "DEV-384", "DEV-385"],
+    "acceptanceCriteria": [
+      "`DashboardByRole` — единственное место role switch в Home",
+      "TypeScript exhaustive check на все `UserRole`",
+      "Unknown role → fallback UI, не white screen",
+      "Каждый sub-dashboard получает строго типизированные props",
+      "Нет `as any` в role branches",
+      "Unit test: 5 role fixtures рендерят без throw"
+    ]
+  },
+  {
+    "identifier": "DEV-390",
+    "title": "[MOB-314] Epic 3 integration tests — dashboard + calendar smoke",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n\nИнтеграционные тесты и staging smoke checklist для Epic 3.\n\n**Unit tests (Jest):**\n- `mapDashboard.test.ts` — fixtures по ролям\n- `mapCalendarEvent.test.ts`\n- `DashboardByRole.test.tsx` — render per role\n- `ConnectivityProbe` — уже есть, расширить если нужно\n\n**Staging smoke checklist (README или `docs/epic3-smoke.md`):**\n```\n□ Bootstrap: ping 200 + health 200 → Home\n□ Bootstrap: health 503 → Service Unavailable + retry\n□ employee: GET /dashboard/ → KPI + bookings + tasks\n□ company_admin: pending_approvals visible\n□ guest: quick_booking CTA visible, CRM tab hidden\n□ Pull-to-refresh dashboard\n□ Team calendar: month navigation + events\n□ Tab navigation: все видимые табы переключаются\n```\n\n**Опционально:** MSW mock server для dashboard в component tests",
+    "block": "Mobile — Epic 3: Core",
+    "labels": ["mobile", "react-native", "core", "testing"],
+    "area": "mobile-core",
+    "parallel": true,
+    "dependsOn": ["DEV-388", "DEV-387", "DEV-389"],
+    "acceptanceCriteria": [
+      "Jest: минимум 10 unit tests на map/role router",
+      "`npm run test` зелёный в CI",
+      "Smoke checklist задокументирован",
+      "Ручной прогон employee на staging отмечен в PR",
+      "Нет flaky tests на datetime (мокать Date или fixtures)",
+      "Fixtures JSON в `src/features/core/__fixtures__/`"
+    ]
+  }
+]

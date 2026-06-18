@@ -121,6 +121,15 @@ services:
     stdin_open: true
     tty: true
 
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: nlh_dozzle_local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "9999:8080"
+    restart: unless-stopped
+
 volumes:
   postgres_data_local:
     driver: local

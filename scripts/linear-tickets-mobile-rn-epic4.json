@@ -1,0 +1,273 @@
+[
+  {
+    "identifier": "DEV-391",
+    "title": "[MOB-401] Bookings data layer — types, endpoints, API clients",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-401 (data layer).\n**Док:** `mobile-api-docs/mobile_api_bookings.md`\n\nФундамент feature-модуля бронирований. В API сущность называется **`reservations`**, не `bookings`.\n\n**Файлы:**\n- `src/shared/api/endpoints.ts` — секция `bookings`\n- `src/features/bookings/types/resource.ts`\n- `src/features/bookings/types/reservation.ts`\n- `src/features/bookings/types/recurring.ts` (базовые типы для MOB-413)\n- `src/features/bookings/api/resourcesApi.ts`\n- `src/features/bookings/api/reservationsApi.ts`\n- `src/features/bookings/api/mapResource.ts`, `mapReservation.ts`\n\n**Ключевые типы:**\n```ts\ntype ResourceType = 'desk' | 'meeting_room' | 'parking' | 'capsule';\ntype ResourceStatus = 'free' | 'occupied' | 'soon_available' | 'blocked';\ntype ReservationStatus = 'confirmed' | 'cancelled' | 'completed' | 'no_show';\ntype MyBookingFilterStatus = 'upcoming' | 'past' | 'cancelled';\n```\n\n**Методы (минимум MVP):**\n- `fetchResources(params)` → paginated\n- `fetchResource(id)` → detail + schedule preview\n- `fetchResourceSchedule(id, { date | week })`\n- `fetchMyReservations(params)` → `/reservations/my/`\n- `fetchReservation(id)`\n- `createReservation(body)`\n- `cancelReservation(id, reason?)`\n- `fetchMembers(q)` → autocomplete\n\n**Важно из доки:**\n- ISO 8601 **с таймзоной** (`+06:00`) в запросах\n- `photo_url`, `qr_image` — абсолютные; `photo`, `image` — через `resolveMediaUrl()`\n- Пагинация: `{ count, next, previous, results }`\n- Asia/Almaty для «сегодня» на сервере\n\n**RN статус:** 🔴 Не начато",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-354", "DEV-358"],
+    "acceptanceCriteria": [
+      "Endpoints `bookings.*` добавлены в `shared/api/endpoints.ts`",
+      "Types покрывают Resource, Reservation, ScheduleSlot, MemberPickerItem",
+      "`mapResource()` резолвит `photo` / gallery `image` через `resolveMediaUrl()`",
+      "`mapReservation()` парсит `booked_by`, `participants`, `qr_code`, `qr_image`",
+      "Unit-тесты mappers с fixture JSON из mobile_api_bookings.md",
+      "Нет прямых URL в feature — только через `apiClient` + endpoints"
+    ]
+  },
+  {
+    "identifier": "DEV-392",
+    "title": "[MOB-402] Bookings UI-kit — ResourceCard, статусы, слоты времени",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-401/402 (shared UI).\n\nПереиспользуемые компоненты для каталога, деталей и списка броней.\n\n**Файлы:** `src/features/bookings/components/`\n\n| Компонент | Назначение |\n|-----------|------------|\n| `ResourceCard` | photo, name, floor, capacity, status badge |\n| `ResourceStatusBadge` | free / occupied / soon_available / blocked + reason |\n| `ResourceTypeChip` | desk, meeting_room, parking, capsule |\n| `EquipmentChips` | projector, whiteboard, tv, video_conf… |\n| `TimeRangeLabel` | форматирование ISO → «15 июн, 09:00–10:00» |\n| `ScheduleSlotBar` | занятый слот на timeline дня |\n| `ReservationCard` | resource_name, time, status для списка «Мои брони» |\n| `BookingFilterChips` | type, floor, status tabs |\n| `ConflictErrorBanner` | 409 BOOKING_CONFLICT / DESK_USER_OVERLAP |\n\n**Локализация:**\n- resource types → Стол, Переговорная, Парковка, Капсула\n- status colors: free=green, occupied=red, soon_available=amber, blocked=gray\n- reservation status: confirmed, cancelled, completed, no_show\n\n**Зависимости UI:** `expo-image`, UI-kit (`AppButton`, `AppEmptyView`)",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "ui"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-360", "DEV-391"],
+    "acceptanceCriteria": [
+      "Все 9 компонентов экспортированы из `components/index.ts`",
+      "`ResourceStatusBadge` показывает `available_at` для soon_available",
+      "`TimeRangeLabel` корректно форматирует timezone-aware ISO",
+      "Equipment chips рендерят только `true` значения из object",
+      "Snapshot или render test для `ResourceCard` + `ReservationCard`",
+      "Компоненты не содержат API-вызовов — только props"
+    ]
+  },
+  {
+    "identifier": "DEV-393",
+    "title": "[MOB-403] Каталог ресурсов — список, фильтры, пагинация",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-401.\n**Док:** `mobile_api_bookings.md` → GET /bookings/resources/\n\nГлавный экран вкладки Bookings: каталог ресурсов с live-статусом.\n\n**API:** `GET /api/v1/bookings/resources/`\n\n**Фильтры MVP:**\n| Параметр | UI |\n|----------|----|\n| `type` / `resource_type` | chips: все / стол / переговорная / парковка / капсула |\n| `floor` | picker или chips этажей |\n| `capacity_min` | stepper для meeting_room |\n| `search` | TextInput debounce 300ms |\n| `ordering` | name (default), floor, capacity |\n\n**Hook:** `useResources` — `useInfiniteQuery`, key включает filters\n\n**Экран:** `src/features/bookings/screens/ResourceCatalogScreen.tsx`\n\n**UX:**\n- `FlatList` + infinite scroll по `next`\n- Pull-to-refresh\n- Tap card → `ResourceDetail` (MOB-405)\n- FAB «Забронировать» → catalog с highlight free (опционально)\n- Empty state: «Нет ресурсов по фильтрам»\n\n**Тариф basic/guest:** видны только `assigned_company: null` — сервер фильтрует, UI не ломается",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "mvp"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-391", "DEV-392"],
+    "acceptanceCriteria": [
+      "Каталог загружает `GET /resources/` с пагинацией",
+      "Фильтры type/floor/capacity/search применяются к query params",
+      "Каждая карточка показывает `status` badge (free/occupied/…)",
+      "Infinite scroll подгружает следующую страницу",
+      "Pull-to-refresh сбрасывает список",
+      "Tap → navigation на ResourceDetail с `resourceId`",
+      "Staging smoke: список meeting_room отображается"
+    ]
+  },
+  {
+    "identifier": "DEV-394",
+    "title": "[MOB-404] Фильтр «свободно в интервале» — available_from / available_to",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-407.\n**Док:** `mobile_api_bookings.md` → параметры `available_from`, `available_to`\n\nФильтр каталога: показать только ресурсы, свободные в выбранном интервале.\n\n**API:** оба параметра **обязательны** вместе:\n```http\nGET /resources/?available_from=2024-06-15T09:00:00+06:00&available_to=2024-06-15T11:00:00+06:00\n```\n\n**UI:** `ResourceAvailabilityFilter` — bottom sheet или inline:\n1. Date picker (сегодня + N дней по `advance_booking_days`)\n2. Start time / End time pickers\n3. Кнопка «Показать свободные»\n4. Chip «Сбросить фильтр»\n\n**Валидация клиента:**\n- `end > start`\n- meeting_room: 30 мин – 4 ч\n- parking: только целый день (00:00–23:59)\n- capsule: 1–8 ч\n- timezone: всегда `+06:00` (Asia/Almaty) при сериализации\n\n**Интеграция:** расширяет `useResources` filters в MOB-403\n\n**Файлы:**\n- `src/features/bookings/components/AvailabilityFilterSheet.tsx`\n- `src/features/bookings/lib/bookingTimeRules.ts` — правила по типу ресурса",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-393"],
+    "acceptanceCriteria": [
+      "Фильтр отправляет оба params в ISO 8601 с `+06:00`",
+      "Без обоих params фильтр не активен (обычный каталог)",
+      "Client validation блокирует invalid intervals до запроса",
+      "Сброс фильтра возвращает полный каталог",
+      "Unit-тесты `bookingTimeRules` для desk/meeting_room/parking/capsule",
+      "Результаты показывают только free/soon_available ресурсы"
+    ]
+  },
+  {
+    "identifier": "DEV-395",
+    "title": "[MOB-405] Карточка ресурса — детали, фото, equipment, schedule preview",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-402.\n**Док:** `mobile_api_bookings.md` → GET /resources/{id}/\n\nЭкран детальной информации о ресурсе перед бронированием.\n\n**API:** `GET /api/v1/bookings/resources/{id}/`\n\n**Hook:** `useResourceDetail(resourceId)`\n\n**UI секции:**\n1. Photo gallery (`photos[]` или `photo_url`) — horizontal scroll, `expo-image`\n2. Name, type, floor, zone, capacity\n3. Live status badge + `reason` / `available_at`\n4. Equipment grid (`EquipmentChips`)\n5. `assigned_company_name` если есть\n6. Schedule preview (7 дней из ответа) — compact list\n7. CTA «Забронировать» → `CreateReservation` (MOB-407)\n\n**Файл:** `src/features/bookings/screens/ResourceDetailScreen.tsx`\n\n**Ошибки:** 404 → «Ресурс не найден» + back",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-393"],
+    "acceptanceCriteria": [
+      "GET /resources/{id}/ парсится полностью включая schedule preview",
+      "Gallery показывает все photos с resolved URLs",
+      "Status badge отражает free/occupied/soon_available/blocked",
+      "CTA disabled если status=blocked",
+      "CTA «Забронировать» передаёт resourceId + type в create flow",
+      "404 обрабатывается без crash"
+    ]
+  },
+  {
+    "identifier": "DEV-396",
+    "title": "[MOB-406] Расписание ресурса — day/week view для выбора слота",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-402/403 (schedule picker).\n**Док:** `mobile_api_bookings.md` → GET /resources/{id}/schedule/\n\nКомпонент выбора свободного слота на основе занятости ресурса.\n\n**API:**\n```http\nGET /resources/{id}/schedule/?date=2024-06-15\nGET /resources/{id}/schedule/?week=2024-06-10\n```\n\n**Файлы:**\n- `src/features/bookings/hooks/useResourceSchedule.ts`\n- `src/features/bookings/components/ScheduleDayPicker.tsx`\n- `src/features/bookings/components/ScheduleTimeline.tsx`\n- `src/features/bookings/lib/findFreeSlots.ts` — вычисление свободных интервалов\n\n**UX:**\n1. Date selector (← → день)\n2. Timeline 08:00–20:00 (или configurable) с занятыми слотами красным\n3. Tap на свободный интервал → pre-fill start/end в форме брони\n4. Toggle day/week view (week — summary dots)\n\n**Используется в:** ResourceDetail (preview) + CreateReservation (основной picker)\n\n**Статусы слотов:** `upcoming` из API",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-395"],
+    "acceptanceCriteria": [
+      "`useResourceSchedule` загружает day и week modes",
+      "Занятые слоты визуально отличимы от свободных",
+      "Tap свободного слота возвращает `{ start, end }` в ISO +06:00",
+      "Unit-тест `findFreeSlots` с mock schedule array",
+      "Смена даты перезапрашивает API",
+      "Loading/error states через UI-kit"
+    ]
+  },
+  {
+    "identifier": "DEV-397",
+    "title": "[MOB-407] Создание бронирования — форма и POST /reservations/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-403.\n**Док:** `mobile_api_bookings.md` → POST /bookings/reservations/\n\nFlow создания бронирования: выбор времени → подтверждение → POST.\n\n**API:** `POST /api/v1/bookings/reservations/`\n\n**Request body:**\n```json\n{\n  \"resource_id\": 42,\n  \"start_time\": \"2024-06-15T09:00:00+06:00\",\n  \"end_time\": \"2024-06-15T10:00:00+06:00\",\n  \"description\": \"...\",\n  \"participant_ids\": [55, 60]\n}\n```\n\n**Экран:** `src/features/bookings/screens/CreateReservationScreen.tsx`\n\n**Поля формы:**\n- Resource summary (read-only)\n- Date + start/end (из ScheduleTimeline или manual pickers)\n- Description (optional)\n- Participants — только для `meeting_room` (MOB-408)\n\n**Валидация по типу:**\n| Тип | Правила |\n|-----|--------|\n| desk | 1 стол одновременно; advance_booking_days |\n| meeting_room | 30 мин – 4 ч |\n| parking | целый день |\n| capsule | 1–8 ч |\n\n**Ошибки:**\n- 409 `BOOKING_CONFLICT` → `ConflictErrorBanner` + предложить другое время\n- 409 `BOOKING_DESK_USER_OVERLAP` → сообщение о пересечении столов\n- 400 `booking.resource_requires_premium` → upgrade hint\n- 400 max 5 active bookings → лимит\n\n**После 201:** navigate → `ReservationDetail` + invalidate `['my-reservations']`, `['dashboard']`",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "mvp"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-396", "DEV-394"],
+    "acceptanceCriteria": [
+      "POST создаёт бронь с timezone-aware datetime",
+      "409 conflict показывает понятное сообщение, форма не сбрасывается",
+      "Правила parking (full day) enforced на клиенте",
+      "Успех → экран деталей с данными из 201 response",
+      "React Query invalidates dashboard + my bookings",
+      "Staging: employee создаёт meeting_room booking end-to-end"
+    ]
+  },
+  {
+    "identifier": "DEV-398",
+    "title": "[MOB-408] Участники переговорной — GET /bookings/members/ autocomplete",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** часть Flutter MOB-403 (participants).\n**Док:** `mobile_api_bookings.md` → GET /bookings/members/\n\nAutocomplete выбора коллег для `meeting_room` бронирований.\n\n**API:** `GET /api/v1/bookings/members/?q=иван`\n\n**Response:** массив до 20 пользователей (не paginated)\n\n**Компонент:** `src/features/bookings/components/ParticipantPicker.tsx`\n\n**UX:**\n- Search input debounce 300ms\n- Multi-select chips с avatar/initials\n- Показывать full_name, position, email\n- Только для roles: employee, company_admin, superadmin с компанией\n- Guest — picker скрыт\n\n**Интеграция:** `CreateReservationScreen` → `participant_ids[]` в POST body\n\n**Admin-only endpoints** (`POST/DELETE participants` на существующей брони) — out of scope MVP, Epic 4.1",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-397"],
+    "acceptanceCriteria": [
+      "Search вызывает GET /members/?q= с debounce",
+      "Multi-select возвращает `number[]` participant_ids",
+      "Пустой q не дёргает API (min 2 chars или по доке)",
+      "Selected participants отображаются как removable chips",
+      "Guest role — секция участников скрыта",
+      "Avatar через resolveMediaUrl"
+    ]
+  },
+  {
+    "identifier": "DEV-399",
+    "title": "[MOB-409] Мои бронирования — GET /reservations/my/ с табами",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-404.\n**Док:** `mobile_api_bookings.md` → GET /reservations/my/\n\nСписок бронирований текущего пользователя.\n\n**API:** `GET /api/v1/bookings/reservations/my/`\n\n**Важно:** `status` query **отличается** от API-статусов объекта:\n| Tab | `?status=` | Смысл |\n|-----|-----------|-------|\n| Предстоящие | `upcoming` | confirmed + start > now |\n| Прошедшие | `past` | не cancelled + start < now |\n| Отменённые | `cancelled` | status=cancelled |\n\n**Hook:** `useMyReservations({ status, resource_type? })` — infinite query\n\n**Экран:** `src/features/bookings/screens/MyReservationsScreen.tsx`\n\n**UX:**\n- Top tabs: Предстоящие / Прошедшие / Отменённые\n- Optional filter chip по resource_type\n- `ReservationCard` → tap → Detail (MOB-410)\n- Pull-to-refresh\n- Empty: «У вас нет бронирований» + CTA «Забронировать»\n\n**Связь с dashboard:** `my_upcoming_bookings` widget → deep link сюда",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "mvp"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-391", "DEV-392"],
+    "acceptanceCriteria": [
+      "3 таба корректно передают `status` param",
+      "Пагинация/infinite scroll работает",
+      "Карточки показывают resource_name, time range, status badge",
+      "Tap → ReservationDetail",
+      "Empty state с CTA на каталог",
+      "Не использовать `?user=` (вернёт 400 по доке)"
+    ]
+  },
+  {
+    "identifier": "DEV-400",
+    "title": "[MOB-410] Детали бронирования — просмотр и отмена",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-405.\n**Док:** `mobile_api_bookings.md` → GET /reservations/{id}/, POST /cancel/\n\nЭкран деталей бронирования с действиями.\n\n**API:**\n- `GET /api/v1/bookings/reservations/{id}/`\n- `POST /api/v1/bookings/reservations/{id}/cancel/` — `{ reason? }`\n\n**Экран:** `src/features/bookings/screens/ReservationDetailScreen.tsx`\n\n**UI секции:**\n1. Resource name + type icon\n2. Date/time range\n3. Status badge\n4. Description\n5. Booked by + participants list\n6. `checked_in_at` если есть\n7. Actions: Отменить / Check-in (MOB-411)\n\n**Cancel flow:**\n1. Confirm `Alert.alert`\n2. Optional reason input\n3. POST cancel → 200 `status: cancelled`\n4. 400: уже отменено / началось / окно `min_cancel_minutes` истекло\n\n**Permissions:**\n- Cancel: владелец или admin (сервер решает)\n- `admin-cancel` — out of scope (MOB-414 optional)",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-399", "DEV-397"],
+    "acceptanceCriteria": [
+      "GET detail отображает все поля включая participants",
+      "Cancel с confirm dialog работает для upcoming confirmed",
+      "400 cancel errors показывают причину из API",
+      "После cancel UI обновляется + back to list invalidates cache",
+      "Нельзя cancel уже cancelled (кнопка скрыта)",
+      "Deep link с dashboard booking id открывает этот экран"
+    ]
+  },
+  {
+    "identifier": "DEV-401",
+    "title": "[MOB-411] Capsule QR — отображение и check-in",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-405 (QR часть).\n**Док:** `mobile_api_bookings.md` → qr_code, qr_image, check-in\n\nQR-доступ для капсульных бронирований.\n\n**Поля в reservation:**\n- `qr_code` — UUID\n- `qr_image` — URL PNG (или `GET /reservations/qr/{uuid}/image/` — публичный)\n\n**UI (только `resource_type === 'capsule'`):**\n- QR image fullscreen (`expo-image`)\n- Share button (`expo-sharing` или Share API)\n- `capsule_zone` label\n- Validity: start_time – end_time\n\n**Check-in:** `POST /reservations/{id}/check-in/`\n- Кнопка «Отметить прибытие» для владельца\n- После 200: `checked_in_at` отображается\n- Только если now в окне брони\n\n**Файл:** `src/features/bookings/components/CapsuleQrPanel.tsx`\n\n**Не в MVP:** reception scanner (MOB-413)",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-400"],
+    "acceptanceCriteria": [
+      "QR panel показывается только для capsule reservations",
+      "Image загружается из `qr_image` или constructed public URL",
+      "Share открывает system share sheet с image/URL",
+      "Check-in POST обновляет `checked_in_at` на экране",
+      "Non-capsule bookings — QR секция скрыта",
+      "Публичный QR URL работает без Bearer (для `<Image>` prefetch)"
+    ]
+  },
+  {
+    "identifier": "DEV-402",
+    "title": "[MOB-412] Bookings navigation stack — замена placeholder таба",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** интеграция Epic 3 MOB-312 + Epic 4 screens.\n\nПодключить Bookings feature к tab navigation из Epic 3.\n\n**Файлы:**\n- `src/app/navigation/BookingsStack.tsx`\n- Обновить `MainTabNavigator.tsx` — заменить Placeholder\n\n**BookingsStack routes:**\n| Screen | Params |\n|--------|--------|\n| `ResourceCatalog` | — (default) |\n| `ResourceDetail` | `resourceId: number` |\n| `CreateReservation` | `resourceId, resourceType?` |\n| `MyReservations` | `initialTab?` |\n| `ReservationDetail` | `reservationId: number` |\n\n**Entry points:**\n- Bookings tab → ResourceCatalog (или segmented Catalog | My Bookings)\n- Dashboard `my_upcoming_bookings` tap → ReservationDetail\n- Dashboard `quick_booking` CTA (guest) → ResourceCatalog filtered free desks\n- Home deep links из MOB-306/309\n\n**Header:** native stack titles на русском\n\n**RN статус:** 🔴 Placeholder из MOB-312",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "navigation"],
+    "area": "mobile-bookings",
+    "parallel": false,
+    "dependsOn": ["DEV-388", "DEV-393", "DEV-399", "DEV-400"],
+    "acceptanceCriteria": [
+      "Bookings tab открывает реальный stack, не placeholder",
+      "Все 5 экранов доступны через navigation",
+      "Dashboard booking card → ReservationDetail cross-tab",
+      "Back navigation корректна (detail → list → catalog)",
+      "Guest видит Bookings tab (по Epic 3 matrix)",
+      "Deep link `newlevelhub://bookings` (optional) не ломает stack"
+    ]
+  },
+  {
+    "identifier": "DEV-403",
+    "title": "[MOB-413] Повторяющиеся брони — recurring CRUD (optional)",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-406.\n**Док:** `mobile_api_bookings.md` → /bookings/recurring/\n\n**Приоритет:** optional, после MVP employee flow.\n\n**API:**\n- `GET /api/v1/bookings/recurring/`\n- `POST /api/v1/bookings/recurring/`\n- `PATCH /api/v1/bookings/recurring/{id}/`\n- `DELETE /api/v1/bookings/recurring/{id}/` — удаляет будущие брони серии\n\n**POST body:**\n```json\n{\n  \"resource_id\": 7,\n  \"day_of_week\": 0,\n  \"start_time\": \"10:00\",\n  \"end_time\": \"11:00\",\n  \"repeat_until\": \"2024-12-31\"\n}\n```\n\n**Экраны:**\n- `RecurringListScreen` — активные серии\n- `CreateRecurringScreen` — day_of_week picker (пн=0), time HH:MM, repeat_until\n\n**UI notes:**\n- `day_of_week`: 0=Monday … 6=Sunday (по доке)\n- `skipped_dates` — read-only chips на detail\n- DELETE confirm: «Будущие брони серии будут отменены»",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "optional"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-397"],
+    "acceptanceCriteria": [
+      "Список recurring серий с GET /recurring/",
+      "Создание серии через POST с валидацией day_of_week",
+      "DELETE удаляет серию + invalidate my-reservations",
+      "PATCH обновляет repeat_until",
+      "Помечено optional в roadmap — не блокирует MVP release",
+      "Unit test mapper для recurring response"
+    ]
+  },
+  {
+    "identifier": "DEV-404",
+    "title": "[MOB-414] Reception QR scanner — POST /validate-qr/ (optional)",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** mobile_api_bookings.md → validate-qr + Epic 7 overlap.\n**Док:** `mobile_api_bookings.md` → POST /reservations/validate-qr/\n\n**Приоритет:** optional — для роли `reception`. Частично пересекается с Epic 7 Access.\n\n**API:** `POST /api/v1/bookings/reservations/validate-qr/`\n```json\n{ \"qr_code\": \"uuid\" }\n```\n\n**Response:** `{ valid: true/false, reason?, user_name?, resource_name?, ... }`\n\n**Пакеты:** `expo-camera` + barcode scanner (или `expo-barcode-scanner`)\n\n**Экран:** `src/features/bookings/screens/QrScannerScreen.tsx`\n\n**Доступ:** только `reception` и `superadmin`\n\n**UX:**\n1. Camera viewfinder\n2. Scan UUID → POST validate\n3. valid=true → green card с user/resource/time\n4. valid=false → reason localized (not_found, expired, cancelled…)\n\n**Размещение:** скрытый пункт в Profile или отдельный tab для reception (не в MVP employee)",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "optional", "reception"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-401", "DEV-402"],
+    "acceptanceCriteria": [
+      "Scanner доступен только reception/superadmin",
+      "POST validate-qr вызывается после scan",
+      "Все `reason` enum → русские сообщения",
+      "valid=true показывает user_name, resource_name, time window",
+      "Camera permission handled gracefully",
+      "Manual UUID input fallback для `__DEV__`"
+    ]
+  },
+  {
+    "identifier": "DEV-405",
+    "title": "[MOB-415] Epic 4 integration tests — bookings smoke checklist",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n\nТесты и staging smoke для Epic 4 Bookings.\n\n**Unit tests (Jest):**\n- `mapResource.test.ts`, `mapReservation.test.ts`\n- `bookingTimeRules.test.ts` — parking full day, meeting_room duration\n- `findFreeSlots.test.ts`\n- `formatBookingDateTime.test.ts` — timezone +06:00\n\n**Fixtures:** `src/features/bookings/__fixtures__/`\n\n**Staging smoke checklist:**\n```\n□ Catalog: GET /resources/ → list with status badges\n□ Filter: type=meeting_room + floor\n□ Availability: available_from/to → only free resources\n□ Detail: photos, equipment, schedule preview\n□ Create: POST reservation → 201\n□ Conflict: overlapping slot → 409 UI message\n□ My bookings: upcoming tab lists new reservation\n□ Detail: cancel upcoming → status cancelled\n□ Capsule: QR image visible after create\n□ Dashboard widget tap → ReservationDetail\n□ Bookings tab navigation full flow\n```\n\n**MSW (optional):** mock 409 conflict для create form test",
+    "block": "Mobile — Epic 4: Bookings",
+    "labels": ["mobile", "react-native", "bookings", "testing"],
+    "area": "mobile-bookings",
+    "parallel": true,
+    "dependsOn": ["DEV-402", "DEV-410", "DEV-411"],
+    "acceptanceCriteria": [
+      "Минимум 12 unit tests на mappers + time rules",
+      "`npm run test` зелёный",
+      "Smoke checklist в `docs/epic4-smoke.md` или README",
+      "Staging E2E: create + cancel meeting_room documented",
+      "Нет flaky datetime tests (mock Date.now)",
+      "409 conflict scenario покрыт unit или integration test"
+    ]
+  }
+]

@@ -351,13 +351,25 @@ jobs:
             BACKEND_URL="https://${PR_SLUG}.staging.newlevelhub.kz"
             echo "Backend API URL for this preview: ${BACKEND_URL}"
 
+            if [ "$TICKET" != "noticket" ]; then
+              export PREVIEW_LOG_FILTER="$TICKET"
+            else
+              export PREVIEW_LOG_FILTER="$PR_SLUG"
+            fi
+
             echo "--- [3/5] Docker: deploy containers ---"
-            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL BACKEND_URL
+            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL BACKEND_URL PREVIEW_LOG_FILTER
+            PREVIEW_SERVICES="redis backend nginx celery celery_beat"
+            if [ -f "dozzle/users.yml" ]; then
+              PREVIEW_SERVICES="${PREVIEW_SERVICES} dozzle"
+            else
+              echo "WARNING: dozzle/users.yml not found — skipping Dozzle. Create it to enable https://${PR_SLUG}.staging.newlevelhub.kz/dozzle/"
+            fi
             docker compose \
               --project-name "$PR_SLUG" \
               --env-file .env.staging \
               -f "$COMPOSE_FILE" \
-              up -d --force-recreate
+              up -d --force-recreate $PREVIEW_SERVICES
 
             echo "--- [4/5] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
@@ -429,6 +441,9 @@ jobs:
             echo "=== Preview deployed successfully ==="
             echo "URL:    https://${PR_SLUG}.staging.newlevelhub.kz"
             echo "Docs:   https://${PR_SLUG}.staging.newlevelhub.kz/api/docs/"
+            if [ -f "dozzle/users.yml" ]; then
+              echo "Logs:   https://${PR_SLUG}.staging.newlevelhub.kz/dozzle/"
+            fi
             echo "Port:   ${PREVIEW_PORT}"
 
       - name: Post preview URL comment to PR

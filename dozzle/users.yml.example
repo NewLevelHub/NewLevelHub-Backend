@@ -1,0 +1,11 @@
+# Copy to users.yml and replace the password hash before enabling Dozzle on production.
+#
+# Generate:
+#   docker run --rm amir20/dozzle generate admin \
+#     --password 'your-secure-password' \
+#     --name 'Admin' > dozzle/users.yml
+#
+users:
+  admin:
+    name: Admin
+    password: "$2a$12$REPLACE_WITH_GENERATED_BCRYPT_HASH"

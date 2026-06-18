@@ -1,0 +1,429 @@
+[
+  {
+    "identifier": "DEV-353",
+    "title": "[MOB-001] Инициализация React Native проекта NewLevelHub-Mobile-RN",
+    "description": "**Stack:** React Native (Expo SDK 56) — репозиторий `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-001; API/flow без изменений.\n\nСоздать репозиторий и базовую структуру мобильного приложения для New Level Hub.\n\n**Контекст:** мобилка разрабатывается локально (`npm run start` / Expo Go), API-запросы на staging или production. Локальный Django не поднимаем.\n\n**Документация API:** `NewLevelHub-Backend/mobile-api-docs/mobile_api.md` и блоки `mobile_api_*.md`.\n\n**Что сделать:**\n- `npx create-expo-app` с TypeScript template\n- Минимальные версии: iOS 15+, Android SDK 24+\n- Bundle id: `kz.newlevelhub.newlevelhub-mobile` (iOS) / `kz.newlevelhub.newlevelhub_mobile` (Android)\n- Структура каталогов:\n  ```\n  src/\n    app/              # App.tsx, navigation/\n    core/\n      config/\n      network/\n      auth/\n      theme/\n    features/\n      auth/\n      users/\n      home/\n    shared/\n      api/\n      types/\n      ui/\n  ```\n- README: Node.js, `npm install`, `npm run start`, `EXPO_PUBLIC_API_BASE_URL`\n- `.gitignore` для Node/Expo + не коммитить секреты\n\n**Не делать в этом тикете:** полноценные feature-экраны, auth flow — следующие тикеты.\n\n**RN статус:** ✅ Done (проект создан)",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "foundation"],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [],
+    "acceptanceCriteria": [
+      "Проект `NewLevelHub-Mobile-RN` создан: `npm run typecheck` — 0 errors",
+      "Приложение запускается на iOS Simulator и Android Emulator (`npm run start`) — виден splash/placeholder",
+      "Структура `src/core/` и `src/features/` создана согласно описанию",
+      "В README описаны: требования (Node.js), команда запуска, `EXPO_PUBLIC_API_BASE_URL`",
+      "Bundle id: `kz.newlevelhub.newlevelhub-mobile` / `kz.newlevelhub.newlevelhub_mobile`"
+    ]
+  },
+  {
+    "identifier": "DEV-354",
+    "title": "[MOB-002] Конфигурация API — staging/prod base URL и media helper",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-002.\n\nЦентрализовать настройки подключения к API и окружения.\n\n**Окружения:**\n| Profile | Base URL | Когда |\n|---------|----------|-------|\n| staging (default dev) | `https://staging.newlevelhub.kz/api/v1` | Ежедневная разработка |\n| production | `https://newlevelhub.kz/api/v1` | UAT, smoke |\n\n**Media URL:** аватары и QR могут приходить как абсолютный URL или относительный путь (`/media/avatars/42/photo.jpg`). Helper:\n```ts\nexport function resolveMediaUrl(path: string | null | undefined): string {\n  if (!path) return '';\n  if (path.startsWith('http')) return path;\n  return `${apiConfig.mediaOrigin}${path}`;\n}\n```\n\n**Файлы:**\n- `src/core/config/apiConfig.ts` — `baseUrl`, `mediaOrigin`, `defaultLanguage = 'ru'`\n- `src/core/config/env.ts` — `EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_MEDIA_BASE_URL`\n- `eas.json` — profiles `staging` и `production` с разными `env`\n- `.env.example`, `.env.staging`, `.env.production`\n\n**Заголовки по умолчанию:**\n- `Content-Type: application/json` (кроме multipart)\n- `Accept: application/json`\n- `Accept-Language: ru`\n\n**RN статус:** 🟡 Частично — prod URL есть, staging profiles и EAS — доделать",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "foundation"],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": ["DEV-353"],
+    "acceptanceCriteria": [
+      "`apiConfig` с `baseUrl` и `mediaOrigin`, читаемыми из `EXPO_PUBLIC_*`",
+      "`resolveMediaUrl()` корректно обрабатывает null, абсолютные и относительные пути",
+      "Staging — default для dev; production — отдельный EAS profile",
+      "Нет hardcoded URL в feature-модулях — только импорт из `apiConfig` / `env`",
+      "Unit-тест на `resolveMediaUrl` для 3 кейсов: null, `/media/x.jpg`, `https://...`"
+    ]
+  },
+  {
+    "identifier": "DEV-355",
+    "title": "[MOB-003] Сетевой слой — Axios client, timeouts, debug logging",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-003.\n\nНастроить HTTP-клиент для работы с Django REST API.\n\n**Пакет:** `axios`\n\n**Файл:** `src/core/network/apiClient.ts`\n\n**Настройки:**\n- `baseURL`: из `apiConfig.baseUrl`\n- `timeout`: 30 сек\n- Default headers: `Accept-Language: ru`, `Accept: application/json`\n\n**Debug logging (только `__DEV__`):**\n- Логировать method, path, status code\n- Не логировать тела запросов с паролями (`/auth/login/`, `/auth/register/`)\n\n**Проверка связи:**\n```http\nGET /api/v1/ping/\nGET /api/v1/health/\n```\n\nДок: `mobile-api-docs/mobile_api_core.md`\n\n**RN статус:** ✅ Done (без debug interceptor)",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "network"],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": ["DEV-354"],
+    "acceptanceCriteria": [
+      "Экспорт `apiClient` (axios instance) с настроенным `baseURL`",
+      "Первый запуск (или Home screen probe) успешно вызывает `GET /ping/` и получает 200",
+      "`GET /health/` обрабатывается: при 503 показывается понятное сообщение",
+      "Логирование запросов работает только в `__DEV__`",
+      "Пароли и refresh-токены не попадают в debug-логи"
+    ]
+  },
+  {
+    "identifier": "DEV-356",
+    "title": "[MOB-004] Парсинг ошибок API — ApiException и field errors",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-004.\n\nЕдиный слой обработки ошибок бэкенда для всех feature-модулей.\n\n**Форматы ответов бэка (см. `mobile_api.md`):**\n\n1. Стандартный envelope:\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"EMAIL_NOT_VERIFIED\",\n    \"message\": \"...\",\n    \"details\": { \"email\": [\"...\"] }\n  }\n}\n```\n\n2. Упрощённый DRF:\n```json\n{ \"detail\": \"Неверные учётные данные\" }\n```\n\n**Файлы:**\n- `src/core/network/apiException.ts` — `ApiException`, `EmailNotVerifiedException`\n- `src/core/network/errorParser.ts` — `parseApiError(error)` из `AxiosError`\n\n**Поведение:**\n- 400 + `details` → маппинг на поля формы\n- 401 → `isUnauthorized` для interceptor (MOB-006)\n- 403 + code `EMAIL_NOT_VERIFIED` → `EmailNotVerifiedException`\n- 429 → «Слишком много запросов»\n- 5xx → «Сервис временно недоступен»\n\n**RN статус:** ✅ Done",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "network"],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": ["DEV-355"],
+    "acceptanceCriteria": [
+      "Класс `ApiException` с полями: `code`, `message`, `statusCode`, `fieldErrors`",
+      "`parseApiError()` корректно разбирает envelope с `error.details`",
+      "`parseApiError()` разбирает ответ `{ \"detail\": \"...\" }`",
+      "Unit-тесты минимум на 4 кейса: validation 400, detail 400, 401, 500",
+      "Feature-модули не парсят JSON ошибок напрямую — только через `parseApiError`"
+    ]
+  },
+  {
+    "identifier": "DEV-357",
+    "title": "[MOB-005] Secure storage — хранение JWT access и refresh",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-005.\n\nБезопасное локальное хранение JWT-токенов на устройстве.\n\n**Пакет:** `expo-secure-store`\n\n**Док:** `mobile_api.md` → раздел «JWT-токены»\n\n**Важно:**\n- Access и refresh хранить в Keychain (iOS) / Keystore (Android) через `expo-secure-store`\n- HttpOnly cookie `refresh_token` **игнорировать** — брать `tokens.refresh` из JSON login/register\n- После refresh **сохранять новый refresh** (ротация)\n\n**Файл:** `src/core/auth/tokenStorage.ts`\n\n**API:**\n```ts\nsaveTokens(access: string, refresh: string): Promise<void>\ngetAccessToken(): Promise<string | null>\ngetRefreshToken(): Promise<string | null>\nclearTokens(): Promise<void>\nhasTokens(): Promise<boolean>\n```\n\n**RN статус:** ✅ Done",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": ["DEV-353"],
+    "acceptanceCriteria": [
+      "`TokenStorage` реализован на `expo-secure-store`",
+      "Токены переживают перезапуск приложения (cold start → `hasTokens() == true`)",
+      "`clearTokens()` полностью удаляет access и refresh",
+      "Токены не хранятся в AsyncStorage / plain text",
+      "Unit test с mock KeyValueStore: save → read → clear"
+    ]
+  },
+  {
+    "identifier": "DEV-358",
+    "title": "[MOB-006] Auth interceptor — Bearer header и auto-refresh",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-006.\n\nAxios interceptors: автоматическая подстановка JWT и обновление access при 401.\n\n**Док:** `mobile_api.md` → «Рекомендуемый flow»\n\n**Логика:**\n1. На каждый запрос (кроме публичных) добавить `Authorization: Bearer <access>`\n2. При 401 на защищённый запрос:\n   - Одна попытка `POST /auth/token/refresh/` с `{ \"refresh\": \"...\" }`\n   - При успехе: сохранить новую пару, **повторить** исходный запрос\n   - При fail: `clearTokens()` → `onSessionExpired()`\n3. Публичные пути: `/auth/login/`, `/auth/register/`, `/auth/token/refresh/`, `/auth/logout/`, `/auth/password/reset/`, `/auth/password/reset/confirm/`, `/auth/register/invite/`, `/auth/email/verify/`, `/ping/`, `/health/`\n\n**Race condition:** один refresh, остальные 401 ждут (shared Promise).\n\n**Файл:** `src/core/network/apiClient.ts` (request + response interceptors)\n\n**RN статус:** ✅ Done",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": ["DEV-355", "DEV-356", "DEV-357"],
+    "acceptanceCriteria": [
+      "Защищённый запрос автоматически получает заголовок `Authorization: Bearer ...`",
+      "При истёкшем access выполняется refresh и исходный запрос повторяется успешно",
+      "После refresh новый refresh сохраняется в `TokenStorage`",
+      "При неуспешном refresh вызывается `onSessionExpired` и токены очищаются",
+      "Параллельные 401 не вызывают несколько refresh-запросов одновременно",
+      "Ручная проверка: login → expiry access → `/auth/me/` → auto-refresh работает"
+    ]
+  },
+  {
+    "identifier": "DEV-359",
+    "title": "[MOB-007] Навигация — React Navigation, splash, auth guard",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-007.\n\nМаршрутизация приложения с разделением auth / main flow.\n\n**Пакеты:** `@react-navigation/native`, `@react-navigation/native-stack`\n\n**Маршруты (минимум для Epic 0–2):**\n| Route | Экран | Guard |\n|-------|-------|-------|\n| `Splash` | Splash / bootstrap | — |\n| `Login` | Вход | redirect если уже auth |\n| `Register` | Регистрация гостя | — |\n| `VerifyEmail` | Ожидание подтверждения email | — |\n| `Invite` | Регистрация по приглашению | param `token` |\n| `ForgotPassword` | Запрос сброса | — |\n| `ResetPassword` | Новый пароль | param `token` |\n| `Home` | Placeholder главного | auth required |\n| `Profile` | Профиль | auth required |\n\n**Bootstrap flow:**\n1. `hasTokens()` → `GET /auth/me/`\n2. 200 → `Home`\n3. 401 / нет токенов → `Login`\n\n**Файлы:**\n- `src/app/navigation/RootNavigator.tsx`\n- `src/app/navigation/routes.ts`\n- `src/core/auth/authStore.ts` (zustand) — слушает logout/session expired\n\n**Deep links:** схема `newlevelhub://` — полная настройка в MOB-104, MOB-106 (`expo-linking`).\n\n**RN статус:** ✅ Done",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "navigation"],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": ["DEV-358"],
+    "acceptanceCriteria": [
+      "React Navigation настроен, bootstrap стартует с `SplashScreen`",
+      "Без токенов пользователь попадает на `Login`",
+      "С валидными токенами после bootstrap → `Home` (placeholder OK)",
+      "`Profile` доступен только authenticated users",
+      "`onSessionExpired` из MOB-006 сбрасывает на auth stack (`Login`)",
+      "Route params `token` / `email` сохраняются для invite/reset/verify"
+    ]
+  },
+  {
+    "identifier": "DEV-360",
+    "title": "[MOB-008] UI-kit — тема, общие компоненты, loading/error/empty",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-008.\n\nБазовый дизайн-системный слой для всех экранов Auth и Users.\n\n**Файлы:**\n- `src/core/theme/colors.ts`, `brandTheme.ts`\n- `src/shared/ui/`:\n  - `AppButton` — primary / secondary / text, loading state\n  - `AppTextField` — label, error text, password toggle\n  - `AppLoader` — inline и fullscreen\n  - `AppErrorBanner` — inline error\n  - `AppErrorView` — message + кнопка «Повторить`\n  - `AppEmptyView` — placeholder для пустых списков\n- `src/features/dev/screens/UiKitDemoScreen.tsx` (debug)\n\n**Шрифт:** `@expo-google-fonts/inter`\n\n**Требования UX:**\n- Ошибки полей — под полем (из `ApiException.fieldErrors`)\n- Общие ошибки — banner или toast\n- Кнопки disabled на время submit\n- `SafeAreaProvider` / `SafeAreaView` на экранах\n\n**RN статус:** 🟡 Частично — нет `AppErrorView`, `AppEmptyView`, demo-экрана",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": ["mobile", "react-native", "ui"],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": ["DEV-353"],
+    "acceptanceCriteria": [
+      "Цвета и типографика подключены в `App.tsx` (Inter font)",
+      "`AppButton` поддерживает loading (disabled + ActivityIndicator)",
+      "`AppTextField` отображает `errorText`",
+      "`AppErrorView` с `onRetry` используется при failed network",
+      "Demo-экран или README-screenshot показывает все виджеты",
+      "Экраны Auth/Users используют UI-kit, не raw `Pressable`/`TextInput`"
+    ]
+  },
+  {
+    "identifier": "DEV-361",
+    "title": "[MOB-101] Экран входа — POST /auth/login/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-101.\n\nРеализовать вход по email и паролю.\n\n**API:** `POST /api/v1/auth/login/`\n\n**Док:** `mobile-api-docs/mobile_api.md` → POST /auth/login/\n\n**Request body:**\n```json\n{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\",\n  \"remember_me\": true\n}\n```\n\n**Response 200:** `{ user, tokens: { access, refresh } }`\n\n**Обработка ошибок:**\n| Код | UI |\n|-----|----|\n| 400 | «Неверные учётные данные» |\n| 403 `EMAIL_NOT_VERIFIED` | Navigate → `VerifyEmail`, передать email |\n| 403 blocked | «Аккаунт заблокирован» |\n\n**После успеха:**\n1. `tokenStorage.saveTokens()`\n2. Сохранить `User` в `useAuthStore`\n3. Navigate → `Home` (через смену `isAuthenticated`)\n\n**Файлы:**\n- `src/features/auth/screens/LoginScreen.tsx`\n- `src/features/auth/services/authService.ts` (опционально)\n- `src/shared/lib/mapUser.ts`, `src/shared/types/index.ts`\n\n**UI:** email, password, «Запомнить меня», «Забыли пароль?», «Регистрация»\n\n**RN статус:** 🟡 ~70% — экран есть, доработать service layer и UI-kit consistency",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-auth",
+    "parallel": false,
+    "dependsOn": ["DEV-358", "DEV-359", "DEV-360"],
+    "acceptanceCriteria": [
+      "Форма валидирует email (формат) и non-empty password до submit",
+      "Успешный login сохраняет токены и переводит на `Home`",
+      "Checkbox `remember_me` передаётся в API",
+      "403 `EMAIL_NOT_VERIFIED` открывает `VerifyEmail` с email",
+      "400 показывает «Неверные учётные данные»",
+      "Типы `User` и `AuthTokens` в TypeScript + `mapApiUser()`",
+      "`authService.login()` изолирован от UI"
+    ]
+  },
+  {
+    "identifier": "DEV-362",
+    "title": "[MOB-102] Регистрация гостя — POST /auth/register/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-102.\n\nЭкран регистрации гостевого аккаунта (`role: guest`, без компании).\n\n**API:** `POST /api/v1/auth/register/`\n\n**Док:** `mobile_api.md` → POST /auth/register/\n\n**Поля формы:**\n- email (required)\n- first_name, last_name (required)\n- phone (optional)\n- password, password_confirm (required, min 8)\n\n**Response 201:** `{ user, tokens }` — `is_email_verified: false`\n\n**Flow после регистрации:**\n1. Сохранить токены\n2. Navigate → `VerifyEmail`\n3. «Проверьте почту для подтверждения email»\n\n**Файл:** `src/features/auth/screens/RegisterScreen.tsx`\n\n**Ошибки 400:** `error.details` по полям",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-361"],
+    "acceptanceCriteria": [
+      "Все поля с client-side validation (password == password_confirm)",
+      "Успешная регистрация → экран `VerifyEmail`",
+      "Токены сохраняются после 201",
+      "Ошибка «email уже занят» под полем email",
+      "Ссылка «Уже есть аккаунт?» → `Login`",
+      "`authService.register()` возвращает `User` + tokens"
+    ]
+  },
+  {
+    "identifier": "DEV-363",
+    "title": "[MOB-103] Экран «Подтвердите email» — resend",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-103.\n\nЭкран ожидания подтверждения email с возможностью повторной отправки письма.\n\n**API:** `POST /api/v1/auth/email/resend/` (🔒 Bearer access)\n\n**Док:** `mobile_api.md` → POST /auth/email/resend/\n\n**Когда показывать:**\n- После register (MOB-102)\n- После login с 403 `EMAIL_NOT_VERIFIED` (MOB-101)\n- После invite-register (MOB-105) — без токенов, resend недоступен\n\n**UI:**\n- Email (read-only)\n- Инструкция\n- «Отправить письмо повторно»\n- Cooldown при 429\n- «Вернуться ко входу» → logout + `Login`\n\n**Файл:** `src/features/auth/screens/VerifyEmailScreen.tsx` (заменить placeholder)\n\n**Response 403** (уже verified) → `Home`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-361"],
+    "acceptanceCriteria": [
+      "Экран `VerifyEmail` с отображением email",
+      "Resend вызывает `POST /auth/email/resend/` с access token",
+      "429 показывает cooldown «Попробуйте позже»",
+      "403 «уже подтверждён» → `Home`",
+      "Без access token resend скрыт",
+      "«Вернуться ко входу» очищает токены"
+    ]
+  },
+  {
+    "identifier": "DEV-364",
+    "title": "[MOB-104] Deep link — подтверждение email GET /auth/email/verify/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-104.\n\nОбработка ссылки из письма подтверждения email.\n\n**API:** `GET /api/v1/auth/email/verify/?token=<uuid>`\n\n**Док:** `mobile_api.md` → GET /auth/email/verify/\n\n**Настройка:**\n- iOS: Associated Domains `applinks:newlevelhub.kz`\n- Android: App Links + `newlevelhub://verify-email`\n- Пакет: `expo-linking` + `app.json` / `app.config.ts` scheme\n\n**Flow:**\n1. App получает URL с `token`\n2. `GET /auth/email/verify/?token=...` (публичный)\n3. 200 → экран успеха → `Login` или `Home`\n4. 400 `TOKEN_ALREADY_USED` / `TOKEN_EXPIRED` → сообщения из доки\n5. 404 → «Ссылка недействительна`\n\n**Файл:** `src/features/auth/screens/EmailVerifyDeepLinkScreen.tsx`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth", "deep-link"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-363"],
+    "acceptanceCriteria": [
+      "Deep link с `token` работает (cold + warm start)",
+      "Валидный token → 200 → «Email подтверждён»",
+      "TOKEN_EXPIRED и TOKEN_ALREADY_USED — корректные сообщения",
+      "После успеха можно войти через `Login`",
+      "README: тест через `npx uri-scheme open` / `adb shell am start`",
+      "Fallback: ручной ввод token на debug-экране (только `__DEV__`)"
+    ]
+  },
+  {
+    "identifier": "DEV-365",
+    "title": "[MOB-105] Регистрация по приглашению — invite flow",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-105.\n\nРегистрация сотрудника компании по invite-ссылке.\n\n**API:**\n- `GET /api/v1/auth/register/invite/?token=<uuid>`\n- `POST /api/v1/auth/register/invite/`\n\n**Док:** `mobile_api.md` → register/invite\n\n**GET Response:**\n```json\n{\n  \"company_name\": \"ТОО ...\",\n  \"email\": \"new.employee@example.com\",\n  \"role\": \"employee\",\n  \"is_guest_upgrade\": false\n}\n```\n\n**POST body:** `{ token, first_name, last_name, phone?, password }`\n\n**Response 201:** `{ \"detail\": \"...\" }` — **токены НЕ выдаются**\n\n**UI `Invite` screen:**\n1. Loading → GET invite\n2. 400 → ошибка\n3. Форма: email read-only, имя, фамилия, телефон, пароль\n4. POST → `VerifyEmail` (без resend)\n\n**Файл:** `src/features/auth/screens/InviteRegisterScreen.tsx`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth", "deep-link"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-359"],
+    "acceptanceCriteria": [
+      "Route `Invite` принимает `token` из params или deep link",
+      "GET invite предзаполняет email, company_name, role",
+      "Email disabled",
+      "POST invite → 201 → `VerifyEmail` без токенов",
+      "400 невалидный token → понятная ошибка",
+      "400 лимит сотрудников → «Достигнут лимит участников»",
+      "Deep link `newlevelhub://invite?token=` настроен"
+    ]
+  },
+  {
+    "identifier": "DEV-366",
+    "title": "[MOB-106] Сброс пароля — reset request + confirm",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-106.\n\nFlow восстановления пароля через email.\n\n**API:**\n- `POST /api/v1/auth/password/reset/` — `{ email }`\n- `POST /api/v1/auth/password/reset/confirm/` — `{ token, new_password }`\n\n**Док:** `mobile_api.md` → password reset\n\n**Экран `ForgotPassword`:**\n- POST reset → всегда neutral success (anti-enumeration)\n- 429 → rate limit\n\n**Экран `ResetPassword`:**\n- Deep link из письма\n- new_password + confirm\n- POST confirm → `clearTokens()` → `Login`\n\n**Файлы:**\n- `src/features/auth/screens/ForgotPasswordScreen.tsx`\n- `src/features/auth/screens/ResetPasswordScreen.tsx`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth", "deep-link"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-359", "DEV-364"],
+    "acceptanceCriteria": [
+      "Forgot password → POST /password/reset/ + neutral success",
+      "Reset confirm читает token из deep link",
+      "Успешный confirm очищает токены → `Login`",
+      "400 слабый пароль — требования validators",
+      "429 обрабатывается",
+      "Deep link `ResetPassword?token=` на iOS и Android"
+    ]
+  },
+  {
+    "identifier": "DEV-367",
+    "title": "[MOB-107] Logout — POST /auth/logout/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-107.\n\nВыход из аккаунта с инвалидацией refresh на сервере.\n\n**API:** `POST /api/v1/auth/logout/`\n\n**Док:** `mobile_api.md` → POST /auth/logout/\n\n**Request:** `{ \"refresh\": \"<refresh_token>\" }` — **без** Authorization header\n\n**Логика клиента:**\n1. Прочитать refresh из `TokenStorage`\n2. POST logout (best effort)\n3. **Всегда** `clearTokens()` + сброс `useAuthStore`\n4. Navigate → `Login`\n\n**UI:** кнопка «Выйти» на профиле + `Alert.alert` confirm\n\n**Файл:** `src/core/auth/authStore.ts` → `logout()`\n\n**RN статус:** 🟡 Частично — logout есть, но refresh не передаётся в body",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": ["DEV-361"],
+    "acceptanceCriteria": [
+      "Logout вызывает POST /auth/logout/ с `{ refresh }` в body, без Bearer",
+      "После logout токены удалены локально независимо от ответа сервера",
+      "`useAuthStore` сброшен (`user: null`, `isAuthenticated: false`)",
+      "Navigation переключается на auth stack (`Login`)",
+      "Back после logout не возвращает на защищённые экраны",
+      "После logout refresh не принимается сервером"
+    ]
+  },
+  {
+    "identifier": "DEV-368",
+    "title": "[MOB-108] Auth state management — session, user cache, startup",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-108.\n\nЦентрализованное управление состоянием авторизации, связка MOB-101…107.\n\n**Пакет:** `zustand` (+ `@tanstack/react-query` для server state в features)\n\n**Scope:**\n- `useAuthStore`: `user`, `isAuthenticated`, `isLoading`\n- Bootstrap: tokens → `GET /auth/me/`\n- После login/register — sync User\n- Методы: `login`, `register`, `logout`, `fetchMe`, `bootstrap`\n\n**Role enum:** из `src/shared/config/constants.ts` — `USER_ROLES`\n\n**Edge cases:**\n- `GET /me/` 401 → refresh → fail → logout\n- Password reset / change password → force logout\n- Blocked user при login → 403\n\n**Файлы:**\n- `src/core/auth/authStore.ts`\n- `src/shared/types/index.ts` + `mapUser.ts`\n\n**RN статус:** 🟡 ~80% — bootstrap и login есть, доработать register и edge cases",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": ["mobile", "react-native", "auth"],
+    "area": "mobile-auth",
+    "parallel": false,
+    "dependsOn": ["DEV-361", "DEV-367"],
+    "acceptanceCriteria": [
+      "Cold start с валидными токенами загружает профиль через GET /auth/me/",
+      "`user.role` доступен для условного UI",
+      "Login/logout обновляют store и навигатор реагирует",
+      "`mapApiUser()` парсит nested `company: { id, name, onboarding_completed } | null`",
+      "Unit test `mapApiUser` для employee с company и guest без company",
+      "Нет дублирования логики токенов между store и interceptor"
+    ]
+  },
+  {
+    "identifier": "DEV-369",
+    "title": "[MOB-201] Модель профиля и GET /auth/me/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-201.\n\nData layer профиля текущего пользователя.\n\n**API:** `GET /api/v1/auth/me/`\n\n**Док:** `mobile-api-docs/mobile_api_users.md` → GET /auth/me/\n\n**Response fields:** id, email, first_name, last_name, full_name, phone, position, avatar, role, company, is_email_verified, date_joined\n\n**Файлы:**\n- `src/shared/types/index.ts` — тип `User` (shared с auth)\n- `src/features/users/api/profileApi.ts`\n- `src/features/users/hooks/useProfile.ts` (React Query)\n\n**Методы:**\n- `fetchProfile()` via `useQuery`\n- `refreshProfile()` — `queryClient.invalidateQueries`\n\n**Avatar URL:** `resolveMediaUrl()` если relative",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users"],
+    "area": "mobile-users",
+    "parallel": false,
+    "dependsOn": ["DEV-368"],
+    "acceptanceCriteria": [
+      "`useProfile` / `profileApi.fetchProfile()` вызывает GET /auth/me/",
+      "Модель парсит все поля включая nullable avatar и company",
+      "`full_name` отображается как от сервера",
+      "401 обрабатывается через auth interceptor",
+      "Unit test `mapApiUser` с fixture JSON из доки"
+    ]
+  },
+  {
+    "identifier": "DEV-370",
+    "title": "[MOB-202] Редактирование профиля — PATCH /auth/me/update/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-202.\n\nЭкран и логика обновления текстовых полей профиля.\n\n**API:** `PATCH /api/v1/auth/me/update/` (JSON)\n\n**Док:** `mobile_api_users.md` → PATCH /me/update/\n\n**Редактируемые поля:** first_name, last_name, phone, position\n\n**Read-only:** email, role, company\n\n**UI `ProfileEdit` screen:**\n- Форма из GET /me/\n- Save → PATCH → обновить store + React Query cache\n- Unsaved changes guard (`usePreventRemove`)\n\n**Файл:** `src/features/users/screens/ProfileEditScreen.tsx`\n\n**Ошибки 400:** `error.details` по полям",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-369"],
+    "acceptanceCriteria": [
+      "PATCH отправляет только изменённые поля",
+      "Успешный ответ обновляет `useAuthStore` и query cache",
+      "email, role, company не editable",
+      "Ошибки валидации под полями",
+      "Toast «Профиль обновлён» и возврат на `Profile`",
+      "Проверка: изменение phone/position сохраняется"
+    ]
+  },
+  {
+    "identifier": "DEV-371",
+    "title": "[MOB-203] Аватар — multipart upload и DELETE /auth/me/avatar/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-203.\n\nЗагрузка, отображение и удаление аватара.\n\n**API:**\n- `PATCH /api/v1/auth/me/update/` multipart, поле `avatar`\n- `DELETE /api/v1/auth/me/avatar/`\n\n**Док:** `mobile_api_users.md`\n\n**Ограничения:** JPEG, PNG, WebP; max 5 МБ\n\n**UI на `Profile`:**\n- `expo-image` для аватара (круг)\n- Action sheet: камера / галерея / удалить\n- Пакеты: `expo-image-picker`\n\n**Upload:** client-side size/type check, progress indicator\n\n**Delete:** idempotent, placeholder initials из `full_name`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-369", "DEV-370"],
+    "acceptanceCriteria": [
+      "Загрузка фото через multipart PATCH",
+      "Файл > 5 МБ блокируется на клиенте",
+      "DELETE убирает фото, показывает placeholder",
+      "Повторный DELETE не ломает UI",
+      "Avatar URL обновляется после replace (`expo-image` cache)",
+      "Неподдерживаемый формат → 400 с сообщением"
+    ]
+  },
+  {
+    "identifier": "DEV-372",
+    "title": "[MOB-204] Смена пароля — POST /auth/me/password/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-204.\n\nЭкран смены пароля авторизованного пользователя.\n\n**API:** `POST /api/v1/auth/me/password/`\n\n**Док:** `mobile_api_users.md`\n\n**Request:** `{ current_password, new_password }`\n\n**После 200:**\n1. `clearTokens()`\n2. Alert «Пароль изменён, войдите снова»\n3. Navigate → `Login`\n\n**UI `ChangePassword` screen:** current, new, confirm; `AppTextField` secure toggle\n\n**Файл:** `src/features/users/screens/ChangePasswordScreen.tsx`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users", "auth"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-369"],
+    "acceptanceCriteria": [
+      "Валидация new == confirm на клиенте",
+      "Успешная смена очищает токены → `Login`",
+      "400 неверный current_password показывается",
+      "После смены старый refresh не работает",
+      "Пароли в secure fields, не логируются"
+    ]
+  },
+  {
+    "identifier": "DEV-373",
+    "title": "[MOB-205] Лента активности — GET /auth/me/activity/",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-205.\n\nВиджет «Моя активность» для главного экрана и профиля.\n\n**API:** `GET /api/v1/auth/me/activity/`\n\n**Док:** `mobile_api_users.md`\n\n**Response:** `{ bookings: [], tasks: [], passes: [] }` (max 5 each)\n\n**Role behavior:** см. оригинальный тикет MOB-205\n\n**UI `ActivityFeed` component:**\n- 3 секции, empty скрывается\n- Tap → placeholder nav (Epic 4+)\n- Pull-to-refresh (`RefreshControl`)\n\n**Файлы:**\n- `src/features/users/components/ActivityFeed.tsx`\n- `src/features/users/types/activity.ts`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-369"],
+    "acceptanceCriteria": [
+      "GET /me/activity/ парсится в typed models",
+      "До 5 элементов в каждой секции",
+      "Guest: tasks пустая — UI OK",
+      "status/priority enums → локализованные labels",
+      "Loading/error/empty через UI-kit",
+      "Виджет на `Home` и `Profile`"
+    ]
+  },
+  {
+    "identifier": "DEV-374",
+    "title": "[MOB-206] Экран профиля — layout, навигация, read-only info",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-206.\n\nОсновной экран профиля (tab или `Profile` route).\n\n**Данные:** GET /auth/me/ (MOB-201) + ActivityFeed (MOB-205)\n\n**UI секции:**\n1. Header: avatar, full_name, position, email\n2. Company card + role badge\n3. Activity feed (compact)\n4. Menu: Edit profile, Change password, Logout (MOB-107)\n\n**Файл:** `src/features/users/screens/ProfileScreen.tsx` (заменить placeholder)\n\n**Email verified banner** если `!is_email_verified`\n\n**Pull-to-refresh:** /me/ + activity",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users", "ui"],
+    "area": "mobile-users",
+    "parallel": false,
+    "dependsOn": ["DEV-369", "DEV-371", "DEV-373", "DEV-367"],
+    "acceptanceCriteria": [
+      "`Profile` только для authenticated",
+      "Avatar, full_name, email, role, company",
+      "Guest без company — card скрыта",
+      "Menu → edit/password/logout",
+      "Pull-to-refresh работает",
+      "Banner unverified email → `VerifyEmail`"
+    ]
+  },
+  {
+    "identifier": "DEV-375",
+    "title": "[MOB-207] Superadmin — список пользователей GET /auth/users/ (optional)",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-207.\n\nAdmin-раздел для `superadmin`.\n\n**API:** `GET /api/v1/auth/users/` с пагинацией\n\n**Док:** `mobile_api_users.md`\n\n**Доступ:** только `role == superadmin` — экран не mount для остальных\n\n**UI `AdminUsers` screen:**\n- Search (debounce 300ms)\n- Filter chips: role, is_active\n- FlatList + infinite scroll (`useInfiniteQuery`)\n\n**Файл:** `src/features/admin/screens/UsersListScreen.tsx`\n\n**Приоритет:** optional, ниже MVP employee",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users", "admin", "optional"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-368"],
+    "acceptanceCriteria": [
+      "Раздел виден только при `user.role === superadmin`",
+      "Список с пагинацией",
+      "Search debounce 300ms",
+      "Filters role / is_active",
+      "Non-superadmin — экран не mount",
+      "Empty state"
+    ]
+  },
+  {
+    "identifier": "DEV-376",
+    "title": "[MOB-208] Superadmin — карточка пользователя block/unblock/delete",
+    "description": "**Stack:** React Native (Expo) — `NewLevelHub-Mobile-RN`\n**Портировано из:** Flutter-тикет MOB-208.\n\nДетальный экран пользователя и admin-действия для superadmin.\n\n**API:**\n- `GET /api/v1/auth/users/{id}/`\n- `POST .../block/`, `POST .../unblock/`\n- `DELETE .../` — 204\n\n**Док:** `mobile_api_users.md` → admin section\n\n**UI `AdminUserDetail` screen:**\n- Профиль + bookings_count, tasks_count\n- Block / Unblock / Delete с `Alert.alert` confirm\n\n**Файл:** `src/features/admin/screens/UserDetailScreen.tsx`\n\n**Не в MVP:** impersonate",
+    "block": "Mobile — Epic 2: Users",
+    "labels": ["mobile", "react-native", "users", "admin", "optional"],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": ["DEV-375"],
+    "acceptanceCriteria": [
+      "GET detail показывает bookings_count и tasks_count",
+      "Block/unblock обновляют UI",
+      "Delete confirm + 204 → back to list",
+      "400 delete self/superadmin → message из API",
+      "Только superadmin",
+      "impersonate out of scope"
+    ]
+  }
+]

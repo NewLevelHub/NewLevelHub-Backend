@@ -1,0 +1,590 @@
+[
+  {
+    "identifier": "DEV-353",
+    "title": "[MOB-001] Инициализация Flutter-проекта NewLevelHub-Mobile",
+    "description": "Создать репозиторий и базовую структуру Flutter-приложения для New Level Hub.\n\n**Контекст:** мобилка разрабатывается локально (`flutter run`), все API-запросы идут на production-бэкенд — тот же, что и веб: `https://newlevelhub.kz/api/v1/`. Локальный Django не поднимаем. CI на старте не нужен.\n\n**Документация API:** `NewLevelHub-Backend/mobile-api-docs/mobile_api.md` и блоки `mobile_api_*.md`.\n\n**Что сделать:**\n- `flutter create` с org `kz.newlevelhub`, имя пакета `newlevelhub_mobile`\n- Минимальные версии: iOS 15+, Android SDK 24+\n- Структура каталогов:\n  ```\n  lib/\n    main.dart\n    app.dart\n    core/\n      config/\n      network/\n      auth/\n      router/\n      theme/\n      widgets/\n    features/\n      auth/\n      users/\n  ```\n- README: как установить Flutter, запустить проект, указать prod API URL\n- `.gitignore` для Flutter + не коммитить секреты\n\n**Не делать в этом тикете:** экраны, Dio, авторизацию — это следующие тикеты.",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "foundation"
+    ],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [],
+    "acceptanceCriteria": [
+      "Проект `NewLevelHub-Mobile` создан и собирается без ошибок: `flutter analyze` — 0 issues",
+      "Приложение запускается на iOS Simulator и Android Emulator (`flutter run`) — виден placeholder-экран",
+      "Структура `lib/core/` и `lib/features/` создана согласно описанию",
+      "В README описаны: требования (Flutter SDK), команда запуска, base URL prod API",
+      "Package name / bundle id: `kz.newlevelhub.newlevelhub_mobile` (или согласованный вариант)"
+    ]
+  },
+  {
+    "identifier": "DEV-354",
+    "title": "[MOB-002] Конфигурация API — prod base URL и media helper",
+    "description": "Централизовать настройки подключения к production API.\n\n**Base URL (prod):** `https://newlevelhub.kz/api/v1`\n\n**Media URL:** аватары и QR могут приходить как абсолютный URL или относительный путь (`/media/avatars/42/photo.jpg`). Нужен helper:\n```dart\nString resolveMediaUrl(String? path) {\n  if (path == null || path.isEmpty) return '';\n  if (path.startsWith('http')) return path;\n  return 'https://newlevelhub.kz$path';\n}\n```\n\n**Файлы:**\n- `lib/core/config/api_config.dart` — `baseUrl`, `mediaOrigin`, `defaultLanguage = 'ru'`\n- `lib/core/config/env.dart` — опционально `--dart-define=API_BASE_URL=...` для переопределения без смены кода\n\n**Заголовки по умолчанию для всех запросов:**\n- `Content-Type: application/json` (кроме multipart)\n- `Accept: application/json`\n- `Accept-Language: ru`",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "foundation"
+    ],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-353"
+    ],
+    "acceptanceCriteria": [
+      "Класс `ApiConfig` с константами `baseUrl = 'https://newlevelhub.kz/api/v1'` и `mediaOrigin = 'https://newlevelhub.kz'`",
+      "Функция `resolveMediaUrl()` корректно обрабатывает null, абсолютные и относительные пути",
+      "При `--dart-define=API_BASE_URL=https://example.com/api/v1` baseUrl переопределяется",
+      "Нет hardcoded URL в feature-модулях — только импорт из `ApiConfig`",
+      "Unit-тест на `resolveMediaUrl` для 3 кейсов: null, `/media/x.jpg`, `https://...`"
+    ]
+  },
+  {
+    "title": "[MOB-003] Сетевой слой — Dio client, timeouts, debug logging",
+    "description": "Настроить HTTP-клиент для работы с Django REST API на prod.\n\n**Пакет:** `dio`\n\n**Файл:** `lib/core/network/dio_client.dart`\n\n**Настройки Dio:**\n- `baseUrl`: из `ApiConfig.baseUrl`\n- `connectTimeout` / `receiveTimeout`: 30 сек\n- Default headers: `Accept-Language: ru`, `Accept: application/json`\n\n**Debug interceptor (только `kDebugMode`):**\n- Логировать method, path, status code\n- Не логировать тела запросов с паролями (`/auth/login/`, `/auth/register/`)\n\n**Проверка связи с prod:**\n```http\nGET /api/v1/ping/\n→ { \"message\": \"pong\", \"version\": \"...\" }\n\nGET /api/v1/health/\n→ { \"status\": \"healthy\", \"database\": \"connected\", ... }\n```\n\nДок: `mobile-api-docs/mobile_api_core.md`",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "network"
+    ],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-354"
+    ],
+    "acceptanceCriteria": [
+      "Синглтон/factory `DioClient` с настроенным `baseUrl` на prod",
+      "Первый запуск приложения (или debug-кнопка) успешно вызывает `GET /ping/` и получает 200",
+      "`GET /health/` обрабатывается: при 503 показывается понятное сообщение (можно временный SnackBar)",
+      "Логирование запросов работает только в debug-сборке",
+      "Пароли и refresh-токены не попадают в debug-логи"
+    ],
+    "identifier": "DEV-355"
+  },
+  {
+    "title": "[MOB-004] Парсинг ошибок API — ApiException и field errors",
+    "description": "Единый слой обработки ошибок бэкенда для всех feature-модулей.\n\n**Форматы ответов бэка (см. `mobile_api.md`):**\n\n1. Стандартный envelope:\n```json\n{\n  \"success\": false,\n  \"error\": {\n    \"code\": \"EMAIL_NOT_VERIFIED\",\n    \"message\": \"...\",\n    \"details\": { \"email\": [\"...\"] }\n  }\n}\n```\n\n2. Упрощённый DRF:\n```json\n{ \"detail\": \"Неверные учётные данные\" }\n```\n\n**Файлы:**\n- `lib/core/network/api_exception.dart` — `ApiException(code, message, statusCode, fieldErrors)`\n- `lib/core/network/error_parser.dart` — парсинг из `DioException`\n\n**Поведение:**\n- 400 + `details` → маппинг на поля формы (email, password, …)\n- 401 → флаг `isUnauthorized` для interceptor (MOB-006)\n- 403 + code `EMAIL_NOT_VERIFIED` → отдельный тип ошибки для навигации\n- 429 → показ «Слишком много запросов»\n- 5xx → общая ошибка «Сервис временно недоступен»",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "network"
+    ],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-355"
+    ],
+    "acceptanceCriteria": [
+      "Класс `ApiException` с полями: `code`, `message`, `statusCode`, `Map<String, List<String>>? fieldErrors`",
+      "`ErrorParser.parse(DioException)` корректно разбирает envelope с `error.details`",
+      "`ErrorParser` разбирает ответ `{ \"detail\": \"...\" }`",
+      "Unit-тесты минимум на 4 кейса: validation 400, detail 400, 401, 500",
+      "Feature-модули не парсят JSON ошибок напрямую — только через `ErrorParser`"
+    ],
+    "identifier": "DEV-356"
+  },
+  {
+    "title": "[MOB-005] Secure storage — хранение JWT access и refresh",
+    "description": "Безопасное локальное хранение JWT-токенов на устройстве.\n\n**Пакет:** `flutter_secure_storage`\n\n**Док:** `mobile_api.md` → раздел «JWT-токены»\n\n**Важно:**\n- Access (~15–30 мин) и refresh (7 или 30 дней при `remember_me`) хранить в Keychain (iOS) / EncryptedSharedPreferences (Android)\n- HttpOnly cookie `refresh_token` с сервера **игнорировать** — брать `tokens.refresh` из JSON-тела login/register\n- После refresh **сохранять новый refresh** (ротация — старый недействителен)\n\n**Файл:** `lib/core/auth/token_storage.dart`\n\n**API класса:**\n```dart\nFuture<void> saveTokens({required String access, required String refresh});\nFuture<String?> getAccessToken();\nFuture<String?> getRefreshToken();\nFuture<void> clearTokens();\nFuture<bool> hasTokens();\n```",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-353"
+    ],
+    "acceptanceCriteria": [
+      "`TokenStorage` реализован на `flutter_secure_storage`",
+      "Токены переживают перезапуск приложения (cold start → `hasTokens() == true`)",
+      "`clearTokens()` полностью удаляет access и refresh",
+      "Токены не хранятся в SharedPreferences / plain text",
+      "Unit/widget test с mock secure storage: save → read → clear"
+    ],
+    "identifier": "DEV-357"
+  },
+  {
+    "title": "[MOB-006] Auth interceptor — Bearer header и auto-refresh",
+    "description": "Dio interceptor: автоматическая подстановка JWT и обновление access при 401.\n\n**Док:** `mobile_api.md` → «Рекомендуемый flow»\n\n**Логика:**\n1. На каждый запрос (кроме публичных auth-эндпоинтов) добавить `Authorization: Bearer <access>`\n2. При ответе 401 на защищённый запрос:\n   - Одна попытка `POST /auth/token/refresh/` с `{ \"refresh\": \"...\" }`\n   - При успехе: сохранить новую пару access+refresh, **повторить** исходный запрос\n   - При fail (401, blacklist, `SESSION_IDLE_TIMEOUT`, `SESSION_ABSOLUTE_TIMEOUT`): `clearTokens()` → callback `onSessionExpired()`\n3. Публичные пути (без Bearer): `/auth/login/`, `/auth/register/`, `/auth/token/refresh/`, `/auth/logout/`, `/auth/password/reset/`, `/auth/password/reset/confirm/`, `/auth/register/invite/`, `/auth/email/verify/`, `/ping/`, `/health/`\n\n**Защита от race condition:** если несколько запросов одновременно получили 401 — только один refresh, остальные ждут (mutex/Completer).\n\n**Файл:** `lib/core/network/auth_interceptor.dart`",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-355",
+      "DEV-356",
+      "DEV-357"
+    ],
+    "acceptanceCriteria": [
+      "Защищённый запрос автоматически получает заголовок `Authorization: Bearer ...`",
+      "При истёкшем access выполняется refresh и исходный запрос повторяется успешно",
+      "После refresh новый refresh сохраняется в `TokenStorage`",
+      "При неуспешном refresh вызывается `onSessionExpired` и токены очищаются",
+      "Параллельные 401 не вызывают несколько refresh-запросов одновременно",
+      "Ручная проверка на prod: login → подождать expiry access → любой `/auth/me/` → auto-refresh работает"
+    ],
+    "identifier": "DEV-358"
+  },
+  {
+    "title": "[MOB-007] Навигация — go_router, splash, auth guard",
+    "description": "Маршрутизация приложения с разделением auth / main flow.\n\n**Пакет:** `go_router`\n\n**Маршруты (минимум для Epic 0–2):**\n| Path | Экран | Guard |\n|------|-------|-------|\n| `/splash` | Splash / проверка токенов | — |\n| `/login` | Вход | redirect если уже auth |\n| `/register` | Регистрация гостя | — |\n| `/verify-email` | Ожидание подтверждения email | — |\n| `/invite` | Регистрация по приглашению | query `?token=` |\n| `/forgot-password` | Запрос сброса | — |\n| `/reset-password` | Новый пароль | query `?token=` |\n| `/home` | Placeholder главного экрана | auth required |\n| `/profile` | Профиль | auth required |\n\n**Splash flow:**\n1. `hasTokens()` → попробовать `GET /auth/me/`\n2. 200 → `/home`\n3. 401 / нет токенов → `/login`\n\n**Файлы:**\n- `lib/core/router/app_router.dart`\n- `lib/core/router/auth_notifier.dart` — слушает logout/session expired\n\n**Deep links:** базовая регистрация схем `newlevelhub://` — полная настройка в MOB-104, MOB-106.",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "navigation"
+    ],
+    "area": "mobile-foundation",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-358"
+    ],
+    "acceptanceCriteria": [
+      "`go_router` настроен, приложение стартует с `/splash`",
+      "Без токенов пользователь попадает на `/login`",
+      "С валидными токенами после splash → `/home` (placeholder OK)",
+      "Попытка открыть `/profile` без auth → redirect на `/login`",
+      "`onSessionExpired` из MOB-006 сбрасывает стек на `/login`",
+      "Query-параметры `token` сохраняются в route state для invite/reset (парсинг в Epic 1)"
+    ],
+    "identifier": "DEV-359"
+  },
+  {
+    "title": "[MOB-008] UI-kit — тема, общие виджеты, состояния loading/error/empty",
+    "description": "Базовый дизайн-системный слой для всех экранов Auth и Users.\n\n**Файлы:**\n- `lib/core/theme/app_theme.dart` — `ThemeData` light (dark — опционально позже)\n- `lib/core/theme/app_colors.dart`, `app_text_styles.dart`\n- `lib/core/widgets/`:\n  - `AppButton` — primary / secondary / text, loading state\n  - `AppTextField` — label, error text из `fieldErrors`, obscure для пароля\n  - `AppLoader` — fullscreen и inline\n  - `AppErrorView` — иконка + message + кнопка «Повторить»\n  - `AppEmptyView` — placeholder для пустых списков\n\n**Требования UX:**\n- Ошибки полей формы — под соответствующим полем (из `ApiException.fieldErrors`)\n- Общие ошибки — SnackBar или banner сверху формы\n- Кнопки блокируются на время submit (`isLoading`)\n- SafeArea на всех экранах\n\n**Не делать:** pixel-perfect по Figma — достаточно чистого MVP UI, согласованного с веб-брендом (синий акцент, нейтральный фон).",
+    "block": "Mobile — Epic 0: Foundation",
+    "labels": [
+      "mobile",
+      "flutter",
+      "ui"
+    ],
+    "area": "mobile-foundation",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-353"
+    ],
+    "acceptanceCriteria": [
+      "`ThemeData` подключён в `MaterialApp`",
+      "`AppButton` поддерживает состояние loading (disabled + indicator)",
+      "`AppTextField` отображает текст ошибки из `String? errorText`",
+      "`AppErrorView` с callback `onRetry` используется на экране с failed network",
+      "Demo-экран или README-screenshot показывает все виджеты",
+      "Все экраны Auth/Users используют UI-kit, не raw `ElevatedButton`/`TextField`"
+    ],
+    "identifier": "DEV-360"
+  },
+  {
+    "title": "[MOB-101] Экран входа — POST /auth/login/",
+    "description": "Реализовать вход по email и паролю.\n\n**API:** `POST /api/v1/auth/login/`\n\n**Док:** `mobile-api-docs/mobile_api.md` → POST /auth/login/\n\n**Request body:**\n```json\n{\n  \"email\": \"user@example.com\",\n  \"password\": \"SecurePass123!\",\n  \"remember_me\": true\n}\n```\n\n**Response 200:** `{ user, tokens: { access, refresh } }`\n\n**Обработка ошибок:**\n| Код | UI |\n|-----|----|\n| 400 | «Неверные учётные данные» |\n| 403 `EMAIL_NOT_VERIFIED` | Navigate → `/verify-email`, передать email |\n| 403 blocked | «Аккаунт заблокирован» |\n\n**После успеха:**\n1. `TokenStorage.saveTokens()`\n2. Сохранить `User` в state (Riverpod/Bloc — на выбор команды)\n3. Navigate → `/home`\n\n**UI:** email, password, checkbox «Запомнить меня», ссылки «Забыли пароль?» → `/forgot-password`, «Регистрация» → `/register`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-auth",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-358",
+      "DEV-359",
+      "DEV-360"
+    ],
+    "acceptanceCriteria": [
+      "Форма валидирует email (формат) и non-empty password до submit",
+      "Успешный login на prod сохраняет токены и переводит на `/home`",
+      "Checkbox `remember_me` передаётся в API (`true`/`false`)",
+      "403 `EMAIL_NOT_VERIFIED` открывает экран verify-email с email пользователя",
+      "400 показывает «Неверные учётные данные» без раскрытия существования email",
+      "Модель `User` и `AuthTokens` с `json_serializable` / freezed",
+      "Repository `AuthRepository.login()` изолирован от UI"
+    ],
+    "identifier": "DEV-361"
+  },
+  {
+    "title": "[MOB-102] Регистрация гостя — POST /auth/register/",
+    "description": "Экран регистрации гостевого аккаунта (`role: guest`, без компании).\n\n**API:** `POST /api/v1/auth/register/`\n\n**Док:** `mobile_api.md` → POST /auth/register/\n\n**Поля формы:**\n- email (required)\n- first_name, last_name (required)\n- phone (optional)\n- password, password_confirm (required, min 8)\n\n**Response 201:** `{ user, tokens }` — токены выдаются сразу, но `is_email_verified: false`\n\n**Flow после регистрации:**\n1. Сохранить токены (пользователь технически auth)\n2. Navigate → `/verify-email` (login всё равно заблокирован до verify)\n3. Показать: «Проверьте почту для подтверждения email»\n\n**Ошибки 400:** показать `error.details` по полям (email занят, пароли не совпадают, слабый пароль)",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-361"
+    ],
+    "acceptanceCriteria": [
+      "Все поля формы с client-side validation (password == password_confirm)",
+      "Успешная регистрация на prod → экран verify-email",
+      "Токены сохраняются после 201",
+      "Ошибка «email уже занят» показывается под полем email",
+      "Ссылка «Уже есть аккаунт?» → `/login`",
+      "`AuthRepository.register()` возвращает `User` + tokens"
+    ],
+    "identifier": "DEV-362"
+  },
+  {
+    "title": "[MOB-103] Экран «Подтвердите email» — resend",
+    "description": "Экран ожидания подтверждения email с возможностью повторной отправки письма.\n\n**API:** `POST /api/v1/auth/email/resend/` (🔒 требует Bearer access)\n\n**Док:** `mobile_api.md` → POST /auth/email/resend/\n\n**Когда показывать:**\n- После register (MOB-102)\n- После login с 403 `EMAIL_NOT_VERIFIED` (MOB-101)\n- После invite-register (MOB-105) — пользователь без токенов, resend недоступен → только текст «Проверьте почту»\n\n**UI:**\n- Email пользователя (read-only)\n- Текст инструкции\n- Кнопка «Отправить письмо повторно»\n- Cooldown UI при 429 (3 запроса / 10 мин)\n- Кнопка «Вернуться ко входу» → logout + `/login`\n\n**Response 403** (email уже verified) → navigate `/home`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-361"
+    ],
+    "acceptanceCriteria": [
+      "Экран доступен по `/verify-email` с отображением email",
+      "Кнопка resend вызывает `POST /auth/email/resend/` с текущим access token",
+      "429 показывает таймер/cooldown «Попробуйте позже»",
+      "403 «уже подтверждён» перенаправляет на `/home`",
+      "Без access token (после invite) resend скрыт, показана только инструкция",
+      "После «Вернуться ко входу» токены очищаются"
+    ],
+    "identifier": "DEV-363"
+  },
+  {
+    "title": "[MOB-104] Deep link — подтверждение email GET /auth/email/verify/",
+    "description": "Обработка ссылки из письма подтверждения email.\n\n**API:** `GET /api/v1/auth/email/verify/?token=<uuid>`\n\n**Док:** `mobile_api.md` → GET /auth/email/verify/\n\n**Ссылки в письме** ведут на веб (`FRONTEND_URL`). Нужно перехватить token в приложении:\n\n**Настройка:**\n- iOS: Associated Domains `applinks:newlevelhub.kz` + path `/verify-email`\n- Android: intent-filter для `https://newlevelhub.kz/verify-email` и custom scheme `newlevelhub://verify-email`\n- Пакет: `app_links` или `uni_links`\n\n**Flow:**\n1. App получает URL с `token`\n2. Вызов `GET /auth/email/verify/?token=...` (публичный, без Bearer)\n3. 200 → экран успеха → `/login` или `/home` если уже auth\n4. 400 `TOKEN_ALREADY_USED` → «Email уже подтверждён»\n5. 400 `TOKEN_EXPIRED` → предложить resend (если auth) или login\n6. 404 → «Ссылка недействительна»",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth",
+      "deep-link"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-363"
+    ],
+    "acceptanceCriteria": [
+      "Приложение перехватывает deep link с query param `token` (cold start и warm start)",
+      "Валидный token на prod → 200 → экран «Email подтверждён»",
+      "TOKEN_EXPIRED и TOKEN_ALREADY_USED показывают корректные сообщения из доки",
+      "После успеха пользователь может войти через `/login`",
+      "README: как протестировать deep link через `adb` / `xcrun simctl openurl`",
+      "Fallback: ручной ввод token на debug-экране (только kDebugMode)"
+    ],
+    "identifier": "DEV-364"
+  },
+  {
+    "title": "[MOB-105] Регистрация по приглашению — invite flow",
+    "description": "Регистрация сотрудника компании по invite-ссылке.\n\n**API:**\n- `GET /api/v1/auth/register/invite/?token=<uuid>` — данные приглашения\n- `POST /api/v1/auth/register/invite/` — завершение регистрации\n\n**Док:** `mobile_api.md` → register/invite\n\n**GET Response:**\n```json\n{\n  \"company_name\": \"ТОО ...\",\n  \"email\": \"new.employee@example.com\",\n  \"role\": \"employee\",\n  \"is_guest_upgrade\": false\n}\n```\n\n**POST body:** `{ token, first_name, last_name, phone?, password }`\n\n**Response 201:** `{ \"detail\": \"Регистрация прошла успешно\" }` — **токены НЕ выдаются**\n\n**UI `/invite?token=...`:**\n1. Loading → GET invite\n2. 400 → «Ссылка приглашения недействительна»\n3. Форма: email (read-only из GET), имя, фамилия, телефон, пароль\n4. POST → success → `/verify-email` (без resend) → затем login\n\n**Особый кейс `is_guest_upgrade: true`:** показать «Ваш гостевой аккаунт будет повышен до сотрудника»",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth",
+      "deep-link"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-359"
+    ],
+    "acceptanceCriteria": [
+      "Route `/invite` принимает `token` из query или deep link",
+      "GET invite предзаполняет email и показывает company_name + role",
+      "Email поле disabled — нельзя изменить",
+      "POST invite на prod → 201 → экран «Подтвердите email» (без токенов в storage)",
+      "400 невалидный/истёкший token → понятная ошибка",
+      "400 лимит сотрудников → «Достигнут лимит участников»",
+      "Deep link: `newlevelhub://invite?token=` и https path настроены"
+    ],
+    "identifier": "DEV-365"
+  },
+  {
+    "title": "[MOB-106] Сброс пароля — reset request + confirm",
+    "description": "Flow восстановления пароля через email.\n\n**API:**\n- `POST /api/v1/auth/password/reset/` — `{ email }`\n- `POST /api/v1/auth/password/reset/confirm/` — `{ token, new_password }`\n\n**Док:** `mobile_api.md` → password reset\n\n**Экран `/forgot-password`:**\n- Поле email\n- POST reset → **всегда показывать** success message (anti-enumeration): «Если аккаунт существует, мы отправили ссылку…»\n- 429 → rate limit message\n\n**Экран `/reset-password?token=...`:**\n- Deep link из письма (аналог MOB-104)\n- Поля: new_password, confirm password\n- POST confirm → success → **clearTokens()** (все refresh инвалидированы) → `/login`\n\n**Ошибки confirm:** TOKEN_INVALID, TOKEN_EXPIRED, TOKEN_ALREADY_USED, слабый пароль → сообщения из `error.details`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth",
+      "deep-link"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-359",
+      "DEV-364"
+    ],
+    "acceptanceCriteria": [
+      "Forgot password отправляет POST /password/reset/ и показывает neutral success",
+      "Reset confirm читает token из deep link query",
+      "Успешный confirm очищает локальные токены и ведёт на login",
+      "400 слабый пароль показывает требования Django validators",
+      "429 на reset request обрабатывается",
+      "Deep link `/reset-password?token=` работает на iOS и Android"
+    ],
+    "identifier": "DEV-366"
+  },
+  {
+    "title": "[MOB-107] Logout — POST /auth/logout/",
+    "description": "Выход из аккаунта с инвалидацией refresh на сервере.\n\n**API:** `POST /api/v1/auth/logout/`\n\n**Док:** `mobile_api.md` → POST /auth/logout/\n\n**Request:** `{ \"refresh\": \"<refresh_token>\" }` — **без** Authorization header\n\n**Response 200:** `{ \"detail\": \"Вы успешно вышли из системы\" }`\n\n**Логика клиента:**\n1. Прочитать refresh из `TokenStorage`\n2. POST logout (best effort — даже при ошибке сети)\n3. **Всегда** `clearTokens()` и сброс user state\n4. Navigate → `/login`\n\n**UI:** кнопка «Выйти» на экране профиля + confirm dialog\n\n**400** (invalid refresh): всё равно локальный logout",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-auth",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-361"
+    ],
+    "acceptanceCriteria": [
+      "Logout вызывает POST /auth/logout/ с refresh в body",
+      "После logout токены удалены локально независимо от ответа сервера",
+      "User state (Riverpod/Bloc) сброшен",
+      "Navigation stack очищен, открыт `/login`",
+      "Back button после logout не возвращает на защищённые экраны",
+      "Проверка на prod: после logout refresh не принимается сервером"
+    ],
+    "identifier": "DEV-367"
+  },
+  {
+    "title": "[MOB-108] Auth state management — session, user cache, startup",
+    "description": "Централизованное управление состоянием авторизации, связка MOB-101…107.\n\n**Scope:**\n- `AuthState`: `unauthenticated | authenticated(User) | loading`\n- При старте: если есть tokens → `GET /auth/me/` для актуального профиля\n- После login/register/refresh — синхронизация User в state\n- `AuthRepository` методы: login, register, logout, refresh, fetchMe\n- Expose `currentUser` для роутера и role-based UI\n\n**Role enum:** `superadmin`, `company_admin`, `employee`, `reception`, `service_manager`, `guest`\n\n**Edge cases:**\n- `GET /me/` 401 → попытка refresh (через interceptor) → fail → logout\n- Password reset confirm / change password → force logout\n- Blocked user (`is_active: false`) при login → 403\n\n**Файлы:**\n- `lib/features/auth/domain/user.dart`\n- `lib/features/auth/data/auth_repository.dart`\n- `lib/features/auth/application/auth_controller.dart`",
+    "block": "Mobile — Epic 1: Auth",
+    "labels": [
+      "mobile",
+      "flutter",
+      "auth"
+    ],
+    "area": "mobile-auth",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-361",
+      "DEV-367"
+    ],
+    "acceptanceCriteria": [
+      "Cold start с валидными токенами загружает профиль через GET /auth/me/",
+      "`currentUser.role` доступен для условного UI",
+      "Login/logout обновляют AuthState и роутер реагирует",
+      "User model парсит nested `company: { id, name, onboarding_completed } | null`",
+      "Unit test: User.fromJson для employee с company и guest без company",
+      "Нет дублирования логики токенов между repository и interceptor"
+    ],
+    "identifier": "DEV-368"
+  },
+  {
+    "title": "[MOB-201] Модель профиля и GET /auth/me/",
+    "description": "Data layer профиля текущего пользователя.\n\n**API:** `GET /api/v1/auth/me/`\n\n**Док:** `mobile-api-docs/mobile_api_users.md` → GET /auth/me/\n\n**Response fields:** id, email, first_name, last_name, full_name, phone, position, avatar (absolute URL), role, company, is_email_verified, date_joined\n\n**Файлы:**\n- `lib/features/users/domain/user_profile.dart` (можно расширить User из auth или alias)\n- `lib/features/users/data/profile_repository.dart`\n\n**Методы repository:**\n- `Future<UserProfile> fetchProfile()`\n- `Future<void> refreshProfile()` — для pull-to-refresh на экране профиля\n\n**Avatar URL:** прогонять через `resolveMediaUrl()` если relative",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users"
+    ],
+    "area": "mobile-users",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-368"
+    ],
+    "acceptanceCriteria": [
+      "`ProfileRepository.fetchProfile()` вызывает GET /auth/me/ на prod",
+      "Модель парсит все поля из доки включая nullable avatar и company",
+      "`full_name` отображается в UI (не склеивать client-side если сервер отдаёт)",
+      "401 обрабатывается через auth interceptor",
+      "Unit test UserProfile.fromJson с fixture JSON из доки"
+    ],
+    "identifier": "DEV-369"
+  },
+  {
+    "title": "[MOB-202] Редактирование профиля — PATCH /auth/me/update/",
+    "description": "Экран и логика обновления текстовых полей профиля.\n\n**API:** `PATCH /api/v1/auth/me/update/` (JSON, без аватара)\n\n**Док:** `mobile_api_users.md` → PATCH /me/update/\n\n**Редактируемые поля:** first_name, last_name, phone, position\n\n**Read-only (не отправлять или игнорировать):** email, role, company\n\n**UI экран `/profile/edit`:**\n- Форма с текущими значениями из GET /me/\n- Save → PATCH → обновить local state из response 200\n- Unsaved changes guard при back navigation\n\n**Ошибки 400:** field errors из `error.details`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-369"
+    ],
+    "acceptanceCriteria": [
+      "PATCH отправляет только изменённые поля (partial update)",
+      "Успешный ответ обновляет профиль в AuthState/ProfileState",
+      "email, role, company не editable на UI",
+      "Ошибки валидации показываются под полями",
+      "После save SnackBar «Профиль обновлён» и возврат на `/profile`",
+      "Проверка на prod: изменение phone/position сохраняется"
+    ],
+    "identifier": "DEV-370"
+  },
+  {
+    "title": "[MOB-203] Аватар — multipart upload и DELETE /auth/me/avatar/",
+    "description": "Загрузка, отображение и удаление аватара пользователя.\n\n**API:**\n- `PATCH /api/v1/auth/me/update/` с `multipart/form-data`, поле `avatar`\n- `DELETE /api/v1/auth/me/avatar/`\n\n**Док:** `mobile_api_users.md` → PATCH (multipart), DELETE avatar\n\n**Ограничения:** JPEG, PNG, WebP; max 5 МБ; сервер ресайзит до 400×400\n\n**UI на `/profile`:**\n- CircleAvatar с текущим фото (`cached_network_image`)\n- Tap → bottom sheet: «Сделать фото» / «Выбрать из галереи» / «Удалить»\n- Пакеты: `image_picker`\n\n**Upload:**\n- Client-side check: тип файла и size ≤ 5MB до отправки\n- Progress indicator на время upload\n- Response 200 — обновить avatar URL в state\n\n**Delete:**\n- DELETE → idempotent (200 даже если avatar уже null)\n- Placeholder initials из `full_name`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-369",
+      "DEV-370"
+    ],
+    "acceptanceCriteria": [
+      "Можно выбрать фото и загрузить через multipart PATCH на prod",
+      "Файл > 5 МБ блокируется на клиенте с сообщением из доки",
+      "DELETE avatar убирает фото и показывает placeholder",
+      "Повторный DELETE не ломает UI (idempotent)",
+      "Avatar URL кэшируется и обновляется после replace",
+      "Неподдерживаемый формат → 400 с понятным сообщением"
+    ],
+    "identifier": "DEV-371"
+  },
+  {
+    "title": "[MOB-204] Смена пароля — POST /auth/me/password/",
+    "description": "Экран смены пароля авторизованного пользователя.\n\n**API:** `POST /api/v1/auth/me/password/`\n\n**Док:** `mobile_api_users.md` → POST /me/password/\n\n**Request:**\n```json\n{\n  \"current_password\": \"...\",\n  \"new_password\": \"...\"\n}\n```\n\n**Response 200:** `{ \"detail\": \"Пароль изменён\" }`\n\n**Критично:** после успеха сервер **инвалидирует все refresh-сессии**. Access работает до expiry, refresh — нет.\n\n**Клиент после 200:**\n1. `clearTokens()`\n2. Dialog «Пароль изменён, войдите снова»\n3. Navigate → `/login`\n\n**UI `/profile/change-password`:** current, new, confirm new; toggle visibility\n\n**Ошибки 400:** неверный current_password, слабый new_password → field/global errors",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users",
+      "auth"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-369"
+    ],
+    "acceptanceCriteria": [
+      "Форма валидирует совпадение new и confirm на клиенте",
+      "Успешная смена на prod очищает токены и ведёт на login",
+      "400 неверный текущий пароль показывается пользователю",
+      "После смены старый refresh не работает (ручная проверка)",
+      "Пароли в secure fields, не логируются"
+    ],
+    "identifier": "DEV-372"
+  },
+  {
+    "title": "[MOB-205] Лента активности — GET /auth/me/activity/",
+    "description": "Виджет «Моя активность» для главного экрана и профиля.\n\n**API:** `GET /api/v1/auth/me/activity/`\n\n**Док:** `mobile_api_users.md` → GET /me/activity/\n\n**Response:**\n```json\n{\n  \"bookings\": [...],  // max 5\n  \"tasks\": [...],     // max 5\n  \"passes\": [...]     // max 5\n}\n```\n\n**Role behavior (read-only виджет):**\n| Роль | bookings | tasks | passes |\n|------|----------|-------|--------|\n| employee | свои | назначенные | свои |\n| company_admin | свои | назначенные | все компании |\n| guest | свои | [] | свои |\n| reception, service_manager | свои | [] | [] |\n\n**UI `ActivityFeedWidget`:**\n- 3 секции с заголовками\n- Empty section скрывается или «Нет данных»\n- Tap на item → placeholder navigation (deeplink to Epic 4+ позже)\n- Pull-to-refresh\n\n**Модели:** `ActivityBooking`, `ActivityTask`, `ActivityPass`",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-369"
+    ],
+    "acceptanceCriteria": [
+      "GET /me/activity/ парсится в typed models",
+      "Виджет показывает до 5 элементов в каждой секции",
+      "Для guest секция tasks пустая — UI не ломается",
+      "status/priority enums маппятся на локализованные labels",
+      "Loading/error/empty states через UI-kit",
+      "Виджет встроен на placeholder `/home` и `/profile`"
+    ],
+    "identifier": "DEV-373"
+  },
+  {
+    "title": "[MOB-206] Экран профиля — layout, навигация, read-only info",
+    "description": "Основной экран профиля пользователя (tab или `/profile`).\n\n**Данные:** GET /auth/me/ (MOB-201) + ActivityFeedWidget (MOB-205)\n\n**UI секции:**\n1. **Header:** avatar (MOB-203), full_name, position, email (read-only)\n2. **Company card:** название компании + role badge (скрыть если `company == null`)\n3. **Activity feed** (compact)\n4. **Menu:**\n   - Редактировать профиль → `/profile/edit`\n   - Сменить пароль → `/profile/change-password`\n   - Выйти → MOB-107\n\n**Role badge colors:** визуально различать employee / company_admin / guest\n\n**Email verified badge:** если `is_email_verified == false` — banner с ссылкой на verify flow\n\n**Pull-to-refresh:** перезагрузка /me/ + activity",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users",
+      "ui"
+    ],
+    "area": "mobile-users",
+    "parallel": false,
+    "dependsOn": [
+      "DEV-369",
+      "DEV-371",
+      "DEV-373",
+      "DEV-367"
+    ],
+    "acceptanceCriteria": [
+      "Экран `/profile` доступен только authenticated users",
+      "Отображаются avatar, full_name, email, role, company",
+      "Guest без company — card скрыта, role badge «Гость»",
+      "Menu items ведут на edit/password/logout flows",
+      "Pull-to-refresh обновляет данные",
+      "Banner для unverified email с navigate на verify screen"
+    ],
+    "identifier": "DEV-374"
+  },
+  {
+    "title": "[MOB-207] Superadmin — список пользователей GET /auth/users/ (optional)",
+    "description": "Admin-раздел для роли `superadmin` — список пользователей платформы.\n\n**API:** `GET /api/v1/auth/users/` с пагинацией и фильтрами\n\n**Док:** `mobile_api_users.md` → GET /users/\n\n**Доступ:** только `role == superadmin`. Для employee/guest/admin компании — **раздел скрыт** (не 403 на UI).\n\n**Query params:** role, company_id, is_active, search, ordering, page, page_size\n\n**Response:** `{ count, next, previous, results: [...] }`\n\n**UI `/admin/users`:**\n- Search bar → debounced search\n- Filter chips: role, is_active\n- Infinite scroll / pagination (page_size=20)\n- List tile: avatar, full_name, email, role, company name\n- Tap → MOB-208 (detail)\n\n**Приоритет:** ниже MVP employee flow. Можно отложить если superadmin пользуется только вебом.",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users",
+      "admin",
+      "optional"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-368"
+    ],
+    "acceptanceCriteria": [
+      "Раздел виден только при currentUser.role == superadmin",
+      "Список загружается с prod с пагинацией",
+      "Search по email/имени работает (debounce 300ms)",
+      "Filter by role и is_active обновляет список",
+      "403 для non-superadmin не возникает — экран не mount",
+      "Empty state при пустом results"
+    ],
+    "identifier": "DEV-375"
+  },
+  {
+    "title": "[MOB-208] Superadmin — карточка пользователя block/unblock/delete",
+    "description": "Детальный экран пользователя и admin-действия для superadmin.\n\n**API:**\n- `GET /api/v1/auth/users/{id}/` — detail + bookings_count, tasks_count\n- `POST /api/v1/auth/users/{id}/block/`\n- `POST /api/v1/auth/users/{id}/unblock/`\n- `DELETE /api/v1/auth/users/{id}/` — 204\n\n**Док:** `mobile_api_users.md` → admin section\n\n**UI `/admin/users/:id`:**\n- Полный профиль + stats\n- Actions (confirm dialogs): Block / Unblock / Delete\n- 400 при delete self или superadmin → show error\n\n**Не включать в MVP:** `POST .../impersonate/` — отдельный тикет если понадобится support flow\n\n**Приоритет:** optional, после MOB-207",
+    "block": "Mobile — Epic 2: Users",
+    "labels": [
+      "mobile",
+      "flutter",
+      "users",
+      "admin",
+      "optional"
+    ],
+    "area": "mobile-users",
+    "parallel": true,
+    "dependsOn": [
+      "DEV-375"
+    ],
+    "acceptanceCriteria": [
+      "GET detail показывает bookings_count и tasks_count",
+      "Block/unblock вызывают соответствующие POST и обновляют UI",
+      "Delete показывает confirm dialog и при 204 возвращает к списку",
+      "400 delete self/superadmin показывает message из API",
+      "Только superadmin имеет доступ к экрану",
+      "impersonate не реализован (documented out of scope)"
+    ],
+    "identifier": "DEV-376"
+  }
+]

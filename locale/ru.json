@@ -264,6 +264,8 @@
   "services.service_manager_already_active": "У этого сервис-менеджера уже есть активная заявка. Новую можно взять только после завершения текущей.",
   "services.service_manager_request_already_taken": "Заявка уже принята другим исполнителем.",
   "services.service_manager_not_executor": "Вы можете менять статус только своей заявки.",
+  "services.assignee_locked_in_progress": "Нельзя изменить исполнителя: заявка уже в работе.",
+  "services.completion_info_only_when_in_progress": "Информация о выполнении доступна только при завершении заявки в статусе 'в работе'.",
   "analytics.must_be_integer": "Должно быть целым числом.",
   "analytics.invalid_period": "Недопустимый период. Допустимые значения: {choices}.",
   "analytics.custom_period_dates_required": "Для периода custom обязательны параметры date_from и date_to (YYYY-MM-DD).",

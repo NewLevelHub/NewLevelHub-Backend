@@ -1095,13 +1095,13 @@ def test_service_manager_cannot_take_in_progress_request_owned_by_other(
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
-# ── Rule 2: auto-transition to in_progress when assignee is set ───────
+# ── Rule 2: auto-transition when assignee is set ──────────────────────
 
 @pytest.mark.django_db
-def test_superadmin_assign_without_status_auto_sets_in_progress(
+def test_superadmin_assign_other_user_without_status_auto_sets_accepted(
     api_client, superadmin, service_manager, service_request
 ):
-    """Rule 2: superadmin sets assigned_to without a status → status auto-becomes in_progress."""
+    """Rule 2: superadmin assigns someone else without a status → status auto-becomes accepted."""
     assert service_request.status == 'new'
 
     auth(api_client, superadmin)
@@ -1111,15 +1111,33 @@ def test_superadmin_assign_without_status_auto_sets_in_progress(
     )
     assert response.status_code == status.HTTP_200_OK
     service_request.refresh_from_db()
-    assert service_request.status == 'in_progress'
+    assert service_request.status == 'accepted'
     assert service_request.assigned_to_id == service_manager.pk
 
 
 @pytest.mark.django_db
-def test_service_manager_take_request_without_status_auto_sets_in_progress(
+def test_superadmin_assign_self_without_status_auto_sets_in_progress(
+    api_client, superadmin, service_request
+):
+    """Rule 2 exception: superadmin assigning themselves → in_progress (direct shortcut)."""
+    assert service_request.status == 'new'
+
+    auth(api_client, superadmin)
+    url = f'{BASE_URL}{service_request.pk}/status/'
+    response = api_client.patch(
+        url, {'assigned_to': superadmin.pk}, format='json',
+    )
+    assert response.status_code == status.HTTP_200_OK
+    service_request.refresh_from_db()
+    assert service_request.status == 'in_progress'
+    assert service_request.assigned_to_id == superadmin.pk
+
+
+@pytest.mark.django_db
+def test_service_manager_take_request_without_status_auto_sets_accepted(
     api_client, service_request
 ):
-    """Rule 2: service_manager sets only assigned_to → status auto-becomes in_progress."""
+    """Rule 2: service_manager auto-assigns to self without explicit status → accepted."""
     manager = User.objects.create_user(
         email='take-manager@test.com',
         password='pass',
@@ -1133,11 +1151,11 @@ def test_service_manager_take_request_without_status_auto_sets_in_progress(
     client = APIClient()
     auth(client, manager)
     url = f'{BASE_URL}{service_request.pk}/status/'
-    # Send only assigned_to — no explicit status
+    # Send only assigned_to — no explicit status; Rule 2 → accepted
     response = client.patch(url, {'assigned_to': manager.pk}, format='json')
     assert response.status_code == status.HTTP_200_OK
     service_request.refresh_from_db()
-    assert service_request.status == 'in_progress'
+    assert service_request.status == 'accepted'
     assert service_request.assigned_to_id == manager.pk
 
 

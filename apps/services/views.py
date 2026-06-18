@@ -991,12 +991,15 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 )
             save_kwargs['assigned_to'] = new_assignee
 
-        # Rule 2: auto-transition to in_progress when an assignee is being set
-        # and the client did not explicitly supply a target status.
-        # This lets a service_manager "take" a request without specifying status.
+        # Rule 2: auto-transition when an assignee is being set without an explicit status.
+        # Superadmin or service_manager assigning themselves → in_progress (direct shortcut).
+        # Superadmin assigning someone else → accepted (that person must press "Take to work").
         final_assignee = save_kwargs.get('assigned_to', sr.assigned_to)
         if final_assignee is not None and 'status' not in serializer.validated_data:
-            save_kwargs['status'] = 'in_progress'
+            if final_assignee == user:
+                save_kwargs['status'] = 'in_progress'
+            else:
+                save_kwargs['status'] = 'accepted'
 
         # Auto-stamp completed_at when transitioning to completed.
         # The client may optionally supply a value via the serializer; if they

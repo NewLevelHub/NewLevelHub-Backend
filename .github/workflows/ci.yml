@@ -28,6 +28,7 @@ jobs:
       github.event.pull_request.draft == false
     outputs:
       quality_changed: ${{ steps.filter.outputs.quality }}
+      image_changed: ${{ steps.filter.outputs.image }}
       deploy_changed: ${{ steps.filter.outputs.deploy }}
     steps:
       - name: Check changed paths
@@ -42,6 +43,14 @@ jobs:
               - 'manage.py'
               - 'requirements*.txt'
               - 'setup.cfg'
+            image:
+              - 'apps/**'
+              - 'config/**'
+              - 'templates/**'
+              - 'Dockerfile'
+              - 'manage.py'
+              - 'requirements*.txt'
+              - 'setup.cfg'
             deploy:
               - 'apps/**'
               - 'config/**'
@@ -53,6 +62,7 @@ jobs:
               - 'setup.cfg'
               - '.github/workflows/ci.yml'
               - 'nginx/preview.conf'
+              - 'dozzle/**'
 
   lint:
     name: Lint
@@ -176,7 +186,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       always() &&
-      needs.changes.outputs.deploy_changed == 'true' &&
+      needs.changes.outputs.image_changed == 'true' &&
       (needs.changes.outputs.quality_changed != 'true' || (needs.lint.result == 'success' && needs.tests.result == 'success')) &&
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
@@ -220,10 +230,13 @@ jobs:
 
   deploy_preview:
     name: Deploy PR preview
-    needs: [changes, build_and_push]
+    needs: [changes, lint, tests, build_and_push]
     runs-on: ubuntu-latest
     if: |
+      always() &&
       needs.changes.outputs.deploy_changed == 'true' &&
+      (needs.changes.outputs.image_changed != 'true' || needs.build_and_push.result == 'success') &&
+      (needs.changes.outputs.quality_changed != 'true' || (needs.lint.result == 'success' && needs.tests.result == 'success')) &&
       github.event.action != 'closed' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.fork == false
@@ -351,13 +364,25 @@ jobs:
             BACKEND_URL="https://${PR_SLUG}.staging.newlevelhub.kz"
             echo "Backend API URL for this preview: ${BACKEND_URL}"
 
+            if [ "$TICKET" != "noticket" ]; then
+              export PREVIEW_LOG_FILTER="$TICKET"
+            else
+              export PREVIEW_LOG_FILTER="$PR_SLUG"
+            fi
+
             echo "--- [3/5] Docker: deploy containers ---"
-            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL BACKEND_URL
+            export PR_SLUG PREVIEW_DB_NAME BACKEND_IMAGE PREVIEW_PORT FRONTEND_URL BACKEND_URL PREVIEW_LOG_FILTER
+            PREVIEW_SERVICES="redis backend nginx celery celery_beat"
+            if [ -f "dozzle/users.yml" ]; then
+              PREVIEW_SERVICES="${PREVIEW_SERVICES} dozzle"
+            else
+              echo "WARNING: dozzle/users.yml not found — skipping Dozzle. Create it to enable https://${PR_SLUG}.staging.newlevelhub.kz/dozzle/"
+            fi
             docker compose \
               --project-name "$PR_SLUG" \
               --env-file .env.staging \
               -f "$COMPOSE_FILE" \
-              up -d --force-recreate
+              up -d --force-recreate $PREVIEW_SERVICES
 
             echo "--- [4/5] Waiting for backend to finish startup (migrate + collectstatic + gunicorn) ---"
             BACKEND_CONTAINER="${PR_SLUG}-backend-1"
@@ -390,10 +415,36 @@ jobs:
             fi
 
             echo "--- [5a/5] Writing nginx config ---"
-            sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+            CERT_PATH="/etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem"
+            if [ -f "$CERT_PATH" ]; then
+              sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
             server {
                 listen 80;
                 server_name ${PR_SLUG}.staging.newlevelhub.kz;
+                return 301 https://\$host\$request_uri;
+            }
+
+            server {
+                listen 443 ssl;
+                server_name ${PR_SLUG}.staging.newlevelhub.kz;
+
+                ssl_certificate /etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem;
+                ssl_certificate_key /etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/privkey.pem;
+
+                location /dozzle/ {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT}/dozzle/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 3600;
+                    proxy_send_timeout 3600;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
 
                 location / {
                     proxy_pass http://127.0.0.1:${PREVIEW_PORT};
@@ -406,14 +457,46 @@ jobs:
                 }
             }
             NGINXEOF
+            else
+              sudo tee "$NGINX_CONF" > /dev/null << NGINXEOF
+            server {
+                listen 80;
+                server_name ${PR_SLUG}.staging.newlevelhub.kz;
+
+                location /dozzle/ {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT}/dozzle/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade \$http_upgrade;
+                    proxy_set_header Connection "upgrade";
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 3600;
+                    proxy_send_timeout 3600;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
+                location / {
+                    proxy_pass http://127.0.0.1:${PREVIEW_PORT};
+                    proxy_set_header Host \$host;
+                    proxy_set_header X-Real-IP \$remote_addr;
+                    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto \$scheme;
+                    proxy_read_timeout 300;
+                    client_max_body_size 100M;
+                }
+            }
+            NGINXEOF
+            fi
 
             sudo ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/${PR_SLUG}.staging.newlevelhub.kz"
             sudo nginx -t && sudo nginx -s reload
 
             echo "--- [5b/5] Ensuring SSL certificate ---"
-            CERT_PATH="/etc/letsencrypt/live/${PR_SLUG}.staging.newlevelhub.kz/fullchain.pem"
             if [ -f "$CERT_PATH" ]; then
-              echo "Certificate already exists for ${PR_SLUG}; skipping certbot issue step"
+              echo "Certificate already exists — nginx config includes SSL"
             else
               sleep 2
               sudo certbot --nginx \
@@ -429,6 +512,9 @@ jobs:
             echo "=== Preview deployed successfully ==="
             echo "URL:    https://${PR_SLUG}.staging.newlevelhub.kz"
             echo "Docs:   https://${PR_SLUG}.staging.newlevelhub.kz/api/docs/"
+            if [ -f "dozzle/users.yml" ]; then
+              echo "Logs:   https://${PR_SLUG}.staging.newlevelhub.kz/dozzle/"
+            fi
             echo "Port:   ${PREVIEW_PORT}"
 
       - name: Post preview URL comment to PR
@@ -677,7 +763,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "${{ needs.changes.outputs.deploy_changed == 'false' && ':fast_forward: Heavy CI skipped (no deploy-impacting changes)' || needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.tests.result == 'success' && needs.lint.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Tests passed (fork — no preview)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Build passed (deploy skipped)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'failure' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
+                    "text": "${{ needs.changes.outputs.deploy_changed == 'false' && ':fast_forward: Heavy CI skipped (no deploy-impacting changes)' || needs.deploy_preview.result == 'success' && ':rocket: Preview deployed' || needs.tests.result == 'success' && needs.lint.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Tests passed (fork — no preview)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'skipped' && ':white_check_mark: Build passed (deploy skipped)' || needs.build_and_push.result == 'skipped' && needs.deploy_preview.result == 'success' && ':rocket: Preview redeployed (infra-only, no image rebuild)' || needs.build_and_push.result == 'success' && needs.deploy_preview.result == 'failure' && ':warning: Built OK but preview deploy failed' || ':x: CI FAILED' }} *${{ github.repository }}*\n*Branch:* `${{ github.head_ref }}`\n*PR:* ${{ github.event.pull_request.title }}\n*Actor:* ${{ github.actor }}\n*Preview:* https://${{ steps.slug.outputs.pr_slug }}.staging.newlevelhub.kz\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Run>"
                   }
                 }
               ]

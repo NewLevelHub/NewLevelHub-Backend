@@ -51,6 +51,28 @@ python manage.py createsuperuser
 | ReDoc | http://localhost:8000/api/redoc/ |
 | OpenAPI schema | http://localhost:8000/api/schema/ |
 | Health check | http://localhost:8000/api/v1/health/ |
+| Dozzle (логи контейнеров) | http://localhost:9999/ |
+
+## Dozzle (логи контейнеров)
+
+Локально Dozzle поднимается вместе с `docker-compose.local.yml` на порту **9999** без авторизации.
+
+На production UI доступен по `https://production.newlevelhub.kz/dozzle/` (с авторизацией).
+
+На preview-средах (PR) — `https://be-<ticket>-pr<N>.staging.newlevelhub.kz/dozzle/` (или `https://fe-<ticket>-pr<N>.staging.newlevelhub.kz/dozzle/`). Dozzle показывает контейнеры backend и frontend preview с тем же тикетом (`dev-XXX`), например `be-dev-392-pr*` и `nlh_fe_fe-dev-392-pr*`.
+
+На production фильтр `nlh_` включает и backend, и `nlh_frontend_prod`.
+
+Перед первым деплоем на сервере создайте файл с учётными данными:
+
+```bash
+mkdir -p dozzle
+docker run --rm amir20/dozzle generate admin \
+  --password 'your-secure-password' \
+  --name 'Admin' > dozzle/users.yml
+```
+
+Файл `dozzle/users.yml` не коммитится в git. Пример структуры — `dozzle/users.yml.example`.
 
 ## API Prefix
 

@@ -17,6 +17,10 @@ Multi-tenant SaaS backend for office/workspace management (bookings, CRM, HR, st
 # Docker (uses Compose v1 syntax — docker-compose, not docker compose)
 docker-compose -f docker-compose.local.yml up -d --build
 docker-compose -f docker-compose.local.yml logs -f
+docker-compose -f docker-compose.local.yml logs -f backend   # один сервис
+
+# Dozzle — веб-UI для логов контейнеров (локально: http://localhost:9999/)
+# Production: https://production.newlevelhub.kz/dozzle/ (нужен dozzle/users.yml на сервере)
 docker-compose -f docker-compose.local.yml down
 
 # Migrations (run inside container or with local venv)

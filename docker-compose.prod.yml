@@ -113,6 +113,23 @@ services:
     networks:
       - nlh_network
 
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: nlh_dozzle_prod
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle/users.yml:/data/users.yml:ro
+    environment:
+      DOZZLE_AUTH_PROVIDER: simple
+      DOZZLE_BASE: /dozzle
+      # Includes backend (nlh_backend_prod, …) and frontend (nlh_frontend_prod) containers.
+      DOZZLE_FILTER: name=nlh_
+    expose:
+      - "8080"
+    restart: always
+    networks:
+      - nlh_network
+
 volumes:
   postgres_data_prod:
     driver: local

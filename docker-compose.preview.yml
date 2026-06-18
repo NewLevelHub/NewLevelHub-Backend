@@ -3,6 +3,7 @@
 #   docker compose --project-name <PR_SLUG> -f docker-compose.<PR_SLUG>.yml up -d
 #
 # Required env vars at runtime: PR_SLUG, PREVIEW_DB_NAME, BACKEND_IMAGE, PREVIEW_PORT
+# Optional: PREVIEW_LOG_FILTER (CI sets to dev-XXX ticket to include matching frontend nlh_fe_* containers)
 # Optional: FRONTEND_URL (CI may override with matched fe-* preview URL)
 # BACKEND_URL is always https://${PR_SLUG}.staging.newlevelhub.kz (API + email QR images)
 # Base secrets loaded from .env.staging on the server.
@@ -67,6 +68,19 @@ services:
       - "${PREVIEW_PORT}:80"
     depends_on:
       - backend
+    restart: unless-stopped
+
+  dozzle:
+    image: amir20/dozzle:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle/users.yml:/data/users.yml:ro
+    environment:
+      DOZZLE_AUTH_PROVIDER: simple
+      DOZZLE_BASE: /dozzle
+      DOZZLE_FILTER: name=${PREVIEW_LOG_FILTER:-${PR_SLUG}}
+    expose:
+      - "8080"
     restart: unless-stopped
 
   celery:

@@ -9,6 +9,7 @@ from apps.core.i18n import get_lang, translate
 
 from apps.companies.models import Company
 from apps.bookings.models import Booking, ResourceBlock
+from apps.users.models import User
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 SOON_AVAILABLE_MINUTES = 30
@@ -239,9 +240,29 @@ class FloorDetailSerializer(FloorListSerializer):
 FloorSerializer = FloorListSerializer
 
 
+class UserBriefSerializer(serializers.ModelSerializer):
+    """Minimal user snapshot for embedding in service request responses (superadmin view)."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.ImageField(use_url=True, read_only=True, allow_null=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'full_name', 'avatar', 'email', 'role']
+
+
+class CompanyBriefForRequestSerializer(serializers.ModelSerializer):
+    """Minimal company snapshot for embedding in service request responses (superadmin view)."""
+    logo = serializers.ImageField(use_url=True, read_only=True, allow_null=True)
+
+    class Meta:
+        model = Company
+        fields = ['id', 'name', 'logo']
+
+
 class ServiceRequestSerializer(serializers.ModelSerializer):
-    created_by_name = serializers.CharField(source='created_by.full_name', read_only=True, allow_null=True)
-    assigned_to_name = serializers.CharField(source='assigned_to.full_name', allow_null=True, read_only=True)
+    created_by = UserBriefSerializer(read_only=True)
+    assigned_to = UserBriefSerializer(read_only=True, allow_null=True)
+    company = CompanyBriefForRequestSerializer(read_only=True)
     photo = serializers.ImageField(use_url=True, required=False, allow_null=True)
     floor = FloorPrimaryKeyOrNumberField(queryset=Floor.objects.all(), required=False, allow_null=True)
     floor_number = serializers.IntegerField(source='floor.number', read_only=True, allow_null=True)
@@ -250,10 +271,10 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = ServiceRequest
         fields = [
-            'id', 'created_by', 'created_by_name', 'company',
+            'id', 'created_by', 'company',
             'request_type', 'status', 'urgency',
             'floor', 'floor_number', 'floor_name', 'location', 'description', 'photo',
-            'assigned_to', 'assigned_to_name', 'rating', 'completed_at',
+            'assigned_to', 'rating', 'completed_at',
             'created_at', 'updated_at',
         ]
         read_only_fields = [
@@ -275,12 +296,38 @@ class ServiceRequestSerializer(serializers.ModelSerializer):
         return attrs
 
 
+# Kept as an alias so any external import of ServiceRequestAdminSerializer
+# continues to resolve without errors (e.g. drf-spectacular schema references).
+ServiceRequestAdminSerializer = ServiceRequestSerializer
+
+
 class ServiceRequestStatusSerializer(serializers.ModelSerializer):
-    """Status update by company_admin or superadmin."""
+    """
+    Status update by superadmin or service_manager.
+
+    ``assigned_to`` is optional and only honoured for superadmin callers.
+    For service_manager callers the view sets ``assigned_to`` to the
+    requester automatically — the field is accepted but ignored here so
+    that the client never sees a validation error for unexpected input.
+
+    ``completed_at`` is an optional completion field.  When the transition
+    is ``in_progress → completed`` the server auto-stamps it if the client
+    omits it.  Sending it on any other transition raises 400.
+    """
+
+    assigned_to = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    completed_at = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+    )
 
     class Meta:
         model = ServiceRequest
-        fields = ['status']
+        fields = ['status', 'assigned_to', 'completed_at']
 
     def validate_status(self, value):
         instance = self.instance
@@ -298,6 +345,19 @@ class ServiceRequestStatusSerializer(serializers.ModelSerializer):
                     {'current': instance.status, 'next_status': value, 'expected': allowed_next},
                 )
         return value
+
+    def validate(self, attrs):
+        # Completion fields (completed_at) may only be sent when the transition
+        # is out of in_progress (i.e. to completed).  Any other context raises 400.
+        _COMPLETION_FIELDS = {'completed_at'}
+        sent_completion_fields = _COMPLETION_FIELDS & set(attrs.keys())
+        if sent_completion_fields:
+            instance = self.instance
+            if instance is None or instance.status != 'in_progress':
+                raise serializers.ValidationError(
+                    [{'_i18n': True, 'key': 'services.completion_info_only_when_in_progress', 'params': {}}]
+                )
+        return attrs
 
 
 class ServiceRequestRateSerializer(serializers.Serializer):

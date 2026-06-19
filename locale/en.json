@@ -264,6 +264,8 @@
   "services.service_manager_already_active": "This service manager already has an active request. A new one can only be taken after completing the current one.",
   "services.service_manager_request_already_taken": "This request has already been taken by another executor.",
   "services.service_manager_not_executor": "You can only update the status of your own assigned request.",
+  "services.assignee_locked_in_progress": "Cannot change the assignee: the request is already in progress.",
+  "services.completion_info_only_when_in_progress": "Completion info can only be submitted when closing a request that is currently in progress.",
   "analytics.must_be_integer": "Must be a valid integer.",
   "analytics.invalid_period": "Invalid period. Must be one of: {choices}.",
   "analytics.custom_period_dates_required": "For period=custom, query parameters date_from and date_to (YYYY-MM-DD) are required.",

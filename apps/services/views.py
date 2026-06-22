@@ -689,6 +689,12 @@ class MapPointViewSet(viewsets.ModelViewSet):
             OpenApiParameter(name='urgency', description='Filter by urgency', required=False, type=str,
                              enum=['low', 'medium', 'high', 'normal', 'urgent']),
             OpenApiParameter(name='floor', description='Filter by floor ID', required=False, type=int),
+            OpenApiParameter(
+                name='company',
+                description='Filter by company ID (superadmin and service_manager only)',
+                required=False,
+                type=int,
+            ),
         ],
         responses={200: ServiceRequestAdminSerializer(many=True)},
     ),

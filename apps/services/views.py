@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.filters import SearchFilter
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.types import OpenApiTypes
@@ -23,6 +24,7 @@ from apps.core.permissions import (
     IsServiceRequestManager,
     IsGuestOrCompanyMember,
 )
+from apps.core.i18n import get_lang, translate
 from apps.core.mixins import CompanyIsolationMixin
 from apps.core.pagination import StandardPagination, FeedCursorPagination
 from apps.notifications.utils import create_notification
@@ -32,7 +34,8 @@ from .utils import annotate_floor_occupancy
 from .serializers import (
     FloorSerializer, FloorDetailSerializer, MapPointSerializer,
     MapPointSearchSerializer,
-    ServiceRequestSerializer, ServiceRequestStatusSerializer, ServiceRequestRateSerializer,
+    ServiceRequestSerializer, ServiceRequestAdminSerializer,
+    ServiceRequestStatusSerializer, ServiceRequestRateSerializer,
     ServiceRequestAssignSerializer,
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
@@ -668,6 +671,9 @@ class MapPointViewSet(viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Services'],
         summary='List service requests',
+        description=(
+            'All authenticated roles receive nested objects for `created_by`, `assigned_to`, and `company`.'
+        ),
         parameters=[
             OpenApiParameter(name='request_type', description='Filter by type', required=False, type=str,
                              enum=['cleaning', 'repair', 'supplies', 'general']),
@@ -683,15 +689,21 @@ class MapPointViewSet(viewsets.ModelViewSet):
             OpenApiParameter(name='urgency', description='Filter by urgency', required=False, type=str,
                              enum=['low', 'medium', 'high', 'normal', 'urgent']),
             OpenApiParameter(name='floor', description='Filter by floor ID', required=False, type=int),
+            OpenApiParameter(
+                name='company',
+                description='Filter by company ID (superadmin and service_manager only)',
+                required=False,
+                type=int,
+            ),
         ],
-        responses={200: ServiceRequestSerializer(many=True)},
+        responses={200: ServiceRequestAdminSerializer(many=True)},
     ),
     create=extend_schema(
         tags=['Services'],
         summary='Create service request',
         request=ServiceRequestSerializer,
         responses={
-            201: ServiceRequestSerializer,
+            201: ServiceRequestAdminSerializer,
             400: OpenApiResponse(description='Validation error'),
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Forbidden'),
@@ -700,8 +712,11 @@ class MapPointViewSet(viewsets.ModelViewSet):
     retrieve=extend_schema(
         tags=['Services'],
         summary='Get service request details',
+        description=(
+            'All authenticated roles receive nested objects for `created_by`, `assigned_to`, and `company`.'
+        ),
         responses={
-            200: ServiceRequestSerializer,
+            200: ServiceRequestAdminSerializer,
             401: OpenApiResponse(description='Not authenticated'),
             403: OpenApiResponse(description='Forbidden'),
             404: OpenApiResponse(description='Not found'),
@@ -739,6 +754,14 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         if self.action in ('list', 'retrieve'):
             return [(IsGuestOrCompanyMember | IsServiceManager)()]
         return super().get_permissions()
+
+    def get_serializer_class(self):
+        # All roles now receive the same nested representation.
+        return ServiceRequestSerializer
+
+    def _get_response_serializer(self, instance):
+        """Return a read serializer instance for a single object."""
+        return ServiceRequestSerializer(instance, context={'request': self.request})
 
     def perform_create(self, serializer):
         instance = serializer.save(
@@ -854,8 +877,7 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             description=request.data.get('description', 'Quick cleaning request'),
         )
         self._notify_service_managers_new_request(sr)
-        serializer = ServiceRequestSerializer(sr, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(self._get_response_serializer(sr).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         tags=['Services'],
@@ -927,30 +949,80 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         sr.refresh_from_db()
-        return Response(
-            ServiceRequestSerializer(sr, context={'request': request}).data,
-        )
+        return Response(self._get_response_serializer(sr).data)
 
     def _handle_status_update(self, request):
-        if 'status' not in request.data:
+        sr = self.get_object()
+        user = request.user
+
+        # At least one meaningful field must be present in the request body.
+        # ``assigned_to`` alone is enough — Rule 2 will auto-set status to
+        # in_progress when an assignee is supplied without an explicit status.
+        if 'status' not in request.data and 'assigned_to' not in request.data:
             return Response(
                 {'status': ['This field is required.']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        sr = self.get_object()
-
         previous_status = sr.status
-        serializer = ServiceRequestStatusSerializer(sr, data=request.data)
+        # Use partial=True so that callers may omit ``status`` when only
+        # setting an assignee (Rule 2 handles the status auto-transition).
+        serializer = ServiceRequestStatusSerializer(sr, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+
+        # Determine how assigned_to should be set based on caller role:
+        #  - superadmin: honour the optional ``assigned_to`` from the request body;
+        #    if omitted, leave the existing value unchanged.
+        #  - service_manager: always auto-assign to themselves.
+        #  - other roles (blocked by IsServiceRequestManager, but be defensive):
+        #    do not touch assigned_to.
+        save_kwargs = {}
+        if user.role == 'superadmin':
+            if 'assigned_to' in serializer.validated_data:
+                # Explicit value (including null) provided — use it.
+                new_assignee = serializer.validated_data['assigned_to']
+                # Rule 1: once a request is in_progress its assignee is locked.
+                if sr.status == 'in_progress' and new_assignee != sr.assigned_to:
+                    raise DRFValidationError(
+                        translate('services.assignee_locked_in_progress', get_lang(request))
+                    )
+                save_kwargs['assigned_to'] = new_assignee
+            # Otherwise omit from save_kwargs so the existing DB value is preserved.
+        elif user.role == 'service_manager':
+            new_assignee = user
+            # Rule 1: once a request is in_progress its assignee is locked.
+            if sr.status == 'in_progress' and new_assignee != sr.assigned_to:
+                raise DRFValidationError(
+                    translate('services.assignee_locked_in_progress', get_lang(request))
+                )
+            save_kwargs['assigned_to'] = new_assignee
+
+        # Rule 2: auto-transition when an assignee is being set without an explicit status.
+        # Superadmin or service_manager assigning themselves → in_progress (direct shortcut).
+        # Superadmin assigning someone else → accepted (that person must press "Take to work").
+        final_assignee = save_kwargs.get('assigned_to', sr.assigned_to)
+        if final_assignee is not None and 'status' not in serializer.validated_data:
+            if final_assignee == user:
+                save_kwargs['status'] = 'in_progress'
+            else:
+                save_kwargs['status'] = 'accepted'
+
+        # Auto-stamp completed_at when transitioning to completed.
+        # The client may optionally supply a value via the serializer; if they
+        # do not (or if it's null), the server fills in the current time.
+        # The existing DB value is never overwritten once set.
+        final_status = save_kwargs.get('status', serializer.validated_data.get('status', sr.status))
+        if final_status == 'completed':
+            client_completed_at = serializer.validated_data.get('completed_at')
+            if client_completed_at is not None:
+                save_kwargs.setdefault('completed_at', client_completed_at)
+            elif sr.completed_at is None:
+                save_kwargs.setdefault('completed_at', timezone.now())
+
+        serializer.save(**save_kwargs)
 
         sr.refresh_from_db()
         status_changed = sr.status != previous_status
-
-        if status_changed and sr.status == 'completed' and sr.completed_at is None:
-            sr.completed_at = timezone.now()
-            sr.save(update_fields=['completed_at'])
 
         if status_changed and sr.created_by:
             create_notification(
@@ -961,9 +1033,7 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 link='/service-requests/',
             )
 
-        return Response(
-            ServiceRequestSerializer(sr, context={'request': request}).data,
-        )
+        return Response(self._get_response_serializer(sr).data)
 
     @extend_schema(
         tags=['Services'],
@@ -1004,9 +1074,7 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         sr.rating = serializer.validated_data['rating']
         sr.save(update_fields=['rating'])
 
-        return Response(
-            ServiceRequestSerializer(sr, context={'request': request}).data,
-        )
+        return Response(self._get_response_serializer(sr).data)
 
 
 # ── Объявления ────────────────────────────────────────────────────────

@@ -210,6 +210,7 @@
   "users.email_already_registered": "A user with this email is already registered.",
   "users.avatar_type_not_supported": "Unsupported image type. Allowed: JPEG, PNG, WebP.",
   "users.avatar_too_large": "Avatar is too large. Maximum size is {max_mb} MB.",
+  "users.account_deleted": "Account deleted successfully.",
   "auth.account_blocked": "Account is blocked.",
   "hr.review_admin_only": "Only a company admin can review leave requests.",
   "hr.balance_own_company_only": "You can only manage leave balances for employees in your company.",

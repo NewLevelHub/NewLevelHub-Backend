@@ -622,6 +622,33 @@ def change_password(request):
     return Response({'detail': translate('auth.password_changed', get_lang(request))})
 
 
+@extend_schema(
+    tags=['Auth'],
+    summary='Delete own account (soft)',
+    description=(
+        'Soft-deletes the authenticated user\'s account: sets is_deleted=True, '
+        'is_active=False, and blacklists all outstanding refresh tokens so existing '
+        'sessions become invalid immediately. The account record is retained in the '
+        'database and can be restored by a superadmin.'
+    ),
+    request=None,
+    responses={
+        204: OpenApiResponse(description='Account deleted.'),
+        401: OpenApiResponse(description='Not authenticated'),
+    },
+)
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_account(request):
+    user = request.user
+    user.is_deleted = True
+    user.is_active = False
+    user.deleted_at = timezone.now()
+    user.save(update_fields=['is_deleted', 'is_active', 'deleted_at'])
+    _blacklist_user_refresh_tokens(user)
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 # ── Admin: user management ────────────────────────────────────────────
 
 @extend_schema(

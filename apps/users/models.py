@@ -63,6 +63,13 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     is_email_verified = models.BooleanField(default=False)
     date_joined = models.DateTimeField(default=timezone.now)
 
+    # Soft-delete fields.  SoftDeleteModel mixin cannot be used here because
+    # it replaces `objects` with SoftDeleteManager, which would conflict with
+    # the custom UserManager.  We add the fields directly instead and handle
+    # the deletion logic in the view / service layer.
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
     objects = UserManager()
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']

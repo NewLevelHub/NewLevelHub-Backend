@@ -1379,7 +1379,8 @@ class ResourceViewSet(viewsets.ModelViewSet):
             '- `user` — user PK\n'
             '- `company` — company PK (superadmin only in practice)\n'
             '- `date_from` — bookings starting on or after this datetime (ISO 8601)\n'
-            '- `date_to` — bookings ending on or before this datetime (ISO 8601)\n\n'
+            '- `date_to` — bookings ending on or before this datetime (ISO 8601)\n'
+            '- `recurring_booking_id` — filter to bookings belonging to a specific recurring series\n\n'
             '**Ordering:** `start_time`, `created_at` (prefix with `-` for descending).'
         ),
         parameters=[
@@ -1433,6 +1434,13 @@ class ResourceViewSet(viewsets.ModelViewSet):
                 location=OpenApiParameter.QUERY,
                 required=False,
                 description='Return bookings whose end_time <= this value (ISO 8601).',
+            ),
+            OpenApiParameter(
+                name='recurring_booking_id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Filter to bookings belonging to a specific recurring series PK.',
             ),
             OpenApiParameter(
                 name='ordering',
@@ -2451,7 +2459,8 @@ def booking_qr_image(request, qr_code):
             '**Access:** company_admin / employee (and superadmin); **guest → 403**.\n\n'
             '**Request body:**\n'
             '- `resource_id` — resource primary key\n'
-            '- `day_of_week` — 0=Monday … 6=Sunday\n'
+            '- `recurrence_type` — `weekly` (default) or `daily`\n'
+            '- `day_of_week` — 0=Monday … 6=Sunday (required for `weekly`; omit for `daily`)\n'
             '- `start_time` / `end_time` — local time of day (HH:MM), within resource availability\n'
             '- `repeat_until` — inclusive end **date** for generated occurrences\n\n'
             'A weekly Celery job extends active series further; PATCH still uses the template serializer.'
@@ -2572,10 +2581,18 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        valid_from = first_matching_weekday(
-            day_of_week=serializer.validated_data['day_of_week'],
-            base_date=timezone.localdate(),
-        )
+
+        recurrence_type = serializer.validated_data.get('recurrence_type', 'weekly')
+        today = timezone.localdate()
+
+        if recurrence_type == 'daily':
+            # Daily series starts from today.
+            valid_from = today
+        else:
+            valid_from = first_matching_weekday(
+                day_of_week=serializer.validated_data['day_of_week'],
+                base_date=today,
+            )
 
         resource = serializer.validated_data['resource']
         company = request.user.company or resource.assigned_company
@@ -2588,7 +2605,8 @@ class RecurringBookingViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 resource=resource,
                 user=request.user,
                 company=company,
-                day_of_week=serializer.validated_data['day_of_week'],
+                recurrence_type=recurrence_type,
+                day_of_week=serializer.validated_data.get('day_of_week'),
                 start_time=serializer.validated_data['start_time'],
                 end_time=serializer.validated_data['end_time'],
                 valid_from=valid_from,

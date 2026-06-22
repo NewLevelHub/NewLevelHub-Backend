@@ -217,7 +217,15 @@ class BookingParticipant(TimeStampedModel):
 
 
 class RecurringBooking(TimeStampedModel):
-    """Шаблон рекуррентного бронирования (каждый пн 10:00-11:00)."""
+    """Шаблон рекуррентного бронирования (каждый пн 10:00-11:00 или каждый день)."""
+
+    RECURRENCE_TYPE_WEEKLY = 'weekly'
+    RECURRENCE_TYPE_DAILY = 'daily'
+    RECURRENCE_TYPE_CHOICES = [
+        (RECURRENCE_TYPE_WEEKLY, 'Weekly'),
+        (RECURRENCE_TYPE_DAILY, 'Daily'),
+    ]
+
     resource = models.ForeignKey(Resource, on_delete=models.CASCADE, related_name='recurring_bookings')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='recurring_bookings')
     company = models.ForeignKey(
@@ -225,7 +233,14 @@ class RecurringBooking(TimeStampedModel):
         null=True, blank=True, related_name='recurring_bookings',
     )
 
-    day_of_week = models.PositiveIntegerField(help_text='0=Mon .. 6=Sun')
+    recurrence_type = models.CharField(
+        max_length=10,
+        choices=RECURRENCE_TYPE_CHOICES,
+        default=RECURRENCE_TYPE_WEEKLY,
+        db_index=True,
+    )
+    # Required for 'weekly'; null for 'daily'.
+    day_of_week = models.PositiveIntegerField(null=True, blank=True, help_text='0=Mon .. 6=Sun (weekly only)')
     start_time = models.TimeField()
     end_time = models.TimeField()
 

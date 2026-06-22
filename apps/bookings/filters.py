@@ -176,6 +176,7 @@ class BookingFilter(django_filters.FilterSet):
     company_id = django_filters.NumberFilter(field_name='company_id')
     user_id = django_filters.NumberFilter(field_name='user_id')
     resource_id = django_filters.NumberFilter(field_name='resource_id')
+    recurring_booking_id = django_filters.NumberFilter(field_name='recurring_booking_id')
     # Backward-compatible aliases for older clients.
     company = django_filters.NumberFilter(field_name='company_id')
     user = django_filters.NumberFilter(field_name='user_id')
@@ -192,6 +193,7 @@ class BookingFilter(django_filters.FilterSet):
             'company_id',
             'user_id',
             'resource_id',
+            'recurring_booking_id',
             'company',
             'user',
             'resource',

@@ -1309,3 +1309,84 @@ def test_superadmin_can_complete_in_progress_with_completion_info(
     assert response.status_code == status.HTTP_200_OK
     in_progress_request.refresh_from_db()
     assert in_progress_request.completed_at is not None
+
+
+# ── ?company= filter ──────────────────────────────────────────────────
+
+@pytest.fixture
+def service_manager_filter(db):
+    """Building-wide service manager for filter tests (no company)."""
+    return User.objects.create_user(
+        email='filter-manager@test.com',
+        password='pass',
+        first_name='Filter',
+        last_name='Manager',
+        role='service_manager',
+        is_email_verified=True,
+    )
+
+
+@pytest.mark.django_db
+def test_superadmin_filter_by_company(
+    api_client, superadmin, employee, other_employee, company, other_company,
+):
+    """?company=<id> lets superadmin see requests from a specific company only."""
+    r1 = ServiceRequest.objects.create(
+        created_by=employee, company=company, request_type='repair', urgency='low',
+    )
+    ServiceRequest.objects.create(
+        created_by=other_employee, company=other_company, request_type='cleaning', urgency='low',
+    )
+    auth(api_client, superadmin)
+    response = api_client.get(BASE_URL + f'?company={company.pk}')
+    assert response.status_code == status.HTTP_200_OK
+    ids = {r['id'] for r in response.json()['results']}
+    assert r1.pk in ids
+    assert all(r['company']['id'] == company.pk for r in response.json()['results'])
+
+
+@pytest.mark.django_db
+def test_service_manager_filter_by_company(
+    api_client, service_manager_filter, employee, other_employee, company, other_company,
+):
+    """?company=<id> lets service_manager see requests from a specific company only."""
+    r1 = ServiceRequest.objects.create(
+        created_by=employee, company=company, request_type='repair', urgency='low',
+    )
+    r2 = ServiceRequest.objects.create(
+        created_by=other_employee, company=other_company, request_type='cleaning', urgency='low',
+    )
+    auth(api_client, service_manager_filter)
+    response = api_client.get(BASE_URL + f'?company={company.pk}')
+    assert response.status_code == status.HTTP_200_OK
+    ids = {r['id'] for r in response.json()['results']}
+    assert r1.pk in ids
+    assert r2.pk not in ids
+
+
+@pytest.mark.django_db
+def test_employee_company_filter_has_no_effect(
+    api_client, employee, other_employee, company, other_company,
+):
+    """For a regular employee the queryset is already scoped — ?company= cannot expand it."""
+    ServiceRequest.objects.create(
+        created_by=employee, company=company, request_type='repair', urgency='low',
+    )
+    other_request = ServiceRequest.objects.create(
+        created_by=other_employee, company=other_company, request_type='cleaning', urgency='low',
+    )
+    auth(api_client, employee)
+    # Passing the other company's id — employee must still see only own requests.
+    response = api_client.get(BASE_URL + f'?company={other_company.pk}')
+    assert response.status_code == status.HTTP_200_OK
+    ids = {r['id'] for r in response.json()['results']}
+    assert other_request.pk not in ids
+
+
+@pytest.mark.django_db
+def test_superadmin_filter_by_nonexistent_company_returns_empty(api_client, superadmin):
+    """?company=<non-existent-id> returns an empty result set, not an error."""
+    auth(api_client, superadmin)
+    response = api_client.get(BASE_URL + '?company=999999')
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()['count'] == 0

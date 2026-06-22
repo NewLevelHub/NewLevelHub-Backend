@@ -216,14 +216,21 @@ def auto_cancel_no_show():
 
 @shared_task
 def generate_recurring_bookings():
-    """Периодическая задача: создание Booking из RecurringBooking шаблонов."""
+    """Периодическая задача: создание Booking из RecurringBooking шаблонов.
+
+    For 'weekly' series the window is advanced 7 days at a time.
+    For 'daily' series the window is advanced 1 day at a time so we only
+    materialise one upcoming booking per run (avoids bulk-creating months ahead).
+    """
     today = timezone.localdate()
     for recurring_booking in (
         RecurringBooking.objects
         .filter(is_active=True, valid_until__isnull=False, valid_until__gte=today)
         .select_related('resource', 'user', 'company')
     ):
-        next_period_end = recurring_booking.valid_until + timedelta(days=7)
+        recurrence_type = getattr(recurring_booking, 'recurrence_type', 'weekly') or 'weekly'
+        advance_days = 1 if recurrence_type == 'daily' else 7
+        next_period_end = recurring_booking.valid_until + timedelta(days=advance_days)
         create_bookings_for_recurring(
             recurring_booking,
             start_date=recurring_booking.valid_until + timedelta(days=1),
@@ -239,29 +246,46 @@ def first_matching_weekday(*, day_of_week, base_date):
     return base_date + timedelta(days=days_ahead)
 
 
-def recurring_has_creatable_occurrence(*, day_of_week, end_time, repeat_until, base_date=None):
+def recurring_has_creatable_occurrence(
+    *, day_of_week, end_time, repeat_until, base_date=None, recurrence_type='weekly',
+):
     """True if at least one occurrence in [valid_from, repeat_until] ends in the future."""
     base_date = base_date or timezone.localdate()
-    valid_from = first_matching_weekday(day_of_week=day_of_week, base_date=base_date)
+
+    if recurrence_type == 'daily':
+        valid_from = base_date
+    else:
+        valid_from = first_matching_weekday(day_of_week=day_of_week, base_date=base_date)
+
     if valid_from > repeat_until:
         return False
+
     now = timezone.now()
     for booking_date in _matching_dates(
         day_of_week=day_of_week,
         start_date=valid_from,
         end_date=repeat_until,
+        recurrence_type=recurrence_type,
     ):
         if _combine_aware(booking_date, end_time) > now:
             return True
     return False
 
 
-def _matching_dates(*, day_of_week, start_date, end_date):
-    days_until_first = (day_of_week - start_date.weekday()) % 7
-    current = start_date + timedelta(days=days_until_first)
-    while current <= end_date:
-        yield current
-        current += timedelta(days=7)
+def _matching_dates(*, day_of_week, start_date, end_date, recurrence_type='weekly'):
+    """Yield every booking date in [start_date, end_date] for the given recurrence pattern."""
+    if recurrence_type == 'daily':
+        current = start_date
+        while current <= end_date:
+            yield current
+            current += timedelta(days=1)
+    else:
+        # Weekly: step by 7 days starting from the first matching weekday.
+        days_until_first = (day_of_week - start_date.weekday()) % 7
+        current = start_date + timedelta(days=days_until_first)
+        while current <= end_date:
+            yield current
+            current += timedelta(days=7)
 
 
 def _combine_aware(target_date, target_time):
@@ -274,6 +298,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
     if start_date > end_date:
         return skipped_dates
 
+    recurrence_type = getattr(recurring_booking, 'recurrence_type', 'weekly') or 'weekly'
     validator = BookingCreateSerializer(context={})
     now = timezone.now()
 
@@ -283,6 +308,7 @@ def create_bookings_for_recurring(recurring_booking, *, start_date, end_date):
             day_of_week=recurring_booking.day_of_week,
             start_date=start_date,
             end_date=end_date,
+            recurrence_type=recurrence_type,
         ):
             start_time = _combine_aware(booking_date, recurring_booking.start_time)
             end_time = _combine_aware(booking_date, recurring_booking.end_time)

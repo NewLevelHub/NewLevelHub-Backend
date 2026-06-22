@@ -952,6 +952,7 @@ class RecurringBookingSerializer(serializers.ModelSerializer):
             'user_name',
             'user_role',
             'company',
+            'recurrence_type',
             'day_of_week',
             'start_time',
             'end_time',
@@ -966,7 +967,12 @@ class RecurringBookingSerializer(serializers.ModelSerializer):
 
 class RecurringBookingCreateSerializer(serializers.Serializer):
     resource_id = serializers.IntegerField()
-    day_of_week = serializers.IntegerField(min_value=0, max_value=6)
+    recurrence_type = serializers.ChoiceField(
+        choices=[('weekly', 'Weekly'), ('daily', 'Daily')],
+        default='weekly',
+    )
+    # Required for 'weekly'; omit or set null for 'daily'.
+    day_of_week = serializers.IntegerField(min_value=0, max_value=6, required=False, allow_null=True)
     start_time = serializers.TimeField()
     end_time = serializers.TimeField()
     repeat_until = serializers.DateField()
@@ -982,12 +988,17 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         request = self.context['request']
         user = request.user
         today = timezone.localdate()
+        recurrence_type = attrs.get('recurrence_type', 'weekly')
 
         if attrs['start_time'] >= attrs['end_time']:
             raise_validation_error('end_time', 'booking.start_time_before_end_time')
 
         if attrs['repeat_until'] < today:
             raise_validation_error('repeat_until', 'booking.repeat_until_in_past')
+
+        # day_of_week is required for weekly recurrence.
+        if recurrence_type == 'weekly' and attrs.get('day_of_week') is None:
+            raise_validation_error('day_of_week', 'booking.day_of_week_required_for_weekly')
 
         if not user.is_superadmin():
             # Cross-company block: resource is locked to a different company.
@@ -999,9 +1010,10 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
             if resource.assigned_company_id and plan not in PLANS_WITH_ASSIGNED_RESOURCES:
                 raise_validation_error('resource_id', 'booking.resource_requires_premium')
 
-        available_days = resource.available_days or list(range(7))
-        if attrs['day_of_week'] not in available_days:
-            raise_validation_error('day_of_week', 'booking.unavailable_day')
+        if recurrence_type == 'weekly':
+            available_days = resource.available_days or list(range(7))
+            if attrs['day_of_week'] not in available_days:
+                raise_validation_error('day_of_week', 'booking.unavailable_day')
 
         if (
             attrs['start_time'] < resource.available_from
@@ -1009,28 +1021,31 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         ):
             raise_validation_error('detail', 'booking.outside_operating_hours')
 
-        # Один слот (ресурс + день недели + интервал времени) — одна активная серия на всех
-        # пользователей компании не дублируем: иначе админ и сотрудник могли бы занять одно и то же время.
-        has_duplicate_series = RecurringBooking.objects.filter(
+        # Duplicate-series guard: one active series per resource+slot combination.
+        # For weekly: match on day_of_week + time. For daily: match on time only.
+        duplicate_qs = RecurringBooking.objects.filter(
             resource=resource,
             is_active=True,
-            day_of_week=attrs['day_of_week'],
+            recurrence_type=recurrence_type,
             start_time=attrs['start_time'],
             end_time=attrs['end_time'],
             valid_from__lte=attrs['repeat_until'],
         ).filter(
             Q(valid_until__isnull=True) | Q(valid_until__gte=today)
-        ).exists()
-        if has_duplicate_series:
+        )
+        if recurrence_type == 'weekly':
+            duplicate_qs = duplicate_qs.filter(day_of_week=attrs['day_of_week'])
+        if duplicate_qs.exists():
             raise_validation_error('detail', 'booking.recurring_slot_conflict')
 
         from apps.bookings.tasks import recurring_has_creatable_occurrence
 
         if not recurring_has_creatable_occurrence(
-            day_of_week=attrs['day_of_week'],
+            day_of_week=attrs.get('day_of_week'),
             end_time=attrs['end_time'],
             repeat_until=attrs['repeat_until'],
             base_date=today,
+            recurrence_type=recurrence_type,
         ):
             raise_validation_error('repeat_until', 'booking.recurring_no_creatable_dates')
 

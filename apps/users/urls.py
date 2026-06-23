@@ -20,6 +20,7 @@ urlpatterns = [
     path('me/update/', views.update_profile, name='update-profile'),
     path('me/avatar/', views.delete_avatar, name='delete-avatar'),
     path('me/password/', views.change_password, name='change-password'),
+    path('me/delete/', views.delete_account, name='delete-account'),
 
     # Admin: user management
     path('users/', views.UserListView.as_view(), name='users-list'),

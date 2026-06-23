@@ -211,6 +211,7 @@
   "users.email_already_registered": "Пользователь с таким email уже зарегистрирован.",
   "users.avatar_type_not_supported": "Неподдерживаемый тип изображения. Разрешены: JPEG, PNG, WebP.",
   "users.avatar_too_large": "Аватар слишком большой. Максимальный размер — {max_mb} МБ.",
+  "users.account_deleted": "Аккаунт успешно удалён.",
   "auth.account_blocked": "Аккаунт заблокирован.",
   "hr.review_admin_only": "Только company_admin может рассматривать заявки на отпуск.",
   "hr.balance_own_company_only": "Управлять балансом можно только для сотрудников вашей компании.",

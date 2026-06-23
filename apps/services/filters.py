@@ -1,5 +1,5 @@
 import django_filters
-from .models import ServiceRequest
+from .models import Announcement, ServiceRequest
 
 
 class ServiceRequestFilter(django_filters.FilterSet):
@@ -18,3 +18,21 @@ class ServiceRequestFilter(django_filters.FilterSet):
             'urgency': ['exact'],
             'floor': ['exact'],
         }
+
+
+class AnnouncementFilter(django_filters.FilterSet):
+    """
+    Filter set for the announcement feed.
+
+    ``scope`` — exact match on the derived ``scope`` field:
+      * ``building`` — building-wide announcements (company IS NULL)
+      * ``company``  — company-internal announcements (company IS NOT NULL)
+
+    ``category`` and ``is_pinned`` are direct field filters.
+    """
+
+    scope = django_filters.ChoiceFilter(choices=Announcement.SCOPE_CHOICES)
+
+    class Meta:
+        model = Announcement
+        fields = ['scope', 'category', 'is_pinned']

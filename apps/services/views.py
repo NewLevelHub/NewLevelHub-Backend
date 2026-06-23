@@ -39,7 +39,7 @@ from .serializers import (
     ServiceRequestAssignSerializer,
     AnnouncementSerializer, SOON_AVAILABLE_MINUTES,
 )
-from .filters import ServiceRequestFilter
+from .filters import AnnouncementFilter, ServiceRequestFilter
 from .tasks import send_announcement_emails, notify_announcement_subscribers
 
 
@@ -1083,6 +1083,33 @@ class ServiceRequestViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     list=extend_schema(
         tags=['Services'],
         summary='List announcements',
+        parameters=[
+            OpenApiParameter(
+                name='scope',
+                description=(
+                    'Filter by announcement scope. '
+                    '``building`` — building-wide (БЦ) announcements. '
+                    '``company`` — company-internal announcements. '
+                    'Omit to receive all announcements visible to the current user.'
+                ),
+                required=False,
+                type=str,
+                enum=['building', 'company'],
+            ),
+            OpenApiParameter(
+                name='category',
+                description='Filter by category.',
+                required=False,
+                type=str,
+                enum=['info', 'important', 'event'],
+            ),
+            OpenApiParameter(
+                name='is_pinned',
+                description='Filter pinned announcements only.',
+                required=False,
+                type=bool,
+            ),
+        ],
         responses={200: AnnouncementSerializer(many=True)},
     ),
     create=extend_schema(
@@ -1129,7 +1156,7 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
     serializer_class = AnnouncementSerializer
     permission_classes = [IsCompanyAdminOrReadOnly]
     pagination_class = FeedCursorPagination
-    filterset_fields = ['category', 'is_pinned']
+    filterset_class = AnnouncementFilter
     # Required by DRF when CursorPagination cohabits with OrderingFilter:
     # the global OrderingFilter must be able to derive a non-None default
     # ordering, otherwise pagination raises an AssertionError.
@@ -1186,3 +1213,29 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         AnnouncementRead.objects.get_or_create(announcement=announcement, user=request.user)
         serializer = AnnouncementSerializer(announcement, context={'request': request})
         return Response(serializer.data)
+
+    @extend_schema(
+        tags=['Services'],
+        summary='Mark all announcements as read',
+        request=None,
+        responses={
+            204: OpenApiResponse(description='All visible announcements marked as read.'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
+    @action(detail=False, methods=['post'], url_path='read_all', permission_classes=[IsAuthenticated])
+    def read_all(self, request):
+        user = request.user
+        announcement_ids = self.get_queryset().values_list('id', flat=True)
+        already_read_ids = set(
+            AnnouncementRead.objects.filter(user=user, announcement_id__in=announcement_ids)
+            .values_list('announcement_id', flat=True)
+        )
+        new_reads = [
+            AnnouncementRead(announcement_id=ann_id, user=user)
+            for ann_id in announcement_ids
+            if ann_id not in already_read_ids
+        ]
+        if new_reads:
+            AnnouncementRead.objects.bulk_create(new_reads, ignore_conflicts=True)
+        return Response(status=status.HTTP_204_NO_CONTENT)

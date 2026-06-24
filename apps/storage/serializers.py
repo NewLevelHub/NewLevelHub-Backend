@@ -223,3 +223,23 @@ class CompanyStorageSerializer(serializers.Serializer):
 class StorageUsageSerializer(serializers.Serializer):
     personal = PersonalStorageSerializer()
     company = CompanyStorageSerializer(allow_null=True)
+
+
+class BulkTrashActionSerializer(serializers.Serializer):
+    file_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list,
+    )
+    folder_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list,
+    )
+
+    def validate(self, attrs):
+        if not attrs.get('file_ids') and not attrs.get('folder_ids'):
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'storage.bulk_trash_ids_required', 'params': {}}]
+            )
+        return attrs

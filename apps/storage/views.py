@@ -1258,9 +1258,10 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Guests can permanently delete only their own personal deleted files.
+        personal_deletable = personal_trash
         personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
         company_data = None
@@ -1276,8 +1277,12 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Personal trash deletable: only this user's own personal deleted files
+        # (mirrors _get_accessible_deleted_files for personal scope — all roles).
+        personal_deletable = (
+            personal_trash_qs.filter(owner=user).aggregate(total=Sum('file_size'))['total'] or 0
         )
         personal_breakdown = _compute_breakdown(personal_active_qs)
 
@@ -1288,9 +1293,17 @@ def storage_usage(request):
         company_files_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
         company_active_qs = company_qs.filter(is_deleted=False)
         company_count = company_active_qs.count()
-        company_trash = (
-            company_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        company_trash_qs = company_qs.filter(is_deleted=True)
+        company_trash = company_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Company trash deletable mirrors _get_accessible_deleted_files rules:
+        # - superadmin / company_admin → all company deleted files
+        # - employee → only company deleted files where owner=user
+        if user.role in ('superadmin', 'company_admin'):
+            company_deletable = company_trash
+        else:
+            company_deletable = (
+                company_trash_qs.filter(owner=user).aggregate(total=Sum('file_size'))['total'] or 0
+            )
         company_breakdown = _compute_breakdown(company_active_qs)
         # Direct-upload CRM attachments (storage_file=None) are not in File but
         # do consume company storage — include them in the displayed total.
@@ -1308,6 +1321,7 @@ def storage_usage(request):
             'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
             'trash_bytes': company_trash,
+            'trash_deletable_bytes': company_deletable,
             'breakdown': company_breakdown,
         }
         personal_limit = storage_limit_bytes
@@ -1316,9 +1330,10 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # No company — user can delete only their own personal files.
+        personal_deletable = personal_trash
         personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = None
         company_data = None
@@ -1329,6 +1344,7 @@ def storage_usage(request):
             'file_count': personal_count,
             'limit_bytes': personal_limit,
             'trash_bytes': personal_trash,
+            'trash_deletable_bytes': personal_deletable,
             'breakdown': personal_breakdown,
         },
         'company': company_data,

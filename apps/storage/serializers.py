@@ -209,6 +209,7 @@ class PersonalStorageSerializer(serializers.Serializer):
     file_count = serializers.IntegerField()
     limit_bytes = serializers.IntegerField(allow_null=True)
     trash_bytes = serializers.IntegerField()
+    trash_deletable_bytes = serializers.IntegerField()
     breakdown = StorageBreakdownSerializer()
 
 
@@ -217,6 +218,7 @@ class CompanyStorageSerializer(serializers.Serializer):
     limit_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
     trash_bytes = serializers.IntegerField()
+    trash_deletable_bytes = serializers.IntegerField()
     breakdown = StorageBreakdownSerializer()
 
 

@@ -522,7 +522,7 @@ class FileViewSet(viewsets.ModelViewSet):
         file_category = self.request.query_params.get('file_category')
         if file_category in {'image', 'media', 'archive', 'document', 'other'}:
             annotated = annotated.filter(file_category=file_category)
-        return annotated.select_related('folder').order_by('-created_at')
+        return annotated.select_related('folder', 'owner').order_by('-created_at')
 
     def _resolve_scope(self):
         if self.request.user.role == 'guest':
@@ -889,17 +889,17 @@ class FileShareViewSet(viewsets.ModelViewSet):
         if shared_with_me:
             return FileShare.objects.filter(
                 shared_with=user, file__is_deleted=False,
-            ).order_by('-created_at')
+            ).select_related('shared_with', 'shared_by').order_by('-created_at')
 
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
             return FileShare.objects.filter(
                 shared_by=user, file__is_deleted=False,
-            ).order_by('-created_at')
+            ).select_related('shared_with', 'shared_by').order_by('-created_at')
 
         return (
             FileShare.objects.filter(shared_by=user, file__is_deleted=False)
             | FileShare.objects.filter(shared_with=user, file__is_deleted=False)
-        ).order_by('-created_at')
+        ).select_related('shared_with', 'shared_by').order_by('-created_at')
 
     def perform_create(self, serializer):
         share = serializer.save(shared_by=self.request.user)

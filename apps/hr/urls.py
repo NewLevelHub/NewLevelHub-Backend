@@ -36,4 +36,20 @@ urlpatterns = [
         }),
         name='onboarding-template-steps-detail',
     ),
+    # Assignment endpoints — my-assignment before the parameterised detail URL
+    path(
+        'onboarding/my-assignment/',
+        views.my_onboarding_assignment,
+        name='my-onboarding-assignment',
+    ),
+    path(
+        'onboarding/assignments/',
+        views.onboarding_assignments,
+        name='onboarding-assignments',
+    ),
+    path(
+        'onboarding/assignments/<int:user_id>/',
+        views.onboarding_assignment_detail,
+        name='onboarding-assignment-detail',
+    ),
 ]

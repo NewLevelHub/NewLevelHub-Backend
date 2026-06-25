@@ -5,7 +5,10 @@ from apps.companies.models import CompanySettings
 from apps.core.exceptions import raise_validation_error
 from apps.users.models import User
 from .constants import SYSTEM_STEPS
-from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
+from .models import (
+    LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep,
+    UserOnboardingProgress, OnboardingAssignment,
+)
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
@@ -215,3 +218,36 @@ class UserOnboardingProgressSerializer(serializers.ModelSerializer):
         model = UserOnboardingProgress
         fields = ['id', 'step', 'step_title', 'is_completed', 'completed_at']
         read_only_fields = ['id', 'completed_at']
+
+
+class OnboardingAssignmentCreateSerializer(serializers.Serializer):
+    """Input serializer for POST /hr/onboarding/assignments/."""
+    user_id = serializers.IntegerField()
+    template_id = serializers.IntegerField()
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class OnboardingAssignmentDetailSerializer(serializers.ModelSerializer):
+    """Output serializer for GET /hr/onboarding/assignments/ and detail."""
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    avatar = serializers.SerializerMethodField()
+    position = serializers.CharField(source='user.position', read_only=True)
+    template_id = serializers.IntegerField(source='template.id', read_only=True)
+    template_name = serializers.CharField(source='template.title', read_only=True)
+    assigned_at = serializers.DateTimeField(source='created_at', read_only=True)
+    completed_steps = serializers.IntegerField(read_only=True)
+    total_steps = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = OnboardingAssignment
+        fields = [
+            'user_id', 'first_name', 'last_name', 'avatar', 'position',
+            'template_id', 'template_name',
+            'completed_steps', 'total_steps',
+            'assigned_at', 'note',
+        ]
+
+    def get_avatar(self, obj):
+        return obj.user.avatar.url if obj.user.avatar else None

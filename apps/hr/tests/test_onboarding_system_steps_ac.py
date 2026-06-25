@@ -334,9 +334,12 @@ class TestTeamProgressEnhanced:
         assert member_data['role'] == employee.role
 
     def test_team_progress_counts_are_correct(self, api_client, company_admin, employee, company):
+        from apps.hr.models import OnboardingAssignment
         template = OnboardingTemplate.objects.create(company=company, title='T', is_active=True)
         step1 = OnboardingStep.objects.create(template=template, title='S1', position=1)
         step2 = OnboardingStep.objects.create(template=template, title='S2', position=2)
+        # Must have an assignment for the new architecture to count steps
+        OnboardingAssignment.objects.create(user=employee, template=template, assigned_by=None)
         UserOnboardingProgress.objects.create(user=employee, step=step1, is_completed=True)
         UserOnboardingProgress.objects.create(user=employee, step=step2, is_completed=False)
         api_client.force_authenticate(user=company_admin)

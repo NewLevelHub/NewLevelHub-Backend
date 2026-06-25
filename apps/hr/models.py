@@ -113,3 +113,31 @@ class UserOnboardingProgress(TimeStampedModel):
         unique_together = ['user', 'step']
         verbose_name = "User Onboarding Progress"
         verbose_name_plural = "User Onboarding Progresses"
+
+
+class OnboardingAssignment(TimeStampedModel):
+    """
+    Records which onboarding template is assigned to a specific user.
+    OneToOneField guarantees at most one active template per user.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='onboarding_assignment',
+    )
+    template = models.ForeignKey(
+        OnboardingTemplate,
+        on_delete=models.PROTECT,
+        related_name='assignments',
+    )
+    assigned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_onboardings',
+    )
+    note = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'hr_onboarding_assignments'

@@ -17,7 +17,7 @@ from apps.core.error_codes import EMAIL_NOT_VERIFIED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import get_lang, translate
 from apps.crm.models import Task
-from apps.hr.tasks import initialize_user_onboarding_progress
+from apps.hr.tasks import initialize_user_onboarding_progress  # kept for backward compat
 from apps.users.tasks import notify_new_employee
 from .models import User
 
@@ -121,6 +121,41 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return User.objects.create_user(**validated_data)
 
 
+def _setup_onboarding_for_invite_user(user, invitation):
+    """
+    When a user joins via invite, find the company's default onboarding template.
+    If one exists, create an OnboardingAssignment for the user and initialise
+    progress rows.  Falls back to the legacy behaviour (progress rows without
+    an explicit assignment) when no default template is found.
+    """
+    from apps.hr.models import OnboardingTemplate, OnboardingAssignment
+    from apps.hr.views import initialize_progress_for_assignment
+
+    if not invitation.company_id:
+        return
+
+    default_template = OnboardingTemplate.objects.filter(
+        company_id=invitation.company_id,
+        is_default=True,
+        is_active=True,
+    ).first()
+
+    if default_template is None:
+        # No default template — fall back to legacy progress initialisation.
+        initialize_user_onboarding_progress(user)
+        return
+
+    assignment, _ = OnboardingAssignment.objects.update_or_create(
+        user=user,
+        defaults={
+            'template': default_template,
+            'assigned_by': None,
+            'note': '',
+        },
+    )
+    initialize_progress_for_assignment(assignment)
+
+
 class InviteRegistrationSerializer(serializers.ModelSerializer):
     """Register an employee via an invite token."""
     password = serializers.CharField(write_only=True, min_length=8)
@@ -221,7 +256,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                         {'email': [{'_i18n': True, 'key': 'users.email_already_registered', 'params': {}}]},
                     ) from exc
 
-            initialize_user_onboarding_progress(user)
+            _setup_onboarding_for_invite_user(user, invitation)
             transaction.on_commit(lambda: notify_new_employee.delay(user.pk))
 
             invitation.is_used = True

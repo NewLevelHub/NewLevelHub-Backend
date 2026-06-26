@@ -321,7 +321,7 @@ class TestInvitationListAndActions:
             email='used@example.com',
             invited_by=company_admin,
             role='employee',
-            is_used=True,
+            status=Invitation.STATUS_ACCEPTED,
             expires_at=timezone.now() + timedelta(hours=12),
         )
         auth(api_client, company_admin)
@@ -503,7 +503,7 @@ class TestBuildingInvitations:
         old.refresh_from_db()
         assert old.is_used is True
         new = Invitation.objects.filter(
-            company__isnull=True, email='svc@example.com', is_used=False,
+            company__isnull=True, email='svc@example.com', status=Invitation.STATUS_PENDING,
         ).first()
         assert new is not None
         assert new.id != old.id

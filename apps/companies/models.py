@@ -116,8 +116,26 @@ class Invitation(TimeStampedModel):
     )
     role = models.CharField(max_length=20, default='employee')
     expires_at = models.DateTimeField()
-    is_used = models.BooleanField(default=False)
     used_at = models.DateTimeField(null=True, blank=True)
+
+    STATUS_PENDING = 'pending'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_EXPIRED = 'expired'
+    STATUS_REVOKED = 'revoked'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_REVOKED, 'Revoked'),
+    ]
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
 
     class Meta:
         db_table = 'invitations'
@@ -133,8 +151,29 @@ class Invitation(TimeStampedModel):
 
     @property
     def is_expired(self):
-        return timezone.now() > self.expires_at
+        # An invitation is expired if its status is explicitly 'expired',
+        # OR if it is still pending but the expiry datetime has passed.
+        if self.status == self.STATUS_EXPIRED:
+            return True
+        return self.status == self.STATUS_PENDING and timezone.now() > self.expires_at
+
+    @property
+    def is_used(self):
+        # Backward-compat: 'used' means accepted by the invitee or revoked by admin.
+        return self.status in (self.STATUS_ACCEPTED, self.STATUS_REVOKED)
+
+    @is_used.setter
+    def is_used(self, value):
+        # Legacy write path used by old code that predates the `status` field.
+        # Writing is_used=True without an explicit status maps to STATUS_REVOKED
+        # (the safest assumption; InviteRegistrationSerializer sets STATUS_ACCEPTED
+        # explicitly). Writing is_used=False resets to STATUS_PENDING.
+        if value:
+            if self.status not in (self.STATUS_ACCEPTED, self.STATUS_REVOKED):
+                self.status = self.STATUS_REVOKED
+        else:
+            self.status = self.STATUS_PENDING
 
     @property
     def is_valid(self):
-        return not self.is_used and not self.is_expired
+        return self.status == self.STATUS_PENDING and timezone.now() <= self.expires_at

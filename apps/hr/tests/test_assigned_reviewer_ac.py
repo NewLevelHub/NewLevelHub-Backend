@@ -168,8 +168,7 @@ class TestAssignedReviewerCreate:
 
         assert response.status_code == status.HTTP_201_CREATED, response.json()
         data = response.json()
-        assert data['assigned_reviewer'] == admin_b.id
-        assert data['assigned_reviewer_name']
+        assert data['assigned_reviewer']['id'] == admin_b.id
 
     def test_lone_company_admin_cannot_submit(self, api_client, admin_a):
         # admin_b is intentionally not in the fixtures here — only admin_a exists.

@@ -3,6 +3,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
 from apps.users.models import User
+from apps.users.serializers import UserBriefSerializer
 from apps.notifications.utils import create_notification
 from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import get_lang, translate
@@ -103,26 +104,6 @@ def _validate_categories(value):
     return value
 
 
-class CompanyAdminUserSerializer(serializers.ModelSerializer):
-    """Minimal read-only snapshot of the company admin user embedded in company responses."""
-    full_name = serializers.CharField(read_only=True)
-    avatar = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position']
-        read_only_fields = fields
-
-    def get_avatar(self, obj):
-        if not obj.avatar:
-            return None
-        request = self.context.get('request')
-        url = obj.avatar.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
-
-
 class CompanySerializer(serializers.ModelSerializer):
     """Lightweight serializer used for list responses."""
     employee_count = serializers.IntegerField(read_only=True)
@@ -136,7 +117,7 @@ class CompanySerializer(serializers.ModelSerializer):
         admin = obj.members.filter(role='company_admin', is_active=True).first()
         if admin is None:
             return None
-        return CompanyAdminUserSerializer(admin, context=self.context).data
+        return UserBriefSerializer(admin, context=self.context).data
 
     def get_floor_name(self, obj):
         return obj.floor_fk.name if obj.floor_fk else None
@@ -169,7 +150,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         admin = obj.members.filter(role='company_admin', is_active=True).first()
         if admin is None:
             return None
-        return CompanyAdminUserSerializer(admin, context=self.context).data
+        return UserBriefSerializer(admin, context=self.context).data
 
     def get_floor_name(self, obj):
         return obj.floor_fk.name if obj.floor_fk else None
@@ -542,12 +523,12 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
 
 class InvitationListSerializer(serializers.ModelSerializer):
-    invited_by_name = serializers.CharField(source='invited_by.full_name', read_only=True)
+    invited_by = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = Invitation
         fields = [
-            'id', 'email', 'role', 'token', 'invited_by_name',
+            'id', 'email', 'role', 'token', 'invited_by',
             'is_used', 'is_expired', 'is_valid', 'expires_at', 'created_at',
         ]
 

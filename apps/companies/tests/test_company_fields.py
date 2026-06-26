@@ -256,7 +256,8 @@ class TestFieldsInDetailResponse:
         response = api_client.get(detail_url(company.id))
         assert response.status_code == status.HTTP_200_OK
         admin_data = response.data['company_admin']
-        assert set(admin_data.keys()) == {'id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position'}
+        expected_keys = {'id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position', 'role'}
+        assert set(admin_data.keys()) == expected_keys
         assert admin_data['id'] == company_admin.id
 
 

@@ -4,31 +4,50 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from apps.companies.models import CompanySettings
 from apps.core.exceptions import raise_validation_error
 from apps.users.models import User
+from apps.users.serializers import UserBriefSerializer
 from .constants import SYSTEM_STEPS
 from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
 
 
 class LeaveRequestSerializer(serializers.ModelSerializer):
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
-    duration_days = serializers.IntegerField(read_only=True)
-    reviewer = serializers.PrimaryKeyRelatedField(source='reviewed_by', read_only=True)
-    assigned_reviewer_name = serializers.CharField(
-        source='assigned_reviewer.full_name', read_only=True, default=None,
+    # Nested read-only fields — overridden in to_representation; declared here
+    # so DRF schema introspection picks up the output shape.
+    user = UserBriefSerializer(read_only=True)
+    reviewed_by = UserBriefSerializer(read_only=True, allow_null=True)
+
+    # assigned_reviewer accepts an integer FK on write; to_representation swaps
+    # it for the nested UserBriefSerializer object on read.
+    assigned_reviewer = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+        allow_null=True,
+        required=False,
     )
+
+    duration_days = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = LeaveRequest
         fields = [
-            'id', 'user', 'user_name', 'company', 'leave_type', 'status',
+            'id', 'user', 'company', 'leave_type', 'status',
             'start_date', 'end_date', 'duration_days', 'comment',
-            'assigned_reviewer', 'assigned_reviewer_name',
-            'reviewed_by', 'reviewer', 'review_comment', 'reviewed_at',
+            'assigned_reviewer',
+            'reviewed_by', 'review_comment', 'reviewed_at',
             'created_at',
         ]
         read_only_fields = [
             'id', 'user', 'company', 'status',
             'reviewed_by', 'review_comment', 'reviewed_at', 'created_at',
         ]
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Replace the integer PK with a nested user object for both reviewer fields.
+        ret['assigned_reviewer'] = (
+            UserBriefSerializer(instance.assigned_reviewer).data
+            if instance.assigned_reviewer_id is not None
+            else None
+        )
+        return ret
 
     def _default_total_days_for_user(self, user):
         if not user.company_id:
@@ -148,13 +167,12 @@ class LeaveBalanceSetSerializer(serializers.Serializer):
 
 
 class LeaveBalanceTeamSerializer(serializers.ModelSerializer):
-    user_id = serializers.IntegerField(source='user.id', read_only=True)
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    user = UserBriefSerializer(read_only=True)
     remaining_days = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = LeaveBalance
-        fields = ['user_id', 'user_name', 'year', 'total_days', 'used_days', 'remaining_days']
+        fields = ['user', 'year', 'total_days', 'used_days', 'remaining_days']
 
 
 class OnboardingStepSerializer(serializers.ModelSerializer):

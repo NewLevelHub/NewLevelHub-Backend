@@ -121,7 +121,7 @@ class TestLeaveCreateValidation:
         response = api_client.post(LEAVES_URL, payload, format='json')
 
         assert response.status_code == status.HTTP_201_CREATED
-        assert response.data['user'] == employee_a.pk
+        assert response.data['user']['id'] == employee_a.pk
         assert response.data['leave_type'] == 'vacation'
         assert response.data['status'] == 'pending'
 

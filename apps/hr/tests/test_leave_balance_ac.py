@@ -113,7 +113,7 @@ class TestLeaveBalanceAcceptanceCriteria:
         )
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.data['user_id'] == employee.id
+        assert response.data['user']['id'] == employee.id
         assert response.data['year'] == 2026
         assert response.data['total_days'] == 35
 
@@ -135,7 +135,7 @@ class TestLeaveBalanceAcceptanceCriteria:
 
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) == 2
-        assert {item['user_id'] for item in response.data} == {employee.id, employee_two.id}
+        assert {item['user']['id'] for item in response.data} == {employee.id, employee_two.id}
 
     def test_approved_vacation_deducts_used_days(self, api_client, company_admin, employee):
         balance = LeaveBalance.objects.create(user=employee, year=2026, total_days=28, used_days=0)

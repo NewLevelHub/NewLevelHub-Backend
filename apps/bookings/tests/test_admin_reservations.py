@@ -165,7 +165,7 @@ class TestAdminReservationsList:
             ),
             (
                 lambda ds: {'user_id': ds['booking_b_confirmed'].user_id},
-                lambda rows, ds: all(row['user'] == ds['booking_b_confirmed'].user_id for row in rows),
+                lambda rows, ds: all(row['user']['id'] == ds['booking_b_confirmed'].user_id for row in rows),
             ),
             (
                 lambda ds: {'resource_id': ds['booking_a_cancelled'].resource_id},

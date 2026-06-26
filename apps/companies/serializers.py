@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
@@ -530,7 +531,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
             message=f'На адрес {invitation.email} отправлено приглашение.',
             link='/team/manage',
         )
-        send_invitation_email.delay(invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(invitation.id))
         current_employees = company.employee_count
         notify_company_admins_limit_thresholds(
             company=company,
@@ -589,7 +590,7 @@ class BuildingInvitationCreateSerializer(serializers.ModelSerializer):
             message=f'На адрес {invitation.email} отправлено приглашение сотрудника здания.',
             link='/team/manage',
         )
-        send_invitation_email.delay(invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(invitation.id))
         return invitation
 
 

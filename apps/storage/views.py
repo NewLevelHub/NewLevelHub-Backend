@@ -25,7 +25,7 @@ from .models import Folder, File, FileShare, FolderPermission
 from .s3_helpers import presigned_get_url_for_fieldfile, _delete_fieldfile_with_retry
 from .serializers import (
     FolderSerializer, FileSerializer, FileShareSerializer, FolderPermissionSerializer,
-    StorageUsageSerializer, TrashItemSerializer,
+    StorageUsageSerializer, TrashItemSerializer, BulkTrashActionSerializer,
 )
 
 
@@ -916,9 +916,24 @@ class TrashListView(APIView):
     permission_classes = [IsGuestOrCompanyMember]
 
     def _build_trash_querysets(self, request):
-        """Return (files_qs, folders_qs) scoped to the requesting user."""
+        """Return (files_qs, folders_qs) of deleted items the user is authorised to act on.
+
+        Authority rules (mirrors _get_accessible_deleted_files / _get_accessible_deleted_folders):
+        - superadmin      → all deleted items
+        - guest           → personal items only (owner=user, company=NULL / scope=personal)
+        - company_admin   → any item in their company PLUS their own personal items
+        - employee        → only items they personally own (owner=user); for company-scope
+                            this is further restricted to company=user.company so that
+                            personal files from another company are not included
+
+        Scope param further narrows results:
+        - scope=personal → personal items only (owner=user, company=NULL / scope=personal)
+        - scope=company  → company items only (company=user.company)
+        - (none)         → all authorised items
+        """
         user = request.user
-        scope = request.query_params.get('scope', 'personal')
+        # Use None sentinel so we can distinguish "not provided" from "personal".
+        scope = request.query_params.get('scope', None)
 
         if user.role == 'superadmin':
             files_qs = File.all_objects.filter(is_deleted=True)
@@ -926,12 +941,59 @@ class TrashListView(APIView):
         elif user.role == 'guest':
             files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
             folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
-        elif scope == 'company' and user.company_id:
-            files_qs = File.all_objects.filter(is_deleted=True, company=user.company)
-            folders_qs = Folder.all_objects.filter(is_deleted=True, scope='company', company=user.company)
+        elif user.role == 'company_admin':
+            if scope == 'personal':
+                files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+                folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+            elif scope == 'company' and user.company_id:
+                files_qs = File.all_objects.filter(is_deleted=True, company=user.company)
+                folders_qs = Folder.all_objects.filter(
+                    is_deleted=True, scope='company', company=user.company,
+                )
+            else:
+                # No scope — return all authorised items for company_admin.
+                personal_files = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+                personal_folders = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+                if user.company_id:
+                    company_files = File.all_objects.filter(is_deleted=True, company=user.company)
+                    company_folders = Folder.all_objects.filter(
+                        is_deleted=True, scope='company', company=user.company,
+                    )
+                    files_qs = (personal_files | company_files).distinct()
+                    folders_qs = (personal_folders | company_folders).distinct()
+                else:
+                    files_qs = personal_files
+                    folders_qs = personal_folders
         else:
-            files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
-            folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+            # employee: can only act on items they personally own.
+            # For company-scope items, restrict to owner=user AND company=user.company so
+            # that files uploaded by other employees are not exposed in this user's trash.
+            if scope == 'personal':
+                files_qs = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+                folders_qs = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+            elif scope == 'company' and user.company_id:
+                files_qs = File.all_objects.filter(
+                    is_deleted=True, owner=user, company=user.company,
+                )
+                folders_qs = Folder.all_objects.filter(
+                    is_deleted=True, owner=user, scope='company', company=user.company,
+                )
+            else:
+                # No scope — owned personal items + owned company items.
+                personal_files = File.all_objects.filter(is_deleted=True, owner=user, company__isnull=True)
+                personal_folders = Folder.all_objects.filter(is_deleted=True, owner=user, scope='personal')
+                if user.company_id:
+                    company_files = File.all_objects.filter(
+                        is_deleted=True, owner=user, company=user.company,
+                    )
+                    company_folders = Folder.all_objects.filter(
+                        is_deleted=True, owner=user, scope='company', company=user.company,
+                    )
+                    files_qs = (personal_files | company_files).distinct()
+                    folders_qs = (personal_folders | company_folders).distinct()
+                else:
+                    files_qs = personal_files
+                    folders_qs = personal_folders
 
         return files_qs, folders_qs
 
@@ -1002,6 +1064,151 @@ class TrashListView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _get_accessible_deleted_files(user, file_ids):
+    """Return a queryset of soft-deleted files from file_ids that the user can act on.
+
+    Access rules (must mirror TrashListView._build_trash_querysets):
+    - superadmin    → any deleted file
+    - guest         → personal files owned by the user (company=None)
+    - company_admin → personal files owned by the user OR any company-shared file
+    - employee      → only files the user personally owns (personal or company-scoped)
+    """
+    base_qs = File.all_objects.filter(is_deleted=True, id__in=file_ids)
+    if user.role == 'superadmin':
+        return base_qs
+    if user.role == 'guest':
+        return base_qs.filter(owner=user, company__isnull=True)
+    if user.role == 'company_admin':
+        personal = Q(owner=user, company__isnull=True)
+        company_shared = Q(company=user.company) if user.company_id else Q(pk__in=[])
+        return base_qs.filter(personal | company_shared)
+    # employee: only files they personally own (owner=user), across both personal and
+    # company scopes.  Company files uploaded by other employees are not actionable.
+    owned_personal = Q(owner=user, company__isnull=True)
+    owned_company = Q(owner=user, company=user.company) if user.company_id else Q(pk__in=[])
+    return base_qs.filter(owned_personal | owned_company)
+
+
+def _get_accessible_deleted_folders(user, folder_ids):
+    """Return a queryset of soft-deleted folders from folder_ids that the user can act on.
+
+    Access rules (must mirror TrashListView._build_trash_querysets):
+    - superadmin    → any deleted folder
+    - guest         → personal folders owned by the user
+    - company_admin → personal folders owned by the user OR any company folder
+    - employee      → only folders the user personally owns (personal or company-scoped)
+    """
+    base_qs = Folder.all_objects.filter(is_deleted=True, id__in=folder_ids)
+    if user.role == 'superadmin':
+        return base_qs
+    if user.role == 'guest':
+        return base_qs.filter(owner=user, scope='personal')
+    if user.role == 'company_admin':
+        personal = Q(owner=user, scope='personal')
+        company_shared = Q(company=user.company, scope='company') if user.company_id else Q(pk__in=[])
+        return base_qs.filter(personal | company_shared)
+    # employee: only folders they personally own, across both personal and company scopes.
+    # Company folders created by other employees are not actionable.
+    owned_personal = Q(owner=user, scope='personal')
+    owned_company = Q(owner=user, scope='company', company=user.company) if user.company_id else Q(pk__in=[])
+    return base_qs.filter(owned_personal | owned_company)
+
+
+class TrashBulkRestoreView(APIView):
+    permission_classes = [IsGuestOrCompanyMember]
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Bulk restore files and folders from trash',
+        request=BulkTrashActionSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkRestoreResponse',
+                fields={
+                    'restored_files': drf_serializers.IntegerField(),
+                    'restored_folders': drf_serializers.IntegerField(),
+                },
+            ),
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
+    def post(self, request):
+        serializer = BulkTrashActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        file_ids = serializer.validated_data['file_ids']
+        folder_ids = serializer.validated_data['folder_ids']
+        user = request.user
+
+        restored_files = 0
+        if file_ids:
+            files_qs = _get_accessible_deleted_files(user, file_ids)
+            for f in files_qs:
+                f.restore()
+                restored_files += 1
+
+        restored_folders = 0
+        if folder_ids:
+            folders_qs = _get_accessible_deleted_folders(user, folder_ids)
+            for folder in folders_qs:
+                folder.restore()
+                # Restore all directly deleted files inside this folder as well.
+                File.all_objects.filter(folder=folder, is_deleted=True).update(
+                    is_deleted=False, deleted_at=None
+                )
+                restored_folders += 1
+
+        return Response({'restored_files': restored_files, 'restored_folders': restored_folders})
+
+
+class TrashBulkDeleteView(APIView):
+    permission_classes = [IsGuestOrCompanyMember]
+
+    @extend_schema(
+        tags=['Storage'],
+        summary='Bulk permanently delete files and folders from trash',
+        request=BulkTrashActionSerializer,
+        responses={
+            200: inline_serializer(
+                name='BulkDeleteResponse',
+                fields={
+                    'deleted_files': drf_serializers.IntegerField(),
+                    'deleted_folders': drf_serializers.IntegerField(),
+                },
+            ),
+            400: OpenApiResponse(description='Validation error'),
+            401: OpenApiResponse(description='Not authenticated'),
+        },
+    )
+    def post(self, request):
+        serializer = BulkTrashActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        file_ids = serializer.validated_data['file_ids']
+        folder_ids = serializer.validated_data['folder_ids']
+        user = request.user
+
+        deleted_files = 0
+        if file_ids:
+            files_qs = _get_accessible_deleted_files(user, file_ids)
+            for f in files_qs:
+                if f.file:
+                    _delete_fieldfile_with_retry(f.file)
+                f.delete()
+                deleted_files += 1
+
+        deleted_folders = 0
+        if folder_ids:
+            folders_qs = _get_accessible_deleted_folders(user, folder_ids)
+            for folder in folders_qs:
+                for f in _collect_all_folder_files(folder):
+                    if f.file:
+                        _delete_fieldfile_with_retry(f.file)
+                folder.delete()
+                deleted_folders += 1
+
+        return Response({'deleted_files': deleted_files, 'deleted_folders': deleted_folders})
+
+
 _CATEGORY_ANNOTATION = Case(
     When(content_type__startswith='image/', then=Value('image')),
     When(content_type__startswith='video/', then=Value('media')),
@@ -1051,9 +1258,10 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Guests can permanently delete only their own personal deleted files.
+        personal_deletable = personal_trash
         personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = int(settings.GUEST_STORAGE_LIMIT_GB * 1024 * 1024 * 1024)
         company_data = None
@@ -1069,8 +1277,12 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Personal trash deletable: only this user's own personal deleted files
+        # (mirrors _get_accessible_deleted_files for personal scope — all roles).
+        personal_deletable = (
+            personal_trash_qs.filter(owner=user).aggregate(total=Sum('file_size'))['total'] or 0
         )
         personal_breakdown = _compute_breakdown(personal_active_qs)
 
@@ -1081,9 +1293,17 @@ def storage_usage(request):
         company_files_used = company_qs.aggregate(total=Sum('file_size'))['total'] or 0
         company_active_qs = company_qs.filter(is_deleted=False)
         company_count = company_active_qs.count()
-        company_trash = (
-            company_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        company_trash_qs = company_qs.filter(is_deleted=True)
+        company_trash = company_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # Company trash deletable mirrors _get_accessible_deleted_files rules:
+        # - superadmin / company_admin → all company deleted files
+        # - employee → only company deleted files where owner=user
+        if user.role in ('superadmin', 'company_admin'):
+            company_deletable = company_trash
+        else:
+            company_deletable = (
+                company_trash_qs.filter(owner=user).aggregate(total=Sum('file_size'))['total'] or 0
+            )
         company_breakdown = _compute_breakdown(company_active_qs)
         # Direct-upload CRM attachments (storage_file=None) are not in File but
         # do consume company storage — include them in the displayed total.
@@ -1101,6 +1321,7 @@ def storage_usage(request):
             'limit_bytes': storage_limit_bytes,
             'file_count': company_count,
             'trash_bytes': company_trash,
+            'trash_deletable_bytes': company_deletable,
             'breakdown': company_breakdown,
         }
         personal_limit = storage_limit_bytes
@@ -1109,9 +1330,10 @@ def storage_usage(request):
         personal_used = personal_qs.aggregate(total=Sum('file_size'))['total'] or 0
         personal_active_qs = personal_qs.filter(is_deleted=False)
         personal_count = personal_active_qs.count()
-        personal_trash = (
-            personal_qs.filter(is_deleted=True).aggregate(total=Sum('file_size'))['total'] or 0
-        )
+        personal_trash_qs = personal_qs.filter(is_deleted=True)
+        personal_trash = personal_trash_qs.aggregate(total=Sum('file_size'))['total'] or 0
+        # No company — user can delete only their own personal files.
+        personal_deletable = personal_trash
         personal_breakdown = _compute_breakdown(personal_active_qs)
         personal_limit = None
         company_data = None
@@ -1122,6 +1344,7 @@ def storage_usage(request):
             'file_count': personal_count,
             'limit_bytes': personal_limit,
             'trash_bytes': personal_trash,
+            'trash_deletable_bytes': personal_deletable,
             'breakdown': personal_breakdown,
         },
         'company': company_data,

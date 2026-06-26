@@ -475,7 +475,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         has_active_invitation = Invitation.objects.filter(
             company=company,
             email__iexact=email,
-            is_used=False,
+            status=Invitation.STATUS_PENDING,
             expires_at__gt=timezone.now(),
         ).exists()
         if has_active_invitation:
@@ -506,7 +506,7 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
         active_exists = Invitation.objects.filter(
             company=company,
             email__iexact=email,
-            is_used=False,
+            status=Invitation.STATUS_PENDING,
             expires_at__gte=timezone.now(),
         ).exists()
         if active_exists:
@@ -543,13 +543,25 @@ class InvitationCreateSerializer(serializers.ModelSerializer):
 
 class InvitationListSerializer(serializers.ModelSerializer):
     invited_by_name = serializers.CharField(source='invited_by.full_name', read_only=True)
+    is_used = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
+    is_valid = serializers.SerializerMethodField()
 
     class Meta:
         model = Invitation
         fields = [
             'id', 'email', 'role', 'token', 'invited_by_name',
-            'is_used', 'is_expired', 'is_valid', 'expires_at', 'created_at',
+            'status', 'is_used', 'is_expired', 'is_valid', 'expires_at', 'created_at',
         ]
+
+    def get_is_used(self, obj):
+        return obj.is_used
+
+    def get_is_expired(self, obj):
+        return obj.is_expired
+
+    def get_is_valid(self, obj):
+        return obj.is_valid
 
 
 class BuildingInvitationCreateSerializer(serializers.ModelSerializer):
@@ -569,7 +581,7 @@ class BuildingInvitationCreateSerializer(serializers.ModelSerializer):
         has_active_invitation = Invitation.objects.filter(
             company__isnull=True,
             email__iexact=email,
-            is_used=False,
+            status=Invitation.STATUS_PENDING,
             expires_at__gt=timezone.now(),
         ).exists()
         if has_active_invitation:

@@ -224,9 +224,9 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
             initialize_user_onboarding_progress(user)
             transaction.on_commit(lambda: notify_new_employee.delay(user.pk))
 
-            invitation.is_used = True
+            invitation.status = Invitation.STATUS_ACCEPTED
             invitation.used_at = timezone.now()
-            invitation.save(update_fields=['is_used', 'used_at', 'updated_at'])
+            invitation.save(update_fields=['status', 'used_at', 'updated_at'])
             return user
 
 

@@ -808,7 +808,7 @@ class TestGuestPassValidationsHistoryAC:
         assert response.data['total'] == 2
         ids = [row['id'] for row in response.data['results']]
         assert ids == [second.id, first.id]
-        assert response.data['results'][0]['validated_by'] == superadmin.full_name
+        assert response.data['results'][0]['validated_by']['full_name'] == superadmin.full_name
         assert response.data['results'][0]['method'] == 'manual'
 
     def test_creator_employee_can_view_own_pass_validations(self, api_client, employee, superadmin):

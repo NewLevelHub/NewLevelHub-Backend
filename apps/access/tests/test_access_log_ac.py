@@ -212,14 +212,14 @@ class TestAccessLogFieldsAC:
         response = api_client.get(LOGS_URL)
         results = response.data.get('results', response.data)
         log_data = next(r for r in results if r['id'] == log_a.id)
-        assert log_data['invited_by'] == admin_a.full_name
+        assert log_data['invited_by']['full_name'] == admin_a.full_name
 
     def test_validated_by_is_checked_by_full_name(self, api_client, superadmin, log_a, reception_a):
         api_client.force_authenticate(user=superadmin)
         response = api_client.get(LOGS_URL)
         results = response.data.get('results', response.data)
         log_data = next(r for r in results if r['id'] == log_a.id)
-        assert log_data['validated_by'] == reception_a.full_name
+        assert log_data['validated_by']['full_name'] == reception_a.full_name
 
     def test_validated_at_matches_created_at(self, api_client, superadmin, log_a):
         from django.utils.dateparse import parse_datetime

@@ -14,6 +14,11 @@ Acceptance criteria:
   AC10 — Building-staff revoke sets status='revoked'
   AC11 — Building-staff resend → old 'revoked', new 'pending'
   AC12 — ?status=accepted filter works for building-staff invitations
+  AC13 — check_expired_invitations covers building-staff (company=None) invitations
+  AC14 — Building-staff accept via InviteRegistrationSerializer sets status='accepted'
+  AC15 — Legacy ?is_used= / ?is_expired= filters work on building-staff endpoint
+  AC16 — Resend already-revoked building-staff invite returns 400
+  AC17 — Building-staff list response includes 'status' field in serializer output
 """
 
 from datetime import timedelta
@@ -559,3 +564,238 @@ class TestInvitationListSerializerShape:
         assert item['is_used'] is True
         assert item['is_expired'] is False
         assert item['is_valid'] is False
+
+
+# ---------------------------------------------------------------------------
+# AC13 — check_expired_invitations covers building-staff (company=None) invites
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestCheckExpiredTaskBuildingStaff:
+
+    def test_task_marks_building_staff_pending_past_expiry_as_expired(self, superadmin):
+        past = timezone.now() - timedelta(hours=1)
+        inv = Invitation.objects.create(
+            company=None,
+            email='bs_expire@test.com',
+            invited_by=superadmin,
+            role='reception',
+        )
+        Invitation.objects.filter(pk=inv.pk).update(expires_at=past)
+
+        updated = check_expired_invitations()
+        assert updated >= 1
+        inv.refresh_from_db()
+        assert inv.status == Invitation.STATUS_EXPIRED
+
+    def test_task_does_not_touch_accepted_building_staff_invite(self, superadmin):
+        past = timezone.now() - timedelta(hours=1)
+        inv = Invitation.objects.create(
+            company=None,
+            email='bs_accepted@test.com',
+            invited_by=superadmin,
+            role='service_manager',
+            status=Invitation.STATUS_ACCEPTED,
+        )
+        Invitation.objects.filter(pk=inv.pk).update(expires_at=past)
+
+        check_expired_invitations()
+
+        inv.refresh_from_db()
+        assert inv.status == Invitation.STATUS_ACCEPTED
+
+
+# ---------------------------------------------------------------------------
+# AC14 — Building-staff accept via InviteRegistrationSerializer sets 'accepted'
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBuildingStaffInviteAccept:
+
+    def test_accept_building_staff_invite_sets_status_accepted(
+        self, api_client, building_invitation
+    ):
+        payload = {
+            'token': str(building_invitation.token),
+            'first_name': 'Rec',
+            'last_name': 'Eptor',
+            'password': 'securepass1',
+        }
+        response = api_client.post('/api/v1/auth/register/invite/', payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        building_invitation.refresh_from_db()
+        assert building_invitation.status == Invitation.STATUS_ACCEPTED
+
+    def test_accept_building_staff_invite_assigns_correct_role(
+        self, api_client, building_invitation
+    ):
+        payload = {
+            'token': str(building_invitation.token),
+            'first_name': 'Rec',
+            'last_name': 'Eptor',
+            'password': 'securepass1',
+        }
+        response = api_client.post('/api/v1/auth/register/invite/', payload, format='json')
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        user = User.objects.get(email='reception@test.com')
+        assert user.role == 'reception'
+        assert user.company is None
+
+    def test_expired_building_staff_invite_cannot_be_accepted(
+        self, api_client, superadmin
+    ):
+        inv = Invitation.objects.create(
+            company=None,
+            email='exp_reception@test.com',
+            invited_by=superadmin,
+            role='reception',
+        )
+        Invitation.objects.filter(pk=inv.pk).update(
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        inv.refresh_from_db()
+        payload = {
+            'token': str(inv.token),
+            'first_name': 'Rec',
+            'last_name': 'Eptor',
+            'password': 'securepass1',
+        }
+        response = api_client.post('/api/v1/auth/register/invite/', payload, format='json')
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# ---------------------------------------------------------------------------
+# AC15 — Legacy ?is_used= / ?is_expired= filters on building-staff endpoint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBuildingInviteLegacyFilters:
+
+    def _seed(self, superadmin):
+        """Create one building invite per key status."""
+        inv_pending = Invitation.objects.create(
+            company=None, email='bsp@test.com', invited_by=superadmin, role='reception',
+        )
+        inv_accepted = Invitation.objects.create(
+            company=None, email='bsa@test.com', invited_by=superadmin, role='reception',
+            status=Invitation.STATUS_ACCEPTED,
+        )
+        inv_revoked = Invitation.objects.create(
+            company=None, email='bsr@test.com', invited_by=superadmin, role='reception',
+            status=Invitation.STATUS_REVOKED,
+        )
+        inv_expired_db = Invitation.objects.create(
+            company=None, email='bse@test.com', invited_by=superadmin, role='reception',
+        )
+        Invitation.objects.filter(pk=inv_expired_db.pk).update(
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        inv_expired_db.refresh_from_db()
+        return inv_pending, inv_accepted, inv_revoked, inv_expired_db
+
+    def test_is_used_true_returns_accepted_and_revoked(self, api_client, superadmin):
+        inv_pending, inv_accepted, inv_revoked, inv_expired_db = self._seed(superadmin)
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/', {'is_used': 'true'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [item['id'] for item in response.data['results']]
+        assert inv_accepted.id in ids
+        assert inv_revoked.id in ids
+        assert inv_pending.id not in ids
+
+    def test_is_used_false_excludes_accepted_and_revoked(self, api_client, superadmin):
+        inv_pending, inv_accepted, inv_revoked, inv_expired_db = self._seed(superadmin)
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/', {'is_used': 'false'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [item['id'] for item in response.data['results']]
+        assert inv_pending.id in ids
+        assert inv_accepted.id not in ids
+        assert inv_revoked.id not in ids
+
+    def test_is_expired_true_returns_pending_past_expiry(self, api_client, superadmin):
+        inv_pending, inv_accepted, inv_revoked, inv_expired_db = self._seed(superadmin)
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/', {'is_expired': 'true'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [item['id'] for item in response.data['results']]
+        assert inv_expired_db.id in ids
+        assert inv_pending.id not in ids
+        assert inv_accepted.id not in ids
+
+    def test_is_expired_false_excludes_pending_past_expiry(self, api_client, superadmin):
+        inv_pending, inv_accepted, inv_revoked, inv_expired_db = self._seed(superadmin)
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/', {'is_expired': 'false'})
+        assert response.status_code == status.HTTP_200_OK
+        ids = [item['id'] for item in response.data['results']]
+        assert inv_pending.id in ids
+        assert inv_expired_db.id not in ids
+
+
+# ---------------------------------------------------------------------------
+# AC16 — Resend already-revoked building-staff invite returns 400
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBuildingInviteResendRevoked:
+
+    def test_resend_revoked_building_invite_returns_400(
+        self, api_client, superadmin, building_invitation
+    ):
+        building_invitation.status = Invitation.STATUS_REVOKED
+        building_invitation.save(update_fields=['status'])
+
+        auth(api_client, superadmin)
+        response = api_client.post(
+            f'/api/v1/companies/building-invites/{building_invitation.id}/resend/'
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_resend_accepted_building_invite_returns_400(
+        self, api_client, superadmin, building_invitation
+    ):
+        building_invitation.status = Invitation.STATUS_ACCEPTED
+        building_invitation.save(update_fields=['status'])
+
+        auth(api_client, superadmin)
+        response = api_client.post(
+            f'/api/v1/companies/building-invites/{building_invitation.id}/resend/'
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+# ---------------------------------------------------------------------------
+# AC17 — Building-staff list response includes 'status' field
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestBuildingInviteSerializerShape:
+
+    def test_building_invite_list_includes_status_field(
+        self, api_client, superadmin, building_invitation
+    ):
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/')
+        assert response.status_code == status.HTTP_200_OK
+        item = next(
+            r for r in response.data['results'] if r['id'] == building_invitation.id
+        )
+        assert 'status' in item
+        assert item['status'] == 'pending'
+        assert 'is_used' in item
+        assert 'is_expired' in item
+        assert 'is_valid' in item
+
+    def test_building_invite_status_pending_bool_fields(
+        self, api_client, superadmin, building_invitation
+    ):
+        auth(api_client, superadmin)
+        response = api_client.get('/api/v1/companies/building-invites/')
+        assert response.status_code == status.HTTP_200_OK
+        item = next(
+            r for r in response.data['results'] if r['id'] == building_invitation.id
+        )
+        assert item['is_used'] is False
+        assert item['is_expired'] is False
+        assert item['is_valid'] is True

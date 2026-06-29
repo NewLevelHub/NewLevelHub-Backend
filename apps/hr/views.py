@@ -50,7 +50,7 @@ from .serializers import (
 class LeaveRequestViewSet(CompanyIsolationMixin, SetCompanyOnCreateMixin, viewsets.ModelViewSet):
     serializer_class = LeaveRequestSerializer
     permission_classes = [IsCompanyMember]
-    queryset = LeaveRequest.objects.select_related('user', 'reviewed_by').order_by('-created_at')
+    queryset = LeaveRequest.objects.select_related('user', 'reviewed_by', 'assigned_reviewer').order_by('-created_at')
     http_method_names = ['get', 'post', 'patch']
     filterset_fields = ['status', 'leave_type', 'user']
 

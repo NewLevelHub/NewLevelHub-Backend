@@ -10,6 +10,7 @@ from apps.core.i18n import get_lang, translate
 from apps.companies.models import Company
 from apps.bookings.models import Booking, ResourceBlock
 from apps.users.models import User
+from apps.users.serializers import UserBriefSerializer
 from .models import Floor, MapPoint, ServiceRequest, Announcement
 
 SOON_AVAILABLE_MINUTES = 30
@@ -240,16 +241,6 @@ class FloorDetailSerializer(FloorListSerializer):
 FloorSerializer = FloorListSerializer
 
 
-class UserBriefSerializer(serializers.ModelSerializer):
-    """Minimal user snapshot for embedding in service request responses (superadmin view)."""
-    full_name = serializers.CharField(read_only=True)
-    avatar = serializers.ImageField(use_url=True, read_only=True, allow_null=True)
-
-    class Meta:
-        model = User
-        fields = ['id', 'full_name', 'avatar', 'email', 'role']
-
-
 class CompanyBriefForRequestSerializer(serializers.ModelSerializer):
     """Minimal company snapshot for embedding in service request responses (superadmin view)."""
     logo = serializers.ImageField(use_url=True, read_only=True, allow_null=True)
@@ -435,14 +426,14 @@ class AnnouncementSerializer(serializers.ModelSerializer):
         allow_null=True,
         required=False,
     )
-    author_name = serializers.CharField(source='author.full_name', read_only=True)
+    author = UserBriefSerializer(read_only=True)
     is_read = serializers.SerializerMethodField()
     read_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Announcement
         fields = [
-            'id', 'scope', 'company_id', 'author', 'author_name',
+            'id', 'scope', 'company_id', 'author',
             'title', 'text', 'category', 'image',
             'is_pinned', 'notify_email', 'is_read', 'read_count',
             'created_at',

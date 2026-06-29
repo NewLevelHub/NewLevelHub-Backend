@@ -12,4 +12,6 @@ urlpatterns = [
     path('', include(router.urls)),
     path('usage/', views.storage_usage, name='storage-usage'),
     path('trash/', views.TrashListView.as_view(), name='storage-trash'),
+    path('trash/restore/', views.TrashBulkRestoreView.as_view(), name='storage-trash-bulk-restore'),
+    path('trash/delete/', views.TrashBulkDeleteView.as_view(), name='storage-trash-bulk-delete'),
 ]

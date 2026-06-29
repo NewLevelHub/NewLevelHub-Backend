@@ -85,6 +85,17 @@ def _resize_avatar(image_file):
 
 # ── Nested serializers ────────────────────────────────────────────────
 
+class UserBriefSerializer(serializers.ModelSerializer):
+    """Minimal user snapshot for embedding in other resources (e.g. leave requests)."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.ImageField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'full_name', 'email', 'avatar', 'position', 'role']
+        read_only_fields = fields
+
+
 class CompanyBriefSerializer(serializers.Serializer):
     """Minimal company snapshot embedded in the user profile response."""
     id = serializers.IntegerField()

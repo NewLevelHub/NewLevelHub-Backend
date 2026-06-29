@@ -243,7 +243,7 @@ class TestMyBookingsIgnoresUserParam:
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         results = data.get('results', data) if isinstance(data, dict) else data
-        user_ids = {r['user'] for r in results}
+        user_ids = {r['user']['id'] for r in results}
         assert user_ids == {employee.id}
 
 

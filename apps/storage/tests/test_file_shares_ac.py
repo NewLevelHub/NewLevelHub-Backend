@@ -179,9 +179,8 @@ class TestFileSharesAcceptanceCriteria:
 
         assert response.status_code == status.HTTP_200_OK
         assert response.data['count'] == 1
-        assert response.data['results'][0]['shared_with'] == recipient.id
-        assert response.data['results'][0]['shared_by_name'] == sharer.full_name
-        assert response.data['results'][0]['file_owner_name'] == sharer.full_name
+        assert response.data['results'][0]['shared_with']['id'] == recipient.id
+        assert response.data['results'][0]['shared_by']['full_name'] == sharer.full_name
         assert response.data['results'][0]['file_name'] == shared_file.name
 
     def test_get_file_shares_returns_who_file_is_shared_with(self, api_client, sharer, recipient, shared_file):
@@ -194,7 +193,7 @@ class TestFileSharesAcceptanceCriteria:
         assert response.data['count'] == 1
         row = response.data['results'][0]
         assert row['file'] == shared_file.id
-        assert row['shared_with'] == recipient.id
+        assert row['shared_with']['id'] == recipient.id
         assert row['permission'] == 'full'
 
     def test_patch_share_changes_permission(self, api_client, sharer, recipient, shared_file):

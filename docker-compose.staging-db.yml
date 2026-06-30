@@ -29,6 +29,26 @@ services:
       - staging_network
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    container_name: nlh_staging_minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minio}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minio123}
+    volumes:
+      - minio_data:/data
+    networks:
+      staging_network:
+        aliases:
+          - staging-minio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
 networks:
   staging_network:
     name: staging_network
@@ -36,3 +56,5 @@ networks:
 volumes:
   postgres_data:
     name: nlh_staging_postgres_data
+  minio_data:
+    name: nlh_staging_minio_data

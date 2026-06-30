@@ -82,9 +82,10 @@ def invitation_resend_url(company_id, invitation_id):
 
 @pytest.mark.django_db
 class TestInvitationCreate:
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
     def test_create_invitation_sets_expiry_and_enqueues_email(
-        self, mock_delay, api_client, company_admin, company
+        self, mock_delay, _mock_on_commit, api_client, company_admin, company
     ):
         auth(api_client, company_admin)
         started_at = timezone.now()
@@ -109,8 +110,9 @@ class TestInvitationCreate:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
-    def test_can_invite_active_guest_email(self, mock_delay, api_client, company_admin, company):
+    def test_can_invite_active_guest_email(self, mock_delay, _mock_on_commit, api_client, company_admin, company):
         User.objects.create_user(
             email='guest@example.com',
             password='pass',
@@ -129,9 +131,10 @@ class TestInvitationCreate:
         assert response.status_code == status.HTTP_201_CREATED
         mock_delay.assert_called_once()
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
     def test_can_invite_same_email_after_member_removed_from_company(
-        self, mock_delay, api_client, company_admin, company, employee
+        self, mock_delay, _mock_on_commit, api_client, company_admin, company, employee
     ):
         employee.company = None
         employee.is_active = False
@@ -183,8 +186,9 @@ class TestInvitationCreate:
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
-    def test_superadmin_can_invite_company_admin(self, mock_delay, api_client, superadmin, company):
+    def test_superadmin_can_invite_company_admin(self, mock_delay, _mock_on_commit, api_client, superadmin, company):
         auth(api_client, superadmin)
         response = api_client.post(
             invitations_url(company.id),
@@ -321,7 +325,7 @@ class TestInvitationListAndActions:
             email='used@example.com',
             invited_by=company_admin,
             role='employee',
-            is_used=True,
+            status=Invitation.STATUS_ACCEPTED,
             expires_at=timezone.now() + timedelta(hours=12),
         )
         auth(api_client, company_admin)
@@ -350,8 +354,11 @@ class TestInvitationListAndActions:
         invitation.refresh_from_db()
         assert invitation.is_used is True
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.views.send_invitation_email.delay')
-    def test_resend_invalidates_old_and_creates_new(self, mock_delay, api_client, company_admin, company):
+    def test_resend_invalidates_old_and_creates_new(
+        self, mock_delay, _mock_on_commit, api_client, company_admin, company
+    ):
         invitation = Invitation.objects.create(
             company=company,
             email='resend@example.com',
@@ -395,8 +402,9 @@ def building_invite_resend_url(invitation_id):
 
 @pytest.mark.django_db
 class TestBuildingInvitations:
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
-    def test_superadmin_can_invite_service_manager(self, mock_delay, api_client, superadmin):
+    def test_superadmin_can_invite_service_manager(self, mock_delay, _mock_on_commit, api_client, superadmin):
         auth(api_client, superadmin)
         response = api_client.post(
             BUILDING_INVITES_URL,
@@ -409,8 +417,9 @@ class TestBuildingInvitations:
         assert invitation.role == 'service_manager'
         mock_delay.assert_called_once_with(invitation.id)
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
-    def test_superadmin_can_invite_reception(self, mock_delay, api_client, superadmin):
+    def test_superadmin_can_invite_reception(self, mock_delay, _mock_on_commit, api_client, superadmin):
         auth(api_client, superadmin)
         response = api_client.post(
             BUILDING_INVITES_URL,
@@ -489,8 +498,9 @@ class TestBuildingInvitations:
         invitation.refresh_from_db()
         assert invitation.is_used is True
 
+    @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.serializers.send_invitation_email.delay')
-    def test_resend_creates_new_invitation(self, mock_delay, api_client, superadmin):
+    def test_resend_creates_new_invitation(self, mock_delay, _mock_on_commit, api_client, superadmin):
         old = Invitation.objects.create(
             company=None,
             email='svc@example.com',
@@ -503,7 +513,7 @@ class TestBuildingInvitations:
         old.refresh_from_db()
         assert old.is_used is True
         new = Invitation.objects.filter(
-            company__isnull=True, email='svc@example.com', is_used=False,
+            company__isnull=True, email='svc@example.com', status=Invitation.STATUS_PENDING,
         ).first()
         assert new is not None
         assert new.id != old.id

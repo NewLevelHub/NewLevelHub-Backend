@@ -464,10 +464,16 @@ class OnboardingStepViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
             OnboardingTemplate.objects.filter(company=self.request.user.company),
             pk=template_pk,
         )
+        if template.is_system:
+            raise LocalizedError(
+                code='SYSTEM_STEP_IMMUTABLE',
+                i18n_key='hr.onboarding_system_step_immutable',
+                http_status=400,
+            )
         serializer.save(template=template, is_system=False)
 
     def _guard_system_step(self, instance):
-        if instance.is_system:
+        if instance.template.is_system:
             raise LocalizedError(
                 code='SYSTEM_STEP_IMMUTABLE',
                 i18n_key='hr.onboarding_system_step_immutable',

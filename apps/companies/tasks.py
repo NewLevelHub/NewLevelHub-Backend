@@ -52,6 +52,16 @@ def send_invitation_email(invitation_id):
 
 @shared_task
 def check_expired_invitations():
-    """Периодическая задача: пометить просроченные инвайты."""
-    # TODO: Invitation.objects.filter(expires_at__lt=now, is_used=False) — при необходимости обработать
-    pass
+    """
+    Periodic task: mark pending invitations whose expires_at has passed as 'expired'.
+
+    Runs on a schedule (every hour via Celery Beat). Safe to call multiple times
+    — the queryset filter is idempotent. Covers both company-scoped and
+    building-staff (company=None) invitations.
+    """
+    from django.utils import timezone as _tz
+    updated = Invitation.objects.filter(
+        status=Invitation.STATUS_PENDING,
+        expires_at__lt=_tz.now(),
+    ).update(status=Invitation.STATUS_EXPIRED)
+    return updated

@@ -371,3 +371,162 @@ class TestCleanupDeletedFilesTask:
             count = cleanup_deleted_files()
 
         assert count == 3
+
+
+# ---------------------------------------------------------------------------
+# trash_deletable_bytes — per-role access rules
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def employee2(db, company):
+    return User.objects.create_user(
+        email='emp2@quota.co',
+        password='pass',
+        first_name='Emp2',
+        last_name='Quota',
+        role='employee',
+        company=company,
+        is_email_verified=True,
+    )
+
+
+@pytest.mark.django_db
+class TestTrashDeletableBytes:
+    """Verify trash_deletable_bytes respects _get_accessible_deleted_files rules."""
+
+    # ------------------------------------------------------------------
+    # guest: own personal deleted files only
+    # ------------------------------------------------------------------
+
+    def test_guest_personal_deletable_equals_own_trash(self, api_client, guest_user):
+        _create_db_file(owner=guest_user, company=None, size=500, is_deleted=True)
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        data = response.data['personal']
+        assert data['trash_bytes'] == 500
+        assert data['trash_deletable_bytes'] == 500
+
+    def test_guest_no_company_section(self, api_client, guest_user):
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['company'] is None
+
+    def test_guest_no_trash_returns_zero(self, api_client, guest_user):
+        api_client.force_authenticate(user=guest_user)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['trash_deletable_bytes'] == 0
+
+    # ------------------------------------------------------------------
+    # company_admin: own personal + ALL company deleted files
+    # ------------------------------------------------------------------
+
+    def test_company_admin_personal_deletable_is_own_files_only(
+        self, api_client, company_admin, employee, company
+    ):
+        # Personal file owned by admin (deletable)
+        _create_db_file(owner=company_admin, company=None, size=300, is_deleted=True)
+        # Personal file owned by employee (NOT deletable by admin — different owner)
+        _create_db_file(owner=employee, company=None, size=700, is_deleted=True)
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        personal = response.data['personal']
+        assert personal['trash_bytes'] == 1000            # total personal trash
+        assert personal['trash_deletable_bytes'] == 300   # only admin's own
+
+    def test_company_admin_company_deletable_equals_full_company_trash(
+        self, api_client, company_admin, employee, company
+    ):
+        # Company file uploaded by admin
+        _create_db_file(owner=company_admin, company=company, size=400, is_deleted=True)
+        # Company file uploaded by employee — admin can still delete it
+        _create_db_file(owner=employee, company=company, size=600, is_deleted=True)
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        company_data = response.data['company']
+        assert company_data['trash_bytes'] == 1000
+        assert company_data['trash_deletable_bytes'] == 1000
+
+    def test_company_admin_zero_trash_returns_zeros(
+        self, api_client, company_admin, company
+    ):
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['trash_deletable_bytes'] == 0
+        assert response.data['company']['trash_deletable_bytes'] == 0
+
+    # ------------------------------------------------------------------
+    # employee: own personal + only own company deleted files
+    # ------------------------------------------------------------------
+
+    def test_employee_personal_deletable_is_own_files_only(
+        self, api_client, employee, company_admin, company
+    ):
+        # Employee's own personal deleted file (deletable)
+        _create_db_file(owner=employee, company=None, size=200, is_deleted=True)
+        # Admin's personal deleted file (NOT deletable by employee)
+        _create_db_file(owner=company_admin, company=None, size=800, is_deleted=True)
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        personal = response.data['personal']
+        assert personal['trash_bytes'] == 1000            # total personal trash in company
+        assert personal['trash_deletable_bytes'] == 200   # only employee's own
+
+    def test_employee_company_deletable_is_own_uploads_only(
+        self, api_client, employee, company_admin, company, employee2
+    ):
+        # Employee's own company-scoped deleted file (deletable)
+        _create_db_file(owner=employee, company=company, size=300, is_deleted=True)
+        # Admin's company-scoped deleted file (NOT deletable by employee)
+        _create_db_file(owner=company_admin, company=company, size=700, is_deleted=True)
+        # Another employee's file (NOT deletable by employee)
+        _create_db_file(owner=employee2, company=company, size=500, is_deleted=True)
+
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        company_data = response.data['company']
+        assert company_data['trash_bytes'] == 1500          # total company trash
+        assert company_data['trash_deletable_bytes'] == 300  # only employee's own uploads
+
+    def test_employee_no_trash_returns_zeros(self, api_client, employee, company):
+        api_client.force_authenticate(user=employee)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['trash_deletable_bytes'] == 0
+        assert response.data['company']['trash_deletable_bytes'] == 0
+
+    # ------------------------------------------------------------------
+    # field is present in response shape
+    # ------------------------------------------------------------------
+
+    def test_trash_deletable_bytes_present_in_response_shape(
+        self, api_client, company_admin, company
+    ):
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert 'trash_deletable_bytes' in response.data['personal']
+        assert 'trash_deletable_bytes' in response.data['company']
+
+    def test_active_files_not_counted_in_trash_deletable(
+        self, api_client, company_admin, company
+    ):
+        # Only active files — trash_deletable_bytes must stay 0
+        _create_db_file(owner=company_admin, company=company, size=1000, is_deleted=False)
+        _create_db_file(owner=company_admin, company=None, size=500, is_deleted=False)
+
+        api_client.force_authenticate(user=company_admin)
+        response = api_client.get(USAGE_URL)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['personal']['trash_deletable_bytes'] == 0
+        assert response.data['company']['trash_deletable_bytes'] == 0

@@ -8,15 +8,10 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
 from apps.core.exceptions import raise_validation_error
+from apps.users.serializers import UserBriefSerializer
 from .models import Board, Column, Label, Task, Checklist, ChecklistItem, Comment, TaskAttachment, TaskHistory
 
 User = get_user_model()
-
-
-class AssigneeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ['id', 'first_name', 'last_name', 'avatar']
 
 
 class LabelMinimalSerializer(serializers.ModelSerializer):
@@ -124,19 +119,8 @@ class ChecklistSerializer(serializers.ModelSerializer):
         return {'total': total, 'completed': completed}
 
 
-class CommentAuthorSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'full_name', 'avatar']
-
-    def get_full_name(self, obj):
-        return obj.full_name
-
-
 class CommentSerializer(serializers.ModelSerializer):
-    author = CommentAuthorSerializer(read_only=True)
+    author = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = Comment
@@ -173,19 +157,8 @@ ALLOWED_EXTENSIONS = {
 MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-class TaskAttachmentUploadedBySerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'full_name', 'avatar']
-
-    def get_full_name(self, obj):
-        return obj.full_name
-
-
 class TaskAttachmentSerializer(serializers.ModelSerializer):
-    uploaded_by = TaskAttachmentUploadedBySerializer(read_only=True)
+    uploaded_by = UserBriefSerializer(read_only=True)
     url = serializers.SerializerMethodField()
     size = serializers.SerializerMethodField()
     storage_file_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
@@ -241,19 +214,8 @@ class TaskAttachmentSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class TaskHistoryUserSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'full_name', 'avatar']
-
-    def get_full_name(self, obj):
-        return obj.full_name
-
-
 class TaskHistorySerializer(serializers.ModelSerializer):
-    user = TaskHistoryUserSerializer(read_only=True)
+    user = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = TaskHistory
@@ -273,7 +235,7 @@ class TaskSerializer(serializers.ModelSerializer):
         queryset=User.objects.all(), source='assignee', required=False, allow_null=True,
         write_only=True,
     )
-    assignee = AssigneeSerializer(read_only=True)
+    assignee = UserBriefSerializer(read_only=True)
     column_id = serializers.PrimaryKeyRelatedField(
         queryset=Column.objects.all(), source='column',
     )

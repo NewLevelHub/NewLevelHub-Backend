@@ -100,7 +100,7 @@ class TestBookingCreate:
         assert response.status_code == status.HTTP_201_CREATED
         body = response.json()
         assert body['resource'] == shared_resource.id
-        assert body['user'] == employee.id
+        assert body['user']['id'] == employee.id
         assert body['status'] == 'confirmed'
         assert body['description'] == 'Focus session'
 

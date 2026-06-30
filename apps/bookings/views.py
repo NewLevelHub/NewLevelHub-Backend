@@ -58,10 +58,10 @@ from .serializers import (
     RecurringBookingSerializer,
     RecurringBookingCreateSerializer,
     ResourceBlockSerializer,
-    ParticipantPickerUserSerializer,
     BookingCancellationAuditSerializer,
     _EQUIPMENT_KEYS,
 )
+from apps.users.serializers import UserBriefSerializer
 from .filters import ResourceFilter, BookingFilter, BookingCancellationAuditFilter
 from .schedule import get_schedule_status, week_range_for_date
 from .qr_image import generate_booking_qr_image
@@ -2662,7 +2662,7 @@ from apps.core.permissions import IsCompanyMember  # noqa: E402
         ),
     ],
     responses={
-        200: ParticipantPickerUserSerializer(many=True),
+        200: UserBriefSerializer(many=True),
         401: OpenApiResponse(description='Not authenticated.'),
         403: OpenApiResponse(description='Company members only.'),
     },
@@ -2684,7 +2684,7 @@ class BookingMembersView(APIView):
             )
 
         qs = qs.order_by('first_name', 'last_name')[:20]
-        serializer = ParticipantPickerUserSerializer(qs, many=True, context={'request': request})
+        serializer = UserBriefSerializer(qs, many=True, context={'request': request})
         return Response(serializer.data)
 
 

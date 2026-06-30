@@ -282,6 +282,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.bookings.tasks.generate_recurring_bookings',
         'schedule': crontab(hour=0, minute=30, day_of_week=1),
     },
+    'check-expired-invitations': {
+        'task': 'apps.companies.tasks.check_expired_invitations',
+        'schedule': crontab(minute=0),  # every hour at :00
+    },
 }
 
 # Email

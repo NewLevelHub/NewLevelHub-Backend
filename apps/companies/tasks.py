@@ -55,8 +55,9 @@ def check_expired_invitations():
     """
     Periodic task: mark pending invitations whose expires_at has passed as 'expired'.
 
-    Runs on a schedule (e.g. every hour via Celery Beat). Safe to call multiple times
-    — the queryset filter is idempotent.
+    Runs on a schedule (every hour via Celery Beat). Safe to call multiple times
+    — the queryset filter is idempotent. Covers both company-scoped and
+    building-staff (company=None) invitations.
     """
     from django.utils import timezone as _tz
     updated = Invitation.objects.filter(

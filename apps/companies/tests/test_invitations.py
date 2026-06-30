@@ -356,7 +356,9 @@ class TestInvitationListAndActions:
 
     @patch('django.db.transaction.on_commit', side_effect=lambda fn, using=None: fn())
     @patch('apps.companies.views.send_invitation_email.delay')
-    def test_resend_invalidates_old_and_creates_new(self, mock_delay, _mock_on_commit, api_client, company_admin, company):
+    def test_resend_invalidates_old_and_creates_new(
+        self, mock_delay, _mock_on_commit, api_client, company_admin, company
+    ):
         invitation = Invitation.objects.create(
             company=company,
             email='resend@example.com',

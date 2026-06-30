@@ -1297,7 +1297,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
                 role=old_invitation.role,
             )
 
-        send_invitation_email.delay(new_invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(new_invitation.id))
         return Response({'detail': translate('company.invite_resent', lang)})
 
 
@@ -1437,7 +1437,7 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
                 role=old_invitation.role,
             )
 
-        send_invitation_email.delay(new_invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(new_invitation.id))
         return Response({'detail': translate('company.invite_resent', lang)})
 
 

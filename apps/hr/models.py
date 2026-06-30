@@ -74,6 +74,7 @@ class OnboardingTemplate(TimeStampedModel):
     title = models.CharField(max_length=255, default='Default onboarding')
     is_active = models.BooleanField(default=True)
     is_default = models.BooleanField(default=False, db_index=True)
+    is_system = models.BooleanField(default=False, db_index=True)
 
     class Meta:
         db_table = 'hr_onboarding_templates'

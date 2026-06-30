@@ -148,39 +148,61 @@ class TestSystemStepsAutoInjection:
 
 @pytest.mark.django_db
 class TestSystemStepsImmutability:
-    def _get_system_step(self, company):
-        template = OnboardingTemplate.objects.create(company=company, title='T', is_active=True)
+    """
+    The guard checks template.is_system, not step.is_system.
+    A step in a system template is immutable regardless of its own is_system flag.
+    A step in a non-system (custom) template is always editable.
+    """
+
+    def _get_system_template_step(self, company):
+        """Step belonging to a system template — must be immutable."""
+        template = OnboardingTemplate.objects.create(
+            company=company, title='System T', is_active=True, is_system=True
+        )
         step = OnboardingStep.objects.create(
             template=template, title='System', position=1, is_system=True
         )
         return template, step
 
-    def _get_custom_step(self, company):
-        template = OnboardingTemplate.objects.create(company=company, title='T2', is_active=True)
+    def _get_custom_template_step(self, company):
+        """Step belonging to a user-created (non-system) template — must be editable."""
+        template = OnboardingTemplate.objects.create(
+            company=company, title='Custom T', is_active=True, is_system=False
+        )
         step = OnboardingStep.objects.create(
             template=template, title='Custom', position=6, is_system=False
         )
         return template, step
 
-    def test_patch_system_step_returns_400(self, api_client, company_admin, company):
+    def _get_custom_template_step_marked_system(self, company):
+        """
+        Step with is_system=True but its template is not a system template.
+        Bug scenario: old data where step.is_system got set to True incorrectly.
+        Guard must allow edits because template.is_system is False.
+        """
+        template = OnboardingTemplate.objects.create(
+            company=company, title='Custom T2', is_active=True, is_system=False
+        )
+        step = OnboardingStep.objects.create(
+            template=template, title='Wrongly flagged', position=7, is_system=True
+        )
+        return template, step
+
+    # --- PATCH tests ---
+
+    def test_patch_step_in_system_template_returns_400(self, api_client, company_admin, company):
+        """Steps in a system template are immutable — PATCH must return 400."""
         api_client.force_authenticate(user=company_admin)
-        template, step = self._get_system_step(company)
+        template, step = self._get_system_template_step(company)
 
         response = api_client.patch(step_detail_url(template.pk, step.pk), {'title': 'Changed'}, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST
 
-    def test_delete_system_step_returns_400(self, api_client, company_admin, company):
+    def test_patch_step_in_custom_template_succeeds(self, api_client, company_admin, company):
+        """Steps in a custom (non-system) template must be editable."""
         api_client.force_authenticate(user=company_admin)
-        template, step = self._get_system_step(company)
-
-        response = api_client.delete(step_detail_url(template.pk, step.pk))
-
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-
-    def test_patch_custom_step_succeeds(self, api_client, company_admin, company):
-        api_client.force_authenticate(user=company_admin)
-        template, step = self._get_custom_step(company)
+        template, step = self._get_custom_template_step(company)
 
         response = api_client.patch(
             step_detail_url(template.pk, step.pk), {'title': 'Updated'}, format='json'
@@ -189,17 +211,98 @@ class TestSystemStepsImmutability:
         assert response.status_code == status.HTTP_200_OK
         assert response.data['title'] == 'Updated'
 
-    def test_delete_custom_step_succeeds(self, api_client, company_admin, company):
+    def test_patch_step_with_is_system_true_but_custom_template_succeeds(
+        self, api_client, company_admin, company
+    ):
+        """
+        Regression: step.is_system=True on a non-system template must NOT block edits.
+        The guard checks template.is_system, not step.is_system.
+        """
         api_client.force_authenticate(user=company_admin)
-        template, step = self._get_custom_step(company)
+        template, step = self._get_custom_template_step_marked_system(company)
+
+        response = api_client.patch(
+            step_detail_url(template.pk, step.pk), {'title': 'Fixed'}, format='json'
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['title'] == 'Fixed'
+
+    # --- DELETE tests ---
+
+    def test_delete_step_in_system_template_returns_400(self, api_client, company_admin, company):
+        """Steps in a system template are immutable — DELETE must return 400."""
+        api_client.force_authenticate(user=company_admin)
+        template, step = self._get_system_template_step(company)
+
+        response = api_client.delete(step_detail_url(template.pk, step.pk))
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_delete_step_in_custom_template_succeeds(self, api_client, company_admin, company):
+        """Steps in a custom (non-system) template must be deletable."""
+        api_client.force_authenticate(user=company_admin)
+        template, step = self._get_custom_template_step(company)
 
         response = api_client.delete(step_detail_url(template.pk, step.pk))
 
         assert response.status_code == status.HTTP_204_NO_CONTENT
 
+    def test_delete_step_with_is_system_true_but_custom_template_succeeds(
+        self, api_client, company_admin, company
+    ):
+        """
+        Regression: step.is_system=True on a non-system template must NOT block deletes.
+        """
+        api_client.force_authenticate(user=company_admin)
+        template, step = self._get_custom_template_step_marked_system(company)
+
+        response = api_client.delete(step_detail_url(template.pk, step.pk))
+
+        assert response.status_code == status.HTTP_204_NO_CONTENT
+
+    # --- POST (create) tests ---
+
+    def test_post_step_to_system_template_returns_400(self, api_client, company_admin, company):
+        """Cannot add new steps to a system template."""
+        api_client.force_authenticate(user=company_admin)
+        template = OnboardingTemplate.objects.create(
+            company=company, title='System T3', is_active=True, is_system=True
+        )
+
+        response = api_client.post(
+            steps_url(template.pk),
+            {'title': 'New Step', 'description': '', 'url': '', 'order': 99},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_post_step_to_custom_template_creates_with_is_system_false(
+        self, api_client, company_admin, company
+    ):
+        """New steps added to a custom template must always have is_system=False."""
+        api_client.force_authenticate(user=company_admin)
+        template = OnboardingTemplate.objects.create(
+            company=company, title='Custom T4', is_active=True, is_system=False
+        )
+
+        response = api_client.post(
+            steps_url(template.pk),
+            {'title': 'New Custom Step', 'description': '', 'url': '', 'order': 1},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data['is_system'] is False
+        created_step = OnboardingStep.objects.get(pk=response.data['id'])
+        assert created_step.is_system is False
+
+    # --- Role / isolation tests ---
+
     def test_employee_cannot_modify_steps(self, api_client, employee, company):
         api_client.force_authenticate(user=employee)
-        template, step = self._get_custom_step(company)
+        template, step = self._get_custom_template_step(company)
 
         response = api_client.patch(step_detail_url(template.pk, step.pk), {'title': 'X'}, format='json')
 
@@ -207,7 +310,7 @@ class TestSystemStepsImmutability:
 
     def test_other_company_admin_cannot_access_steps(self, api_client, other_company_admin, company):
         api_client.force_authenticate(user=other_company_admin)
-        template, step = self._get_custom_step(company)
+        template, step = self._get_custom_template_step(company)
 
         response = api_client.patch(step_detail_url(template.pk, step.pk), {'title': 'X'}, format='json')
 

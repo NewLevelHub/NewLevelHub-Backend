@@ -1,4 +1,3 @@
-from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -16,11 +15,15 @@ from apps.core.permissions import IsCompanyAdmin, IsCompanyMember
 from apps.core.mixins import CompanyIsolationMixin, SetCompanyOnCreateMixin
 from apps.notifications.utils import create_notification
 from apps.users.models import User
-from .models import LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep, UserOnboardingProgress
+from .models import (
+    LeaveRequest, LeaveBalance, OnboardingTemplate, OnboardingStep,
+    UserOnboardingProgress, OnboardingAssignment,
+)
 from .serializers import (
     LeaveRequestSerializer, LeaveRequestReviewSerializer, LeaveBalanceSerializer,
     LeaveBalanceSetSerializer, LeaveBalanceTeamSerializer,
     OnboardingStepSerializer, OnboardingTemplateSerializer,
+    OnboardingAssignmentCreateSerializer,
 )
 
 
@@ -411,12 +414,8 @@ class OnboardingTemplateViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='set-default')
     @transaction.atomic
     def set_default(self, request, pk=None):
-        from .tasks import initialize_user_onboarding_progress
         template = self.get_object()
         template.set_as_default()
-        employees = template.company.members.filter(role='employee')
-        for employee in employees:
-            initialize_user_onboarding_progress(employee)
         return Response(self.get_serializer(template).data)
 
 
@@ -471,6 +470,9 @@ class OnboardingStepViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
                 http_status=400,
             )
         serializer.save(template=template, is_system=False)
+        # Backfill progress rows for all users who have this template assigned.
+        for assignment in OnboardingAssignment.objects.filter(template=template).select_related('user'):
+            initialize_progress_for_assignment(assignment)
 
     def _guard_system_step(self, instance):
         if instance.template.is_system:
@@ -489,18 +491,26 @@ class OnboardingStepViewSet(CompanyIsolationMixin, viewsets.ModelViewSet):
         instance.delete()
 
 
-def _get_active_template(user):
-    """Возвращает текущий активный шаблон для компании пользователя (is_default → первый по id)."""
-    if not user.company_id:
-        return None
-    qs = OnboardingTemplate.objects.filter(company_id=user.company_id, is_active=True)
-    return qs.filter(is_default=True).first() or qs.order_by('id').first()
+def _get_assigned_template(user):
+    """Return the onboarding template assigned to this user via OnboardingAssignment (or None)."""
+    assignment = OnboardingAssignment.objects.filter(user=user).select_related('template').first()
+    return assignment.template if assignment else None
+
+
+def initialize_progress_for_assignment(assignment):
+    """Create UserOnboardingProgress rows for all (non-deleted) steps of the assigned template."""
+    for step in assignment.template.steps.order_by('position'):
+        UserOnboardingProgress.objects.get_or_create(
+            user=assignment.user,
+            step=step,
+            defaults={'is_completed': False},
+        )
 
 
 def _build_progress_response(user):
-    template = _get_active_template(user)
-    if not template:
-        return {'completed': True, 'steps': []}
+    template = _get_assigned_template(user)
+    if template is None:
+        return {'assigned': False, 'completed': True, 'steps': []}
 
     progress_items = list(
         UserOnboardingProgress.objects.filter(user=user, step__template=template)
@@ -508,7 +518,7 @@ def _build_progress_response(user):
         .order_by('step__position')
     )
     if not progress_items:
-        return {'completed': True, 'steps': []}
+        return {'assigned': True, 'completed': True, 'steps': []}
 
     completed = all(item.is_completed for item in progress_items)
     steps = [
@@ -520,7 +530,7 @@ def _build_progress_response(user):
         }
         for item in progress_items
     ]
-    return {'completed': completed, 'steps': steps}
+    return {'assigned': True, 'completed': completed, 'steps': steps}
 
 
 @extend_schema(
@@ -571,53 +581,52 @@ def onboarding_team_progress(request):
     if not request.user.company_id:
         return Response([])
 
-    template = _get_active_template(request.user)
-    base_qs = request.user.company.members.exclude(role='superadmin')
+    # Build a lookup: user_id → assignment (with template pre-fetched)
+    assignment_map = {
+        a.user_id: a
+        for a in OnboardingAssignment.objects.filter(
+            user__company_id=request.user.company_id,
+        ).select_related('template')
+    }
 
-    if template is None:
-        payload = [
-            {
-                'user': m.id,
-                'first_name': m.first_name,
-                'last_name': m.last_name,
-                'avatar': m.avatar.url if m.avatar else None,
-                'role': m.role,
+    base_qs = request.user.company.members.exclude(role='superadmin').order_by('id')
+
+    payload = []
+    for member in base_qs:
+        assignment = assignment_map.get(member.id)
+        if assignment is None:
+            payload.append({
+                'user': member.id,
+                'first_name': member.first_name,
+                'last_name': member.last_name,
+                'avatar': member.avatar.url if member.avatar else None,
+                'role': member.role,
+                'template_id': None,
+                'template_name': None,
                 'completed_steps': 0,
                 'total_steps': 0,
-            }
-            for m in base_qs.order_by('id')
-        ]
-        return Response(payload)
+            })
+            continue
 
-    team_members = (
-        base_qs
-        .annotate(
-            completed_steps=Count(
-                'onboarding_progress',
-                filter=Q(
-                    onboarding_progress__is_completed=True,
-                    onboarding_progress__step__template=template,
-                ),
-            ),
-            total_steps=Count(
-                'onboarding_progress',
-                filter=Q(onboarding_progress__step__template=template),
-            ),
+        template = assignment.template
+        progress_qs = UserOnboardingProgress.objects.filter(
+            user=member,
+            step__template=template,
         )
-        .order_by('id')
-    )
-    payload = [
-        {
+        total = progress_qs.count()
+        completed = progress_qs.filter(is_completed=True).count()
+        payload.append({
             'user': member.id,
             'first_name': member.first_name,
             'last_name': member.last_name,
             'avatar': member.avatar.url if member.avatar else None,
             'role': member.role,
-            'completed_steps': member.completed_steps,
-            'total_steps': member.total_steps,
-        }
-        for member in team_members
-    ]
+            'template_id': template.id,
+            'template_name': template.title,
+            'completed_steps': completed,
+            'total_steps': total,
+        })
+
     return Response(payload)
 
 
@@ -641,7 +650,7 @@ def onboarding_team_member_progress(request, user_id):
         pk=user_id,
     )
 
-    template = _get_active_template(request.user)
+    template = _get_assigned_template(member)
     progress_qs = UserOnboardingProgress.objects.filter(user=member)
     if template is not None:
         progress_qs = progress_qs.filter(step__template=template)
@@ -685,5 +694,261 @@ def onboarding_team_member_progress(request, user_id):
         },
         'completed_steps': completed_count,
         'total_steps': len(progress_items),
+        'steps': steps,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Onboarding assignment endpoints
+# ---------------------------------------------------------------------------
+
+@extend_schema(
+    tags=['HR'],
+    methods=['GET'],
+    summary='List all company members with their onboarding assignment',
+    responses={200: OpenApiResponse(description='List of members with assignment info')},
+)
+@extend_schema(
+    tags=['HR'],
+    methods=['POST'],
+    summary='Assign or reassign an onboarding template to an employee',
+    request=OnboardingAssignmentCreateSerializer,
+    responses={
+        201: OpenApiResponse(description='Assignment created/updated'),
+        400: OpenApiResponse(description='Validation error'),
+        403: OpenApiResponse(description='Company admin only or user not in company'),
+    },
+)
+@api_view(['GET', 'POST'])
+@permission_classes([IsCompanyAdmin])
+def onboarding_assignments(request):
+    """
+    GET  /hr/onboarding/assignments/  — list all members with their assignment info
+    POST /hr/onboarding/assignments/  — assign/reassign a template to a user
+    """
+    if request.method == 'GET':
+        return _onboarding_assignments_list(request)
+    return _onboarding_assignment_create(request)
+
+
+def _onboarding_assignments_list(request):
+    if not request.user.company_id:
+        return Response([])
+
+    assignment_map = {
+        a.user_id: a
+        for a in OnboardingAssignment.objects.filter(
+            user__company_id=request.user.company_id,
+        ).select_related('template')
+    }
+
+    members = request.user.company.members.exclude(role='superadmin').order_by('id')
+    payload = []
+    for member in members:
+        assignment = assignment_map.get(member.id)
+        if assignment is None:
+            payload.append({
+                'user_id': member.id,
+                'first_name': member.first_name,
+                'last_name': member.last_name,
+                'avatar': member.avatar.url if member.avatar else None,
+                'position': member.position,
+                'template_id': None,
+                'template_name': None,
+                'completed_steps': 0,
+                'total_steps': 0,
+                'assigned_at': None,
+            })
+            continue
+
+        template = assignment.template
+        progress_qs = UserOnboardingProgress.objects.filter(user=member, step__template=template)
+        total = progress_qs.count()
+        completed = progress_qs.filter(is_completed=True).count()
+        payload.append({
+            'user_id': member.id,
+            'first_name': member.first_name,
+            'last_name': member.last_name,
+            'avatar': member.avatar.url if member.avatar else None,
+            'position': member.position,
+            'template_id': template.id,
+            'template_name': template.title,
+            'completed_steps': completed,
+            'total_steps': total,
+            'assigned_at': assignment.created_at,
+        })
+
+    return Response(payload)
+
+
+def _onboarding_assignment_create(request):
+    """Shared logic for POST /hr/onboarding/assignments/."""
+    lang = get_lang(request)
+    ser = OnboardingAssignmentCreateSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    user_id = ser.validated_data['user_id']
+    template_id = ser.validated_data['template_id']
+    note = ser.validated_data.get('note', '')
+
+    # Resolve target user — must belong to the same company (superadmin sees all).
+    if request.user.role == 'superadmin':
+        target_user = get_object_or_404(User, pk=user_id)
+    else:
+        target_user = User.objects.filter(
+            pk=user_id,
+            company_id=request.user.company_id,
+        ).first()
+        if target_user is None:
+            raise PermissionDenied(translate('hr.assignment_user_not_in_company', lang))
+
+    # Resolve template — must belong to the same company and be active.
+    company_id = target_user.company_id if request.user.role == 'superadmin' else request.user.company_id
+    template = OnboardingTemplate.objects.filter(
+        pk=template_id,
+        company_id=company_id,
+        is_active=True,
+    ).first()
+    if template is None:
+        raise PermissionDenied(translate('hr.assignment_template_not_found', lang))
+
+    assignment, _created = OnboardingAssignment.objects.update_or_create(
+        user=target_user,
+        defaults={
+            'template': template,
+            'assigned_by': request.user,
+            'note': note,
+        },
+    )
+    initialize_progress_for_assignment(assignment)
+
+    progress_qs = UserOnboardingProgress.objects.filter(user=target_user, step__template=template)
+    total = progress_qs.count()
+    completed = progress_qs.filter(is_completed=True).count()
+
+    return Response({
+        'user_id': target_user.id,
+        'first_name': target_user.first_name,
+        'last_name': target_user.last_name,
+        'avatar': target_user.avatar.url if target_user.avatar else None,
+        'position': target_user.position,
+        'template_id': template.id,
+        'template_name': template.title,
+        'completed_steps': completed,
+        'total_steps': total,
+        'assigned_at': assignment.created_at,
+        'note': assignment.note,
+    }, status=201)
+
+
+@extend_schema(
+    tags=['HR'],
+    summary='Get onboarding assignment for a specific employee',
+    responses={
+        200: OpenApiResponse(description='Employee assignment with progress'),
+        403: OpenApiResponse(description='Company admin only'),
+        404: OpenApiResponse(description='User not found in company'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsCompanyAdmin])
+def onboarding_assignment_detail(request, user_id):
+    """GET /hr/onboarding/assignments/{user_id}/"""
+    lang = get_lang(request)
+
+    if request.user.role == 'superadmin':
+        member = get_object_or_404(User, pk=user_id)
+    else:
+        member = User.objects.filter(
+            pk=user_id,
+            company_id=request.user.company_id,
+        ).first()
+        if member is None:
+            raise PermissionDenied(translate('hr.assignment_user_not_in_company', lang))
+
+    assignment = OnboardingAssignment.objects.filter(user=member).select_related('template').first()
+    if assignment is None:
+        return Response({
+            'user_id': member.id,
+            'first_name': member.first_name,
+            'last_name': member.last_name,
+            'avatar': member.avatar.url if member.avatar else None,
+            'position': member.position,
+            'template_id': None,
+            'template_name': None,
+            'completed_steps': 0,
+            'total_steps': 0,
+            'assigned_at': None,
+            'note': '',
+        })
+
+    template = assignment.template
+    progress_qs = UserOnboardingProgress.objects.filter(user=member, step__template=template)
+    total = progress_qs.count()
+    completed = progress_qs.filter(is_completed=True).count()
+
+    return Response({
+        'user_id': member.id,
+        'first_name': member.first_name,
+        'last_name': member.last_name,
+        'avatar': member.avatar.url if member.avatar else None,
+        'position': member.position,
+        'template_id': template.id,
+        'template_name': template.title,
+        'completed_steps': completed,
+        'total_steps': total,
+        'assigned_at': assignment.created_at,
+        'note': assignment.note,
+    })
+
+
+@extend_schema(
+    tags=['HR'],
+    summary='My onboarding assignment and step-level progress',
+    responses={
+        200: OpenApiResponse(description='My assignment with steps'),
+        401: OpenApiResponse(description='Not authenticated'),
+        403: OpenApiResponse(description='Company member only'),
+    },
+)
+@api_view(['GET'])
+@permission_classes([IsCompanyMember])
+def my_onboarding_assignment(request):
+    """
+    GET /hr/onboarding/my-assignment/
+
+    Returns the current user's assigned template and step-by-step progress.
+    If no assignment exists returns {"assigned": false}.
+    """
+    assignment = OnboardingAssignment.objects.filter(
+        user=request.user,
+    ).select_related('template').first()
+
+    if assignment is None:
+        return Response({'assigned': False})
+
+    template = assignment.template
+    progress_items = list(
+        UserOnboardingProgress.objects.filter(user=request.user, step__template=template)
+        .select_related('step')
+        .order_by('step__position')
+    )
+    total = len(progress_items)
+    completed = sum(1 for p in progress_items if p.is_completed)
+    steps = [
+        {
+            'id': p.step_id,
+            'title': p.step.title,
+            'is_system': p.step.is_system,
+            'is_completed': p.is_completed,
+            'completed_at': p.completed_at,
+        }
+        for p in progress_items
+    ]
+    return Response({
+        'assigned': True,
+        'template': {'id': template.id, 'name': template.title},
+        'completed_steps': completed,
+        'total_steps': total,
         'steps': steps,
     })

@@ -1234,7 +1234,8 @@ class InvitationViewSet(viewsets.ModelViewSet):
         return context
 
     def perform_create(self, serializer):
-        serializer.save()
+        invitation = serializer.save()
+        send_invitation_email.delay(invitation.id)
 
     def create(self, request, *args, **kwargs):
         company = self.get_serializer_context()['company']
@@ -1381,6 +1382,7 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
+        send_invitation_email.delay(invitation.id)
         return Response(
             InvitationListSerializer(invitation).data,
             status=status.HTTP_201_CREATED,

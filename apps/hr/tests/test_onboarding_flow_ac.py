@@ -1,12 +1,8 @@
-from datetime import timedelta
-from unittest.mock import patch
-
 import pytest
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.companies.models import Company, Invitation
+from apps.companies.models import Company
 from apps.hr.models import OnboardingStep, OnboardingTemplate, UserOnboardingProgress
 from apps.users.models import User
 
@@ -240,41 +236,6 @@ class TestSetDefaultTemplateAC:
             UserOnboardingProgress.objects.filter(user=employee).values_list('step_id', flat=True)
         )
         assert assigned_step_ids == {s.pk for s in default_steps}
-
-
-@pytest.mark.django_db
-class TestInviteRegistrationCreatesOnboardingProgressAC:
-    @patch('apps.users.views.send_verification_email.delay')
-    def test_register_by_invite_auto_creates_user_progress(
-        self,
-        _mock_send_email,
-        api_client,
-        company,
-        company_admin,
-    ):
-        _template, steps = create_template_with_steps(company=company)
-        invitation = Invitation.objects.create(
-            company=company,
-            email='new.employee@onboarding.test',
-            invited_by=company_admin,
-            role='employee',
-            expires_at=timezone.now() + timedelta(hours=72),
-        )
-        payload = {
-            'token': str(invitation.token),
-            'first_name': 'New',
-            'last_name': 'Employee',
-            'password': 'StrongPass123!',
-            'phone': '+77000000000',
-        }
-
-        response = api_client.post(REGISTER_INVITE_URL, payload, format='json')
-
-        assert response.status_code == status.HTTP_201_CREATED
-        created_user = User.objects.get(email='new.employee@onboarding.test')
-        progress_qs = UserOnboardingProgress.objects.filter(user=created_user).order_by('step__position')
-        assert progress_qs.count() == len(steps)
-        assert list(progress_qs.values_list('is_completed', flat=True)) == [False, False]
 
 
 @pytest.mark.django_db

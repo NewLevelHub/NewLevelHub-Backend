@@ -53,5 +53,5 @@ def send_invitation_email(invitation_id):
 @shared_task
 def check_expired_invitations():
     """Периодическая задача: пометить просроченные инвайты."""
-    # TODO: Invitation.objects.filter(expires_at__lt=now, is_used=False) — при необходимости обработать
+    # TODO: Invitation.objects.filter(expires_at__lt=now, status='pending') — при необходимости обработать
     pass

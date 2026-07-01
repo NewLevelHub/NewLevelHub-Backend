@@ -33,6 +33,6 @@ class CompanySettingsAdmin(admin.ModelAdmin):
 
 @admin.register(Invitation)
 class InvitationAdmin(admin.ModelAdmin):
-    list_display = ['email', 'company', 'role', 'invited_by', 'is_used', 'expires_at']
-    list_filter = ['is_used', 'role']
+    list_display = ['email', 'company', 'role', 'invited_by', 'status', 'expires_at']
+    list_filter = ['status', 'role']
     search_fields = ['email']

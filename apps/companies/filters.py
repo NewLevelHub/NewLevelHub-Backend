@@ -17,12 +17,12 @@ class CompanyFilter(django_filters.FilterSet):
 
 
 class InvitationFilter(django_filters.FilterSet):
-    is_used = django_filters.BooleanFilter()
+    status = django_filters.CharFilter()
     is_expired = django_filters.BooleanFilter(method='filter_is_expired')
 
     class Meta:
         model = Invitation
-        fields = ['is_used']
+        fields = ['status']
 
     def filter_is_expired(self, queryset, name, value):
         now = timezone.now()

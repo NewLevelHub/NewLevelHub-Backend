@@ -1188,9 +1188,13 @@ class InvitationViewSet(viewsets.ModelViewSet):
         company = self._get_company()
         qs = Invitation.objects.filter(company=company).select_related('invited_by')
 
+        # ?is_used=true → status != pending (accepted/expired/revoked)
+        # ?is_used=false → status == pending (backward-compat with frontend)
         is_used = self._parse_bool_param(self.request.query_params.get('is_used'), 'is_used')
-        if is_used is not None:
-            qs = qs.filter(is_used=is_used)
+        if is_used is True:
+            qs = qs.exclude(status=Invitation.STATUS_PENDING)
+        elif is_used is False:
+            qs = qs.filter(status=Invitation.STATUS_PENDING)
 
         is_expired = self._parse_bool_param(self.request.query_params.get('is_expired'), 'is_expired')
         if is_expired is not None:
@@ -1238,9 +1242,9 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def revoke(self, request, *args, **kwargs):
         lang = get_lang(request)
         invitation = self.get_object()
-        invitation.is_used = True
+        invitation.status = Invitation.STATUS_REVOKED
         invitation.used_at = timezone.now()
-        invitation.save(update_fields=['is_used', 'used_at'])
+        invitation.save(update_fields=['status', 'used_at'])
         return Response({'detail': translate('company.invite_revoked', lang)})
 
     @extend_schema(
@@ -1258,14 +1262,14 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():
-            old_invitation.is_used = True
+            old_invitation.status = Invitation.STATUS_REVOKED
             old_invitation.used_at = timezone.now()
             old_invitation.expires_at = timezone.now()
-            old_invitation.save(update_fields=['is_used', 'used_at', 'expires_at'])
+            old_invitation.save(update_fields=['status', 'used_at', 'expires_at'])
 
             new_invitation = Invitation.objects.create(
                 company=old_invitation.company,
@@ -1316,11 +1320,14 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
 
+        # ?is_used=true → status != pending; ?is_used=false → status == pending
         is_used = InvitationViewSet._parse_bool_param(
             self.request.query_params.get('is_used'), 'is_used',
         )
-        if is_used is not None:
-            qs = qs.filter(is_used=is_used)
+        if is_used is True:
+            qs = qs.exclude(status=Invitation.STATUS_PENDING)
+        elif is_used is False:
+            qs = qs.filter(status=Invitation.STATUS_PENDING)
 
         is_expired = InvitationViewSet._parse_bool_param(
             self.request.query_params.get('is_expired'), 'is_expired',
@@ -1356,9 +1363,9 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def revoke(self, request, *args, **kwargs):
         lang = get_lang(request)
         invitation = self.get_object()
-        invitation.is_used = True
+        invitation.status = Invitation.STATUS_REVOKED
         invitation.used_at = timezone.now()
-        invitation.save(update_fields=['is_used', 'used_at'])
+        invitation.save(update_fields=['status', 'used_at'])
         return Response({'detail': translate('company.invite_revoked', lang)})
 
     @extend_schema(
@@ -1376,14 +1383,14 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():
-            old_invitation.is_used = True
+            old_invitation.status = Invitation.STATUS_REVOKED
             old_invitation.used_at = timezone.now()
             old_invitation.expires_at = timezone.now()
-            old_invitation.save(update_fields=['is_used', 'used_at', 'expires_at'])
+            old_invitation.save(update_fields=['status', 'used_at', 'expires_at'])
 
             new_invitation = Invitation.objects.create(
                 company=None,

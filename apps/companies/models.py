@@ -116,7 +116,21 @@ class Invitation(TimeStampedModel):
     )
     role = models.CharField(max_length=20, default='employee')
     expires_at = models.DateTimeField()
-    is_used = models.BooleanField(default=False)
+
+    STATUS_PENDING = 'pending'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_EXPIRED = 'expired'
+    STATUS_REVOKED = 'revoked'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_REVOKED, 'Revoked'),
+    ]
+    status = models.CharField(
+        max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True,
+    )
+
     used_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -136,5 +150,10 @@ class Invitation(TimeStampedModel):
         return timezone.now() > self.expires_at
 
     @property
+    def is_used(self):
+        """Backward-compat property: True for any non-pending status."""
+        return self.status != self.STATUS_PENDING
+
+    @property
     def is_valid(self):
-        return not self.is_used and not self.is_expired
+        return self.status == self.STATUS_PENDING and not self.is_expired

@@ -321,7 +321,7 @@ class TestInvitationListAndActions:
             email='used@example.com',
             invited_by=company_admin,
             role='employee',
-            is_used=True,
+            status='revoked',
             expires_at=timezone.now() + timedelta(hours=12),
         )
         auth(api_client, company_admin)
@@ -368,7 +368,7 @@ class TestInvitationListAndActions:
 
         new_invitation = Invitation.objects.exclude(id=invitation.id).get(email='resend@example.com')
         assert new_invitation.company_id == company.id
-        assert new_invitation.is_used is False
+        assert new_invitation.status == 'pending'
         assert str(new_invitation.token) != str(invitation.token)
         mock_delay.assert_called_once_with(new_invitation.id)
 
@@ -503,7 +503,7 @@ class TestBuildingInvitations:
         old.refresh_from_db()
         assert old.is_used is True
         new = Invitation.objects.filter(
-            company__isnull=True, email='svc@example.com', is_used=False,
+            company__isnull=True, email='svc@example.com', status='pending',
         ).first()
         assert new is not None
         assert new.id != old.id

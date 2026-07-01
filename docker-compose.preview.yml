@@ -45,6 +45,10 @@ services:
       SECURE_SSL_REDIRECT: "False"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+      # MinIO endpoint uses the "staging-minio" network alias defined in
+      # docker-compose.staging-db.yml. All PR preview containers join staging_network
+      # so this hostname resolves to the shared nlh_staging_minio container.
+      AWS_S3_ENDPOINT_URL: "http://staging-minio:9000"
     expose:
       - "8000"
     volumes:
@@ -98,6 +102,7 @@ services:
       BACKEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+      AWS_S3_ENDPOINT_URL: "http://staging-minio:9000"
     depends_on:
       redis:
         condition: service_healthy
@@ -121,6 +126,7 @@ services:
       BACKEND_URL: "https://${PR_SLUG}.staging.newlevelhub.kz"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+      AWS_S3_ENDPOINT_URL: "http://staging-minio:9000"
     depends_on:
       redis:
         condition: service_healthy

@@ -1,4 +1,5 @@
 import django_filters
+from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
@@ -17,18 +18,31 @@ class CompanyFilter(django_filters.FilterSet):
 
 
 class InvitationFilter(django_filters.FilterSet):
-    status = django_filters.CharFilter()
     is_expired = django_filters.BooleanFilter(method='filter_is_expired')
+    status = django_filters.ChoiceFilter(choices=Invitation.STATUS_CHOICES)
+    is_used = django_filters.BooleanFilter(method='filter_is_used')
 
     class Meta:
         model = Invitation
         fields = ['status']
 
+    def filter_is_used(self, queryset, name, value):
+        if value:
+            return queryset.filter(status__in=[Invitation.STATUS_ACCEPTED, Invitation.STATUS_REVOKED])
+        return queryset.exclude(status__in=[Invitation.STATUS_ACCEPTED, Invitation.STATUS_REVOKED])
+
     def filter_is_expired(self, queryset, name, value):
         now = timezone.now()
         if value:
-            return queryset.filter(expires_at__lt=now)
-        return queryset.filter(expires_at__gte=now)
+            # Expired status set explicitly, OR pending past expiry
+            return queryset.filter(
+                models.Q(status=Invitation.STATUS_EXPIRED)
+                | models.Q(status=Invitation.STATUS_PENDING, expires_at__lt=now)
+            )
+        return queryset.exclude(
+            models.Q(status=Invitation.STATUS_EXPIRED)
+            | models.Q(status=Invitation.STATUS_PENDING, expires_at__lt=now)
+        )
 
 
 class CompanyMemberFilter(django_filters.FilterSet):

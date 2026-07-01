@@ -1,6 +1,7 @@
 from django.db.models import Q
 from rest_framework import serializers
 from apps.core.exceptions import raise_validation_error
+from apps.users.serializers import UserBriefSerializer
 from .models import Folder, File, FileShare, FolderPermission
 
 
@@ -47,8 +48,7 @@ class FolderSerializer(serializers.ModelSerializer):
 
 
 class FileSerializer(serializers.ModelSerializer):
-    owner_name = serializers.CharField(source='owner.full_name', read_only=True)
-    uploaded_by = serializers.CharField(source='owner.full_name', read_only=True)
+    owner = UserBriefSerializer(read_only=True)
     size = serializers.IntegerField(source='file_size', read_only=True)
     mime_type = serializers.CharField(source='content_type', read_only=True)
     download_url = serializers.SerializerMethodField()
@@ -64,9 +64,9 @@ class FileSerializer(serializers.ModelSerializer):
         model = File
         fields = [
             'id', 'name', 'file', 'file_size', 'content_type',
-            'folder', 'owner', 'owner_name', 'company',
+            'folder', 'owner', 'company',
             'created_at', 'updated_at',
-            'size', 'mime_type', 'download_url', 'uploaded_by', 'folder_id',
+            'size', 'mime_type', 'download_url', 'folder_id',
         ]
         read_only_fields = ['id', 'owner', 'company', 'file_size', 'content_type', 'created_at', 'updated_at']
 
@@ -78,11 +78,10 @@ class FileSerializer(serializers.ModelSerializer):
 
 
 class FileShareSerializer(serializers.ModelSerializer):
-    shared_with_name = serializers.CharField(source='shared_with.full_name', read_only=True)
-    shared_by_name = serializers.CharField(source='shared_by.full_name', read_only=True)
+    # `shared_with` accepts a PK integer on write; to_representation nests the user data.
+    # `shared_by` is read-only (set by the view via perform_create).
     file_name = serializers.CharField(source='file.name', read_only=True)
     file_owner_id = serializers.IntegerField(source='file.owner_id', read_only=True)
-    file_owner_name = serializers.CharField(source='file.owner.full_name', read_only=True)
     file_id = serializers.IntegerField(read_only=True)
     shared_with_user_id = serializers.IntegerField(source='shared_with_id', read_only=True)
 
@@ -94,17 +93,22 @@ class FileShareSerializer(serializers.ModelSerializer):
             'file_id',
             'shared_with',
             'shared_with_user_id',
-            'shared_with_name',
             'shared_by',
-            'shared_by_name',
             'file_name',
             'file_owner_id',
-            'file_owner_name',
             'permission',
             'comment',
             'created_at',
         ]
         read_only_fields = ['id', 'shared_by', 'created_at']
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.shared_with_id is not None:
+            ret['shared_with'] = UserBriefSerializer(instance.shared_with, context=self.context).data
+        if instance.shared_by_id is not None:
+            ret['shared_by'] = UserBriefSerializer(instance.shared_by, context=self.context).data
+        return ret
 
     def to_internal_value(self, data):
         normalized_data = data.copy()
@@ -141,20 +145,31 @@ class FileShareSerializer(serializers.ModelSerializer):
 
 
 class FolderPermissionSerializer(serializers.ModelSerializer):
-    granted_by_name = serializers.CharField(source='granted_by.full_name', read_only=True)
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    granted_by = UserBriefSerializer(read_only=True)
+    # `user` is a writable PK field on input; to_representation returns nested UserBriefSerializer data.
+    # The queryset is set lazily in __init__ to avoid a circular import at module load time.
+    user = serializers.PrimaryKeyRelatedField(read_only=True, required=False, allow_null=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from apps.users.models import User as UserModel
+        self.fields['user'] = serializers.PrimaryKeyRelatedField(
+            queryset=UserModel.objects.all(),
+            required=False,
+            allow_null=True,
+        )
 
     class Meta:
         model = FolderPermission
-        fields = ['id', 'folder', 'user', 'user_name', 'role',
-                  'permission', 'granted_by', 'granted_by_name', 'created_at']
+        fields = ['id', 'folder', 'user', 'role',
+                  'permission', 'granted_by', 'created_at']
         read_only_fields = ['id', 'folder', 'granted_by', 'created_at']
 
-    def to_internal_value(self, data):
-        normalized = data.copy()
-        if normalized.get('user') in (None, '') and normalized.get('user_id') not in (None, ''):
-            normalized['user'] = normalized.get('user_id')
-        return super().to_internal_value(normalized)
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.user_id is not None:
+            ret['user'] = UserBriefSerializer(instance.user, context=self.context).data
+        return ret
 
     def validate(self, attrs):
         user = attrs.get('user')
@@ -209,6 +224,7 @@ class PersonalStorageSerializer(serializers.Serializer):
     file_count = serializers.IntegerField()
     limit_bytes = serializers.IntegerField(allow_null=True)
     trash_bytes = serializers.IntegerField()
+    trash_deletable_bytes = serializers.IntegerField()
     breakdown = StorageBreakdownSerializer()
 
 
@@ -217,9 +233,30 @@ class CompanyStorageSerializer(serializers.Serializer):
     limit_bytes = serializers.IntegerField()
     file_count = serializers.IntegerField()
     trash_bytes = serializers.IntegerField()
+    trash_deletable_bytes = serializers.IntegerField()
     breakdown = StorageBreakdownSerializer()
 
 
 class StorageUsageSerializer(serializers.Serializer):
     personal = PersonalStorageSerializer()
     company = CompanyStorageSerializer(allow_null=True)
+
+
+class BulkTrashActionSerializer(serializers.Serializer):
+    file_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list,
+    )
+    folder_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        default=list,
+    )
+
+    def validate(self, attrs):
+        if not attrs.get('file_ids') and not attrs.get('folder_ids'):
+            raise serializers.ValidationError(
+                [{'_i18n': True, 'key': 'storage.bulk_trash_ids_required', 'params': {}}]
+            )
+        return attrs

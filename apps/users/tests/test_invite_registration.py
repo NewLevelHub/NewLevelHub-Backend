@@ -141,7 +141,7 @@ class TestInviteRegistration:
         mock_send_email.assert_called_once()
 
     def test_post_register_by_invite_used_token_returns_400(self, api_client, invitation):
-        invitation.status = 'accepted'
+        invitation.status = Invitation.STATUS_ACCEPTED
         invitation.used_at = timezone.now()
         invitation.save(update_fields=['status', 'used_at', 'updated_at'])
 

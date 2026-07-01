@@ -610,7 +610,7 @@ class TestListPermissionsAction:
         response = api_client.get(_folder_permissions_url(company_folder.id))
         assert response.status_code == status.HTTP_200_OK
         item = response.data[0]
-        for field in ('id', 'folder', 'user', 'user_name', 'role', 'permission', 'granted_by', 'created_at'):
+        for field in ('id', 'folder', 'user', 'role', 'permission', 'granted_by', 'created_at'):
             assert field in item
 
     def test_employee_cannot_list_permissions(self, api_client, employee, company_folder):

@@ -84,6 +84,17 @@ def _resize_avatar(image_file):
 
 # ── Nested serializers ────────────────────────────────────────────────
 
+class UserBriefSerializer(serializers.ModelSerializer):
+    """Minimal user snapshot for embedding in other resources (e.g. leave requests)."""
+    full_name = serializers.CharField(read_only=True)
+    avatar = serializers.ImageField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'full_name', 'email', 'avatar', 'position', 'role']
+        read_only_fields = fields
+
+
 class CompanyBriefSerializer(serializers.Serializer):
     """Minimal company snapshot embedded in the user profile response."""
     id = serializers.IntegerField()
@@ -296,7 +307,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
             _setup_onboarding_for_invite_user(user, invitation)
             transaction.on_commit(lambda: notify_new_employee.delay(user.pk))
 
-            invitation.status = invitation.STATUS_ACCEPTED
+            invitation.status = Invitation.STATUS_ACCEPTED
             invitation.used_at = timezone.now()
             invitation.save(update_fields=['status', 'used_at', 'updated_at'])
             return user

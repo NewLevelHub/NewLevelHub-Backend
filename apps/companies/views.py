@@ -1185,23 +1185,42 @@ class InvitationViewSet(viewsets.ModelViewSet):
         return get_object_or_404(base_qs, id=company_id)
 
     def get_queryset(self):
+        from .models import Invitation as _Invitation
         company = self._get_company()
-        qs = Invitation.objects.filter(company=company).select_related('invited_by')
+        qs = _Invitation.objects.filter(company=company).select_related('invited_by')
 
-        # ?is_used=true → status != pending (accepted/expired/revoked)
-        # ?is_used=false → status == pending (backward-compat with frontend)
+        # status filter — direct DB field
+        status_param = self.request.query_params.get('status')
+        if status_param is not None:
+            valid_statuses = [c[0] for c in _Invitation.STATUS_CHOICES]
+            if status_param in valid_statuses:
+                qs = qs.filter(status=status_param)
+
+        # Legacy boolean filters kept for backward compatibility
         is_used = self._parse_bool_param(self.request.query_params.get('is_used'), 'is_used')
-        if is_used is True:
-            qs = qs.exclude(status=Invitation.STATUS_PENDING)
-        elif is_used is False:
-            qs = qs.filter(status=Invitation.STATUS_PENDING)
+        if is_used is not None:
+            if is_used:
+                qs = qs.filter(
+                    status__in=[_Invitation.STATUS_ACCEPTED, _Invitation.STATUS_REVOKED]
+                )
+            else:
+                qs = qs.exclude(
+                    status__in=[_Invitation.STATUS_ACCEPTED, _Invitation.STATUS_REVOKED]
+                )
 
         is_expired = self._parse_bool_param(self.request.query_params.get('is_expired'), 'is_expired')
         if is_expired is not None:
+            now = timezone.now()
             if is_expired:
-                qs = qs.filter(expires_at__lte=timezone.now())
+                qs = qs.filter(
+                    models.Q(status=_Invitation.STATUS_EXPIRED)
+                    | models.Q(status=_Invitation.STATUS_PENDING, expires_at__lte=now)
+                )
             else:
-                qs = qs.filter(expires_at__gt=timezone.now())
+                qs = qs.exclude(
+                    models.Q(status=_Invitation.STATUS_EXPIRED)
+                    | models.Q(status=_Invitation.STATUS_PENDING, expires_at__lte=now)
+                )
         return qs.order_by('-created_at')
 
     def get_serializer_class(self):
@@ -1278,7 +1297,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
                 role=old_invitation.role,
             )
 
-        send_invitation_email.delay(new_invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(new_invitation.id))
         return Response({'detail': translate('company.invite_resent', lang)})
 
 
@@ -1320,23 +1339,42 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = Invitation.objects.filter(company__isnull=True).select_related('invited_by')
 
-        # ?is_used=true → status != pending; ?is_used=false → status == pending
+        # status filter — direct DB field
+        status_param = self.request.query_params.get('status')
+        if status_param is not None:
+            valid_statuses = [c[0] for c in Invitation.STATUS_CHOICES]
+            if status_param in valid_statuses:
+                qs = qs.filter(status=status_param)
+
+        # Legacy boolean filters kept for backward compatibility
         is_used = InvitationViewSet._parse_bool_param(
             self.request.query_params.get('is_used'), 'is_used',
         )
-        if is_used is True:
-            qs = qs.exclude(status=Invitation.STATUS_PENDING)
-        elif is_used is False:
-            qs = qs.filter(status=Invitation.STATUS_PENDING)
+        if is_used is not None:
+            if is_used:
+                qs = qs.filter(
+                    status__in=[Invitation.STATUS_ACCEPTED, Invitation.STATUS_REVOKED]
+                )
+            else:
+                qs = qs.exclude(
+                    status__in=[Invitation.STATUS_ACCEPTED, Invitation.STATUS_REVOKED]
+                )
 
         is_expired = InvitationViewSet._parse_bool_param(
             self.request.query_params.get('is_expired'), 'is_expired',
         )
         if is_expired is not None:
+            now = timezone.now()
             if is_expired:
-                qs = qs.filter(expires_at__lte=timezone.now())
+                qs = qs.filter(
+                    models.Q(status=Invitation.STATUS_EXPIRED)
+                    | models.Q(status=Invitation.STATUS_PENDING, expires_at__lte=now)
+                )
             else:
-                qs = qs.filter(expires_at__gt=timezone.now())
+                qs = qs.exclude(
+                    models.Q(status=Invitation.STATUS_EXPIRED)
+                    | models.Q(status=Invitation.STATUS_PENDING, expires_at__lte=now)
+                )
         return qs.order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
@@ -1399,7 +1437,7 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
                 role=old_invitation.role,
             )
 
-        send_invitation_email.delay(new_invitation.id)
+        transaction.on_commit(lambda: send_invitation_email.delay(new_invitation.id))
         return Response({'detail': translate('company.invite_resent', lang)})
 
 

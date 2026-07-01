@@ -9,6 +9,7 @@ from rest_framework import serializers
 
 from apps.companies.models import Company
 from apps.services.models import Floor
+from apps.users.serializers import UserBriefSerializer
 from apps.core.error_codes import (
     BOOKING_ADVANCE_DAYS_EXCEEDED,
     BOOKING_DESK_USER_OVERLAP,
@@ -859,26 +860,6 @@ class BookingCreateSerializer(serializers.ModelSerializer):
         return booking
 
 
-class BookingUserSerializer(serializers.ModelSerializer):
-    """Read-only nested user snapshot embedded in booking responses."""
-    full_name = serializers.CharField(read_only=True)
-    avatar = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'full_name', 'avatar', 'position', 'role']
-        read_only_fields = fields
-
-    def get_avatar(self, obj):
-        if not obj.avatar:
-            return None
-        request = self.context.get('request')
-        url = obj.avatar.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
-
-
 class BookingValidateQrSerializer(serializers.Serializer):
     qr_code = serializers.UUIDField()
 
@@ -887,7 +868,7 @@ class BookingSerializer(serializers.ModelSerializer):
     resource_name = serializers.CharField(source='resource.name', read_only=True)
     resource_type = serializers.CharField(source='resource.resource_type', read_only=True)
     capsule_zone = serializers.CharField(source='resource.capsule_zone', read_only=True)
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
+    user = UserBriefSerializer(read_only=True)
     booked_by = serializers.SerializerMethodField()
     participants = serializers.SerializerMethodField()
     recurring_booking_id = serializers.IntegerField(read_only=True)
@@ -898,7 +879,7 @@ class BookingSerializer(serializers.ModelSerializer):
         model = Booking
         fields = [
             'id', 'resource', 'resource_name', 'resource_type', 'capsule_zone',
-            'user', 'user_name', 'booked_by', 'company',
+            'user', 'booked_by', 'company',
             'start_time', 'end_time', 'status', 'description',
             'cancelled_by', 'cancel_reason', 'participants', 'recurring_booking_id',
             'checked_in_at', 'qr_code', 'qr_image', 'created_at', 'updated_at',
@@ -924,23 +905,18 @@ class BookingSerializer(serializers.ModelSerializer):
         return translated
 
     def get_booked_by(self, obj):
-        return BookingUserSerializer(obj.user, context=self.context).data
+        return UserBriefSerializer(obj.user, context=self.context).data
 
     def get_participants(self, obj):
         return [
-            {
-                'id': p.user.id,
-                'email': p.user.email,
-                'full_name': f'{p.user.first_name} {p.user.last_name}'.strip(),
-            }
+            UserBriefSerializer(p.user, context=self.context).data
             for p in obj.participants.select_related('user').all()
         ]
 
 
 class RecurringBookingSerializer(serializers.ModelSerializer):
     resource_id = serializers.IntegerField(read_only=True)
-    user_name = serializers.CharField(source='user.full_name', read_only=True)
-    user_role = serializers.CharField(source='user.role', read_only=True)
+    user = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = RecurringBooking
@@ -949,8 +925,6 @@ class RecurringBookingSerializer(serializers.ModelSerializer):
             'resource',
             'resource_id',
             'user',
-            'user_name',
-            'user_role',
             'company',
             'recurrence_type',
             'day_of_week',
@@ -1053,26 +1027,6 @@ class RecurringBookingCreateSerializer(serializers.Serializer):
         return attrs
 
 
-class ParticipantPickerUserSerializer(serializers.ModelSerializer):
-    """Lightweight user snapshot for the participant picker autocomplete."""
-    full_name = serializers.CharField(read_only=True)
-    avatar = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = ['id', 'email', 'full_name', 'avatar', 'position']
-        read_only_fields = fields
-
-    def get_avatar(self, obj):
-        if not obj.avatar:
-            return None
-        request = self.context.get('request')
-        url = obj.avatar.url
-        if request:
-            return request.build_absolute_uri(url)
-        return url
-
-
 class ResourceBlockSerializer(serializers.ModelSerializer):
     class Meta:
         model = ResourceBlock
@@ -1096,18 +1050,9 @@ class BulkCancelSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, default='')
 
 
-class AuditCancelledBySerializer(serializers.ModelSerializer):
-    full_name = serializers.CharField(read_only=True)
-
-    class Meta:
-        model = User
-        fields = ['id', 'full_name']
-        read_only_fields = ['id', 'full_name']
-
-
 class BookingCancellationAuditSerializer(serializers.ModelSerializer):
     booking_id = serializers.IntegerField(read_only=True)
-    cancelled_by = AuditCancelledBySerializer(read_only=True)
+    cancelled_by = UserBriefSerializer(read_only=True)
 
     class Meta:
         model = BookingCancellationAudit

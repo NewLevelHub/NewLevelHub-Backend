@@ -215,7 +215,7 @@ class TestFileApiAcceptanceCriteria:
         assert 'size' in response.data
         assert 'mime_type' in response.data
         assert 'download_url' in response.data
-        assert 'uploaded_by' in response.data
+        assert 'owner' in response.data
         assert 'created_at' in response.data
 
     def test_get_download_returns_presigned_json(self, api_client, company_member):

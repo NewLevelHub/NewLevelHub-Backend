@@ -4,6 +4,7 @@ import logging
 from django.utils import timezone
 
 from apps.core.exceptions import raise_validation_error
+from apps.users.serializers import UserBriefSerializer
 from .models import GuestPass, AccessLog
 from .qr_image import generate_guest_pass_qr_image
 from . import tasks
@@ -102,8 +103,7 @@ class GuestPassCreateSerializer(serializers.ModelSerializer):
 
 
 class GuestPassSerializer(serializers.ModelSerializer):
-    created_by_name = serializers.CharField(source='created_by.full_name', read_only=True)
-    created_by_email = serializers.CharField(source='created_by.email', read_only=True)
+    created_by = UserBriefSerializer(read_only=True)
     created_by_company_name = serializers.CharField(source='created_by.company.name', read_only=True, allow_null=True)
     is_valid = serializers.BooleanField(read_only=True)
     purpose = serializers.CharField(source='visit_purpose', read_only=True)
@@ -116,7 +116,7 @@ class GuestPassSerializer(serializers.ModelSerializer):
     class Meta:
         model = GuestPass
         fields = [
-            'id', 'created_by', 'created_by_name', 'created_by_email', 'created_by_company_name', 'company',
+            'id', 'created_by', 'created_by_company_name', 'company',
             'guest_name', 'guest_email', 'guest_phone', 'purpose',
             'qr_code', 'qr_image', 'status', 'usage_type', 'is_single_use', 'times_used',
             'valid_from', 'valid_until', 'is_valid',
@@ -141,7 +141,7 @@ class GuestPassSerializer(serializers.ModelSerializer):
     def get_last_validated_by(self, obj):
         log = self._last_log(obj)
         if log and log.checked_by:
-            return log.checked_by.full_name
+            return UserBriefSerializer(log.checked_by, context=self.context).data
         return None
 
     def get_last_method(self, obj):
@@ -163,7 +163,9 @@ class GuestPassValidationLogSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_validated_by(self, obj):
-        return obj.checked_by.full_name if obj.checked_by else None
+        if obj.checked_by:
+            return UserBriefSerializer(obj.checked_by, context=self.context).data
+        return None
 
 
 class AccessLogSerializer(serializers.ModelSerializer):
@@ -182,10 +184,10 @@ class AccessLogSerializer(serializers.ModelSerializer):
 
     def get_invited_by(self, obj):
         if obj.guest_pass and obj.guest_pass.created_by:
-            return obj.guest_pass.created_by.full_name
+            return UserBriefSerializer(obj.guest_pass.created_by, context=self.context).data
         return None
 
     def get_validated_by(self, obj):
         if obj.checked_by:
-            return obj.checked_by.full_name
+            return UserBriefSerializer(obj.checked_by, context=self.context).data
         return None

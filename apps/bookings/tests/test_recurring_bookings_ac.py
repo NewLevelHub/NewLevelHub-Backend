@@ -527,7 +527,7 @@ class TestRecurringBookingListAC:
         assert response.status_code == status.HTTP_200_OK
         rows = _results(response)
         assert sorted(item['id'] for item in rows) == sorted([own_series.id, employee_series.id])
-        assert sorted(item['user_role'] for item in rows) == ['company_admin', 'employee']
+        assert sorted(item['user']['role'] for item in rows) == ['company_admin', 'employee']
 
 
 @pytest.mark.django_db

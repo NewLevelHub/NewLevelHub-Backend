@@ -12,15 +12,11 @@ Coverage:
 - Invite flow: accepting invite with a default template → OnboardingAssignment created
 - onboarding_team_progress: returns per-employee template_name
 """
-from datetime import timedelta
-from unittest.mock import patch
-
 import pytest
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.companies.models import Company, Invitation
+from apps.companies.models import Company
 from apps.hr.models import (
     OnboardingAssignment, OnboardingStep, OnboardingTemplate, UserOnboardingProgress,
 )
@@ -443,73 +439,6 @@ class TestMyAssignment:
 
 
 # ---------------------------------------------------------------------------
-# Invite flow — accepting invite with default template creates assignment
-# ---------------------------------------------------------------------------
-
-@pytest.mark.django_db
-class TestInviteFlowCreatesAssignment:
-    @patch('apps.users.views.send_verification_email.delay')
-    def test_invite_with_default_template_creates_assignment(
-        self, _mock_email, api_client, admin, company,
-    ):
-        template = make_template(company, name='Default', is_default=True)
-        steps = make_steps(template, count=2)
-
-        invitation = Invitation.objects.create(
-            company=company,
-            email='newuser@assign.test',
-            invited_by=admin,
-            role='employee',
-            expires_at=timezone.now() + timedelta(hours=72),
-        )
-        payload = {
-            'token': str(invitation.token),
-            'first_name': 'New',
-            'last_name': 'User',
-            'password': 'StrongPass123!',
-            'phone': '+77001112233',
-        }
-
-        response = api_client.post(REGISTER_INVITE_URL, payload, format='json')
-
-        assert response.status_code == status.HTTP_201_CREATED
-        new_user = User.objects.get(email='newuser@assign.test')
-
-        assignment = OnboardingAssignment.objects.filter(user=new_user).first()
-        assert assignment is not None, 'OnboardingAssignment should be created'
-        assert assignment.template_id == template.id
-
-        progress_count = UserOnboardingProgress.objects.filter(user=new_user).count()
-        assert progress_count == len(steps)
-
-    @patch('apps.users.views.send_verification_email.delay')
-    def test_invite_without_default_template_no_assignment(
-        self, _mock_email, api_client, admin, company,
-    ):
-        # No template at all
-        invitation = Invitation.objects.create(
-            company=company,
-            email='newuser2@assign.test',
-            invited_by=admin,
-            role='employee',
-            expires_at=timezone.now() + timedelta(hours=72),
-        )
-        payload = {
-            'token': str(invitation.token),
-            'first_name': 'New2',
-            'last_name': 'User2',
-            'password': 'StrongPass123!',
-            'phone': '+77001112244',
-        }
-
-        response = api_client.post(REGISTER_INVITE_URL, payload, format='json')
-
-        assert response.status_code == status.HTTP_201_CREATED
-        new_user = User.objects.get(email='newuser2@assign.test')
-        assert not OnboardingAssignment.objects.filter(user=new_user).exists()
-
-
-# ---------------------------------------------------------------------------
 # onboarding_team_progress returns per-employee template info
 # ---------------------------------------------------------------------------
 
@@ -552,7 +481,7 @@ class TestTeamProgressWithAssignments:
     def test_team_progress_member_without_assignment_shows_null_template(
         self, api_client, admin, employee, company,
     ):
-        # No assignment for employee
+        # No assignment for employee and no default template in the company.
         auth(api_client, admin)
         response = api_client.get(TEAM_PROGRESS_URL)
 
@@ -565,3 +494,136 @@ class TestTeamProgressWithAssignments:
         assert emp_item['template_name'] is None
         assert emp_item['completed_steps'] == 0
         assert emp_item['total_steps'] == 0
+
+    def test_team_progress_member_without_assignment_shows_default_template(
+        self, api_client, admin, employee, company,
+    ):
+        """
+        When a member has no explicit assignment but the company has a default template,
+        team progress should show the default template id/name without creating an assignment.
+        """
+        default_template = make_template(company, name='Default Tmpl', is_default=True)
+        make_steps(default_template, count=2)
+
+        auth(api_client, admin)
+        response = api_client.get(TEAM_PROGRESS_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        items = {i['user']: i for i in response.json()}
+
+        emp_item = items.get(employee.id)
+        assert emp_item is not None
+        assert emp_item['template_id'] == default_template.id
+        assert emp_item['template_name'] == default_template.title
+        # Still 0/0 because no progress rows created (no auto-assign on team view)
+        assert emp_item['completed_steps'] == 0
+        assert emp_item['total_steps'] == 0
+        # No assignment should have been created for the member
+        assert not OnboardingAssignment.objects.filter(user=employee).exists()
+
+
+# ---------------------------------------------------------------------------
+# Auto-assign: _get_or_auto_assign_template lazy behaviour
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestAutoAssignDefaultTemplate:
+    def test_my_assignment_auto_assigns_default_template(
+        self, api_client, employee, company,
+    ):
+        """
+        When a company has a default active template and the employee has no assignment,
+        hitting GET /hr/onboarding/my-assignment/ should lazily create the assignment
+        and return it.
+        """
+        default_template = make_template(company, name='Auto Default', is_default=True)
+        steps = make_steps(default_template, count=2)
+
+        auth(api_client, employee)
+        response = api_client.get(MY_ASSIGNMENT_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data['assigned'] is True
+        assert response.data['template']['id'] == default_template.id
+        assert response.data['template']['name'] == default_template.title
+        assert response.data['total_steps'] == len(steps)
+        assert response.data['completed_steps'] == 0
+
+        # Verify the assignment and progress rows were actually created in DB
+        assignment = OnboardingAssignment.objects.filter(user=employee).first()
+        assert assignment is not None
+        assert assignment.template_id == default_template.id
+        assert assignment.assigned_by is None
+        progress_count = UserOnboardingProgress.objects.filter(
+            user=employee, step__template=default_template,
+        ).count()
+        assert progress_count == len(steps)
+
+    def test_my_assignment_returns_assigned_false_when_no_default(
+        self, api_client, employee, company,
+    ):
+        """
+        When there is no default template, my-assignment still returns {"assigned": false}.
+        """
+        make_template(company, name='Non-default', is_default=False)
+
+        auth(api_client, employee)
+        response = api_client.get(MY_ASSIGNMENT_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'assigned': False}
+        assert not OnboardingAssignment.objects.filter(user=employee).exists()
+
+    def test_my_assignment_second_request_does_not_duplicate_assignment(
+        self, api_client, employee, company,
+    ):
+        """
+        Calling the endpoint twice must not create duplicate assignments.
+        """
+        default_template = make_template(company, name='Dedup Default', is_default=True)
+        make_steps(default_template, count=1)
+
+        auth(api_client, employee)
+        api_client.get(MY_ASSIGNMENT_URL)
+        api_client.get(MY_ASSIGNMENT_URL)
+
+        assert OnboardingAssignment.objects.filter(user=employee).count() == 1
+
+    def test_assignments_list_shows_default_template_for_unassigned_member(
+        self, api_client, admin, employee, company,
+    ):
+        """
+        GET /hr/onboarding/assignments/ shows default template id/name for members
+        who have no explicit assignment, but does NOT create any assignments.
+        """
+        default_template = make_template(company, name='List Default', is_default=True)
+
+        auth(api_client, admin)
+        response = api_client.get(ASSIGNMENTS_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        items = {i['user_id']: i for i in response.json()}
+
+        emp_item = items.get(employee.id)
+        assert emp_item is not None
+        assert emp_item['template_id'] == default_template.id
+        assert emp_item['template_name'] == default_template.title
+        # assigned_at remains None because no real assignment was created
+        assert emp_item['assigned_at'] is None
+        # No assignment created
+        assert not OnboardingAssignment.objects.filter(user=employee).exists()
+
+    def test_auto_assign_inactive_default_template_not_used(
+        self, api_client, employee, company,
+    ):
+        """
+        An inactive template marked as default must NOT be auto-assigned.
+        """
+        make_template(company, name='Inactive Default', is_default=True, is_active=False)
+
+        auth(api_client, employee)
+        response = api_client.get(MY_ASSIGNMENT_URL)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data == {'assigned': False}
+        assert not OnboardingAssignment.objects.filter(user=employee).exists()

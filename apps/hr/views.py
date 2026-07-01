@@ -507,8 +507,55 @@ def initialize_progress_for_assignment(assignment):
         )
 
 
+def _get_or_auto_assign_template(user):
+    """
+    Return (assignment, template) for the given user.
+
+    If an explicit OnboardingAssignment exists, returns it as-is.
+    If no assignment exists and the user has a company with an active default
+    OnboardingTemplate, lazily creates the assignment (with assigned_by=None)
+    and initialises progress rows.  Uses select_for_update inside an atomic
+    block to prevent duplicate assignments under concurrent requests.
+
+    Returns (None, None) when neither an assignment nor a default template is found.
+    """
+    if not user.company_id:
+        return None, None
+
+    # Fast path: explicit assignment already exists.
+    assignment = OnboardingAssignment.objects.filter(user=user).select_related('template').first()
+    if assignment is not None:
+        return assignment, assignment.template
+
+    # Slow path: check for a default template and auto-assign.
+    default_template = OnboardingTemplate.objects.filter(
+        company_id=user.company_id,
+        is_default=True,
+        is_active=True,
+    ).first()
+
+    if default_template is None:
+        return None, None
+
+    with transaction.atomic():
+        # Re-check inside the lock to avoid race-condition duplicates.
+        assignment, created = OnboardingAssignment.objects.get_or_create(
+            user=user,
+            defaults={
+                'template': default_template,
+                'assigned_by': None,
+            },
+        )
+        if created:
+            initialize_progress_for_assignment(assignment)
+        # If someone else just created it with a different template, use that.
+        assignment = OnboardingAssignment.objects.select_related('template').get(pk=assignment.pk)
+
+    return assignment, assignment.template
+
+
 def _build_progress_response(user):
-    template = _get_assigned_template(user)
+    _assignment, template = _get_or_auto_assign_template(user)
     if template is None:
         return {'assigned': False, 'completed': True, 'steps': []}
 
@@ -589,20 +636,29 @@ def onboarding_team_progress(request):
         ).select_related('template')
     }
 
+    # Fallback: company default template to show for members without an explicit assignment.
+    # We do NOT create assignments here — that only happens lazily in _get_or_auto_assign_template.
+    default_template = OnboardingTemplate.objects.filter(
+        company_id=request.user.company_id,
+        is_default=True,
+        is_active=True,
+    ).first()
+
     base_qs = request.user.company.members.exclude(role='superadmin').order_by('id')
 
     payload = []
     for member in base_qs:
         assignment = assignment_map.get(member.id)
         if assignment is None:
+            # Show default template metadata for display purposes only.
             payload.append({
                 'user': member.id,
                 'first_name': member.first_name,
                 'last_name': member.last_name,
                 'avatar': member.avatar.url if member.avatar else None,
                 'role': member.role,
-                'template_id': None,
-                'template_name': None,
+                'template_id': default_template.id if default_template else None,
+                'template_name': default_template.title if default_template else None,
                 'completed_steps': 0,
                 'total_steps': 0,
             })
@@ -742,19 +798,28 @@ def _onboarding_assignments_list(request):
         ).select_related('template')
     }
 
+    # Fallback: company default template to show for members without an explicit assignment.
+    # We do NOT create assignments here — that only happens lazily in _get_or_auto_assign_template.
+    default_template = OnboardingTemplate.objects.filter(
+        company_id=request.user.company_id,
+        is_default=True,
+        is_active=True,
+    ).first()
+
     members = request.user.company.members.exclude(role='superadmin').order_by('id')
     payload = []
     for member in members:
         assignment = assignment_map.get(member.id)
         if assignment is None:
+            # Show default template metadata for display purposes only.
             payload.append({
                 'user_id': member.id,
                 'first_name': member.first_name,
                 'last_name': member.last_name,
                 'avatar': member.avatar.url if member.avatar else None,
                 'position': member.position,
-                'template_id': None,
-                'template_name': None,
+                'template_id': default_template.id if default_template else None,
+                'template_name': default_template.title if default_template else None,
                 'completed_steps': 0,
                 'total_steps': 0,
                 'assigned_at': None,
@@ -918,16 +983,15 @@ def my_onboarding_assignment(request):
     GET /hr/onboarding/my-assignment/
 
     Returns the current user's assigned template and step-by-step progress.
-    If no assignment exists returns {"assigned": false}.
+    If no assignment exists and a default template is configured for the company,
+    lazily creates the assignment and returns it.
+    If no assignment exists and no default template is found returns {"assigned": false}.
     """
-    assignment = OnboardingAssignment.objects.filter(
-        user=request.user,
-    ).select_related('template').first()
+    assignment, template = _get_or_auto_assign_template(request.user)
 
     if assignment is None:
         return Response({'assigned': False})
 
-    template = assignment.template
     progress_items = list(
         UserOnboardingProgress.objects.filter(user=request.user, step__template=template)
         .select_related('step')

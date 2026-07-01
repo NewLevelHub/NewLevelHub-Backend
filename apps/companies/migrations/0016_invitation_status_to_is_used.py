@@ -12,16 +12,19 @@ class Migration(migrations.Migration):
         # so we use IF NOT EXISTS / IF EXISTS guards).
         migrations.RunSQL(
             sql="""
-                ALTER TABLE invitations
-                    ADD COLUMN IF NOT EXISTS is_used BOOLEAN NOT NULL DEFAULT FALSE;
-                UPDATE invitations SET is_used = TRUE WHERE status = 'accepted';
-                ALTER TABLE invitations DROP COLUMN IF EXISTS status;
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'invitations' AND column_name = 'status'
+                    ) THEN
+                        ALTER TABLE invitations
+                            ADD COLUMN IF NOT EXISTS is_used BOOLEAN NOT NULL DEFAULT FALSE;
+                        UPDATE invitations SET is_used = TRUE WHERE status = 'accepted';
+                        ALTER TABLE invitations DROP COLUMN IF EXISTS status;
+                    END IF;
+                END $$;
             """,
-            reverse_sql="""
-                ALTER TABLE invitations
-                    ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'pending';
-                UPDATE invitations SET status = 'accepted' WHERE is_used = TRUE;
-                ALTER TABLE invitations DROP COLUMN IF EXISTS is_used;
-            """,
+            reverse_sql=migrations.RunSQL.noop,
         ),
     ]

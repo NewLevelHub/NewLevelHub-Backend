@@ -154,7 +154,7 @@ class TestCompanyAnalyticsAC:
         self, api_client, company_admin, employee_a, employee_b, company_resource, company,
     ):
         _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=0)
-        _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=1)
+        _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=-5)
         _create_booking(company=company, resource=company_resource, user=employee_b, start_shift_days=-35)
 
         board = Board.objects.create(company=company, name='Main board', created_by=company_admin)

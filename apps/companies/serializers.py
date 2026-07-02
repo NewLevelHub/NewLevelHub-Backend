@@ -9,6 +9,9 @@ from apps.notifications.utils import create_notification
 from apps.core.exceptions import raise_validation_error
 from apps.core.i18n import get_lang, translate
 from apps.services.models import Floor
+from apps.bookings.models import Booking
+from apps.crm.models import Task
+from apps.access.models import GuestPass
 
 from .invite_policy import email_blocks_new_company_invitation
 from .limits import notify_company_admins_limit_thresholds
@@ -137,10 +140,11 @@ class CompanySerializer(serializers.ModelSerializer):
 
 
 class CompanyDetailSerializer(serializers.ModelSerializer):
-    """Detail serializer — includes employee_count, storage_used (bytes), and onboarding_completed."""
+    """Detail serializer — includes employee_count, storage_used (bytes), onboarding_completed, and quick_stats."""
     employee_count = serializers.SerializerMethodField()
     storage_used = serializers.SerializerMethodField()
     onboarding_completed = serializers.SerializerMethodField()
+    quick_stats = serializers.SerializerMethodField()
     company_admin = serializers.SerializerMethodField()
     floor_id = serializers.IntegerField(source='floor_fk_id', read_only=True, allow_null=True)
     floor_number = serializers.IntegerField(source='floor_fk.number', read_only=True, allow_null=True)
@@ -163,7 +167,7 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             'company_admin', 'categories',
             'plan', 'max_employees', 'storage_limit_gb', 'max_boards',
             'is_active', 'working_hours_start', 'working_hours_end',
-            'employee_count', 'storage_used', 'onboarding_completed',
+            'employee_count', 'storage_used', 'onboarding_completed', 'quick_stats',
             'created_at', 'updated_at',
             'floor_id', 'floor_number', 'floor_name',
         ]
@@ -182,6 +186,24 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
             return obj.settings.onboarding_completed
         except CompanySettings.DoesNotExist:
             return False
+
+    def get_quick_stats(self, obj):
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return {
+            'bookings_this_month': Booking.objects.filter(
+                company=obj, start_time__gte=month_start
+            ).count(),
+            'active_tasks': Task.objects.filter(
+                column__board__company=obj,
+                column__board__is_archived=False,
+                is_deleted=False,
+                is_archived=False,
+            ).count(),
+            'guests_this_month': GuestPass.objects.filter(
+                company=obj, created_at__gte=month_start
+            ).count(),
+        }
 
 
 class CompanyCreateSerializer(serializers.ModelSerializer):

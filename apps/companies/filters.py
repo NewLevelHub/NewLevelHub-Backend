@@ -18,9 +18,9 @@ class CompanyFilter(django_filters.FilterSet):
 
 
 class InvitationFilter(django_filters.FilterSet):
-    is_used = django_filters.BooleanFilter(method='filter_is_used')
     is_expired = django_filters.BooleanFilter(method='filter_is_expired')
     status = django_filters.ChoiceFilter(choices=Invitation.STATUS_CHOICES)
+    is_used = django_filters.BooleanFilter(method='filter_is_used')
 
     class Meta:
         model = Invitation

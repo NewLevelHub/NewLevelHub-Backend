@@ -1234,8 +1234,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
         return context
 
     def perform_create(self, serializer):
-        invitation = serializer.save()
-        send_invitation_email.delay(invitation.id)
+        serializer.save()
 
     def create(self, request, *args, **kwargs):
         company = self.get_serializer_context()['company']
@@ -1282,7 +1281,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():
@@ -1382,7 +1381,6 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         invitation = serializer.save()
-        send_invitation_email.delay(invitation.id)
         return Response(
             InvitationListSerializer(invitation).data,
             status=status.HTTP_201_CREATED,
@@ -1423,7 +1421,7 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():

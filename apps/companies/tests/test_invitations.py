@@ -375,7 +375,7 @@ class TestInvitationListAndActions:
 
         new_invitation = Invitation.objects.exclude(id=invitation.id).get(email='resend@example.com')
         assert new_invitation.company_id == company.id
-        assert new_invitation.is_used is False
+        assert new_invitation.status == 'pending'
         assert str(new_invitation.token) != str(invitation.token)
         mock_delay.assert_called_once_with(new_invitation.id)
 

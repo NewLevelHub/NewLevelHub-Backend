@@ -16,6 +16,13 @@ def backfill_invitation_status(apps, schema_editor):
     Invitation = apps.get_model('companies', 'Invitation')
     now = timezone.now()
 
+    # Only run if is_used column exists (legacy databases)
+    from django.db import connection
+    with connection.cursor() as cursor:
+        cols = [c.name for c in connection.introspection.get_table_description(cursor, 'invitations')]
+    if 'is_used' not in cols:
+        return
+
     # Mark accepted (previously consumed invitations)
     Invitation.objects.filter(is_used=True).update(status='accepted')
 

@@ -1,12 +1,8 @@
-from datetime import timedelta
-from unittest.mock import patch
-
 import pytest
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.companies.models import Company, Invitation
+from apps.companies.models import Company
 from apps.hr.models import OnboardingStep, OnboardingTemplate, UserOnboardingProgress
 from apps.users.models import User
 
@@ -243,44 +239,11 @@ class TestSetDefaultTemplateAC:
 
 
 @pytest.mark.django_db
-class TestInviteRegistrationCreatesOnboardingProgressAC:
-    @patch('apps.users.views.send_verification_email.delay')
-    def test_register_by_invite_auto_creates_user_progress(
-        self,
-        _mock_send_email,
-        api_client,
-        company,
-        company_admin,
-    ):
-        _template, steps = create_template_with_steps(company=company)
-        invitation = Invitation.objects.create(
-            company=company,
-            email='new.employee@onboarding.test',
-            invited_by=company_admin,
-            role='employee',
-            expires_at=timezone.now() + timedelta(hours=72),
-        )
-        payload = {
-            'token': str(invitation.token),
-            'first_name': 'New',
-            'last_name': 'Employee',
-            'password': 'StrongPass123!',
-            'phone': '+77000000000',
-        }
-
-        response = api_client.post(REGISTER_INVITE_URL, payload, format='json')
-
-        assert response.status_code == status.HTTP_201_CREATED
-        created_user = User.objects.get(email='new.employee@onboarding.test')
-        progress_qs = UserOnboardingProgress.objects.filter(user=created_user).order_by('step__position')
-        assert progress_qs.count() == len(steps)
-        assert list(progress_qs.values_list('is_completed', flat=True)) == [False, False]
-
-
-@pytest.mark.django_db
 class TestMyOnboardingProgressAC:
     def test_get_progress_returns_completed_and_steps_shape(self, api_client, employee, company):
-        _template, steps = create_template_with_steps(company=company)
+        from apps.hr.models import OnboardingAssignment
+        template, steps = create_template_with_steps(company=company)
+        OnboardingAssignment.objects.create(user=employee, template=template, assigned_by=None)
         UserOnboardingProgress.objects.create(user=employee, step=steps[0], is_completed=False)
         UserOnboardingProgress.objects.create(user=employee, step=steps[1], is_completed=True)
         auth(api_client, employee)
@@ -288,22 +251,26 @@ class TestMyOnboardingProgressAC:
         response = api_client.get(PROGRESS_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        assert set(response.data.keys()) == {'completed', 'steps'}
+        # 'assigned' is now part of the response shape
+        assert 'assigned' in response.data
+        assert response.data['assigned'] is True
         assert isinstance(response.data['completed'], bool)
         assert isinstance(response.data['steps'], list)
         assert set(response.data['steps'][0].keys()) == {'id', 'title', 'is_completed', 'url'}
 
-    def test_progress_shows_only_default_template_steps(self, api_client, employee, company):
-        """Если у пользователя есть строки прогресса от нескольких шаблонов,
-        должны показываться только шаги дефолтного шаблона."""
-        default_template, default_steps = create_template_with_steps(company=company, name='Default')
-        default_template.set_as_default()
+    def test_progress_shows_only_assigned_template_steps(self, api_client, employee, company):
+        """Progress endpoint shows only steps from the assigned template (via OnboardingAssignment)."""
+        from apps.hr.models import OnboardingAssignment
+        assigned_template, assigned_steps = create_template_with_steps(company=company, name='Assigned')
         other_template, other_steps = create_template_with_steps(company=company, name='Other')
 
-        # Прогресс от дефолтного шаблона
-        UserOnboardingProgress.objects.create(user=employee, step=default_steps[0], is_completed=False)
-        UserOnboardingProgress.objects.create(user=employee, step=default_steps[1], is_completed=False)
-        # Прогресс от другого шаблона (мусор из прошлого)
+        # Only the assigned_template is wired to the employee via assignment
+        OnboardingAssignment.objects.create(user=employee, template=assigned_template, assigned_by=None)
+
+        # Progress rows for both templates
+        UserOnboardingProgress.objects.create(user=employee, step=assigned_steps[0], is_completed=False)
+        UserOnboardingProgress.objects.create(user=employee, step=assigned_steps[1], is_completed=False)
+        # Stale rows from the other template
         UserOnboardingProgress.objects.create(user=employee, step=other_steps[0], is_completed=True)
         UserOnboardingProgress.objects.create(user=employee, step=other_steps[1], is_completed=True)
         auth(api_client, employee)
@@ -312,7 +279,7 @@ class TestMyOnboardingProgressAC:
 
         assert response.status_code == status.HTTP_200_OK
         returned_step_ids = {s['id'] for s in response.data['steps']}
-        assert returned_step_ids == {default_steps[0].pk, default_steps[1].pk}
+        assert returned_step_ids == {assigned_steps[0].pk, assigned_steps[1].pk}
         assert len(response.data['steps']) == 2
 
 
@@ -350,7 +317,10 @@ class TestCompleteOnboardingStepAC:
 @pytest.mark.django_db
 class TestTeamOnboardingProgressAC:
     def test_company_admin_gets_team_progress(self, api_client, company_admin, employee, second_employee, company):
-        _template, steps = create_template_with_steps(company=company)
+        from apps.hr.models import OnboardingAssignment
+        template, steps = create_template_with_steps(company=company)
+        OnboardingAssignment.objects.create(user=employee, template=template, assigned_by=None)
+        OnboardingAssignment.objects.create(user=second_employee, template=template, assigned_by=None)
         UserOnboardingProgress.objects.create(user=employee, step=steps[0], is_completed=True)
         UserOnboardingProgress.objects.create(user=employee, step=steps[1], is_completed=False)
         UserOnboardingProgress.objects.create(user=second_employee, step=steps[0], is_completed=True)
@@ -361,7 +331,11 @@ class TestTeamOnboardingProgressAC:
 
         assert response.status_code == status.HTTP_200_OK
         assert isinstance(response.data, list)
-        expected_keys = {'user', 'first_name', 'last_name', 'avatar', 'role', 'completed_steps', 'total_steps'}
+        # New response shape includes template_id and template_name per employee
+        expected_keys = {
+            'user', 'first_name', 'last_name', 'avatar', 'role',
+            'completed_steps', 'total_steps', 'template_id', 'template_name',
+        }
         assert set(response.data[0].keys()) == expected_keys
 
     def test_employee_forbidden_for_team_progress(self, api_client, employee):

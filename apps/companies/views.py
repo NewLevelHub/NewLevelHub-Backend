@@ -1281,7 +1281,7 @@ class InvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():
@@ -1421,7 +1421,7 @@ class BuildingInvitationViewSet(viewsets.ModelViewSet):
     def resend(self, request, *args, **kwargs):
         lang = get_lang(request)
         old_invitation = self.get_object()
-        if old_invitation.is_used:
+        if old_invitation.status != Invitation.STATUS_PENDING:
             raise_validation_error('detail', 'company.invite_cannot_resend')
 
         with transaction.atomic():

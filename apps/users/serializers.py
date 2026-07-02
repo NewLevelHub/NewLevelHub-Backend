@@ -17,7 +17,6 @@ from apps.core.error_codes import EMAIL_NOT_VERIFIED
 from apps.core.exceptions import LocalizedError, raise_validation_error
 from apps.core.i18n import get_lang, translate
 from apps.crm.models import Task
-from apps.hr.tasks import initialize_user_onboarding_progress
 from apps.users.tasks import notify_new_employee
 from .models import User
 
@@ -104,12 +103,43 @@ class CompanyBriefSerializer(serializers.Serializer):
 
     def get_onboarding_completed(self, obj):
         from apps.companies.models import CompanySettings
+        from apps.hr.models import OnboardingAssignment, OnboardingTemplate, UserOnboardingProgress
+
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        # For unauthenticated context, company_admin, or superadmin: return the company setup-wizard flag.
+        if user is None or not getattr(user, 'is_authenticated', False) \
+                or getattr(user, 'role', None) in ('superadmin', 'company_admin'):
+            try:
+                return CompanySettings.objects.values_list(
+                    'onboarding_completed', flat=True
+                ).get(company_id=obj.pk)
+            except CompanySettings.DoesNotExist:
+                return False
+
+        # For employee and guest: return whether the current user finished their HR onboarding.
         try:
-            return CompanySettings.objects.values_list(
-                'onboarding_completed', flat=True
-            ).get(company_id=obj.pk)
-        except CompanySettings.DoesNotExist:
-            return False
+            assignment = OnboardingAssignment.objects.get(user=user)
+        except OnboardingAssignment.DoesNotExist:
+            # No assignment — check whether a default template exists in this company.
+            has_default = OnboardingTemplate.objects.filter(
+                company_id=obj.pk,
+                is_default=True,
+                is_active=True,
+            ).exists()
+            # If there is no default template there is nothing to complete → True.
+            # If a default template exists but the user has no assignment yet → not completed → False.
+            return not has_default
+
+        # Assignment exists: all steps must be completed (zero steps also counts as done).
+        total = UserOnboardingProgress.objects.filter(user=user, step__template=assignment.template).count()
+        if total == 0:
+            return True
+        completed = UserOnboardingProgress.objects.filter(
+            user=user, step__template=assignment.template, is_completed=True,
+        ).count()
+        return completed == total
 
 
 # ── Auth ──────────────────────────────────────────────────────────────
@@ -130,6 +160,48 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data.setdefault('is_email_verified', False)
         return User.objects.create_user(**validated_data)
+
+
+def _setup_onboarding_for_invite_user(user, invitation):
+    """
+    When a user joins via invite, find the company's onboarding template and
+    create an OnboardingAssignment with progress rows.
+
+    Priority: default + active template → any active template → nothing.
+    If the company has no active templates at all, skip silently.
+    """
+    from apps.hr.models import OnboardingTemplate, OnboardingAssignment
+    from apps.hr.views import initialize_progress_for_assignment
+
+    if not invitation.company_id:
+        return
+
+    # Prefer the default template; fall back to any active template.
+    template = (
+        OnboardingTemplate.objects.filter(
+            company_id=invitation.company_id,
+            is_default=True,
+            is_active=True,
+        ).first()
+        or OnboardingTemplate.objects.filter(
+            company_id=invitation.company_id,
+            is_active=True,
+        ).order_by('id').first()
+    )
+
+    if template is None:
+        # Company has no active templates at all — nothing to onboard.
+        return
+
+    assignment, _ = OnboardingAssignment.objects.update_or_create(
+        user=user,
+        defaults={
+            'template': template,
+            'assigned_by': None,
+            'note': '',
+        },
+    )
+    initialize_progress_for_assignment(assignment)
 
 
 class InviteRegistrationSerializer(serializers.ModelSerializer):
@@ -232,7 +304,7 @@ class InviteRegistrationSerializer(serializers.ModelSerializer):
                         {'email': [{'_i18n': True, 'key': 'users.email_already_registered', 'params': {}}]},
                     ) from exc
 
-            initialize_user_onboarding_progress(user)
+            _setup_onboarding_for_invite_user(user, invitation)
             transaction.on_commit(lambda: notify_new_employee.delay(user.pk))
 
             invitation.status = Invitation.STATUS_ACCEPTED

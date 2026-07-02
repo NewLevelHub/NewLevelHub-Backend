@@ -159,7 +159,7 @@ class Invitation(TimeStampedModel):
 
     @property
     def is_used(self):
-        # Backward-compat: 'used' means accepted by the invitee or revoked by admin.
+        # Backward-compat property: True for any non-pending/non-expired status.
         return self.status in (self.STATUS_ACCEPTED, self.STATUS_REVOKED)
 
     @is_used.setter

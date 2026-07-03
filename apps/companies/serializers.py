@@ -1,5 +1,4 @@
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import PermissionDenied
@@ -173,9 +172,8 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
         return obj.employee_count
 
     def get_storage_used(self, obj):
-        """Return total file_size (bytes) used by this company's files."""
-        result = obj.files.aggregate(total=Sum('file_size'))
-        return result['total'] or 0
+        from apps.companies.limits import get_company_storage_used_bytes
+        return get_company_storage_used_bytes(obj)
 
     def get_onboarding_completed(self, obj):
         try:

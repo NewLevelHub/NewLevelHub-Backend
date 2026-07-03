@@ -33,7 +33,6 @@ from apps.bookings.models import Booking, Resource
 from apps.access.models import GuestPass, AccessLog
 from apps.services.models import ServiceRequest
 from apps.crm.models import Task
-from apps.storage.models import File
 from apps.hr.models import LeaveRequest
 
 from .serializers import (
@@ -369,17 +368,31 @@ def build_superadmin_dashboard_payload(request):
     }
 
 
-def build_company_analytics_data(user):
-    """Same figures as JSON GET /analytics/company/ (DEV-117). Caller must ensure user.company is set."""
+def build_company_analytics_data(user, date_from=None, date_to=None):
+    """Same figures as JSON GET /analytics/company/ (DEV-117). Caller must ensure user.company is set.
+
+    Args:
+        user: the requesting user (must have user.company set).
+        date_from: optional datetime.date — start of the reporting period (inclusive).
+        date_to: optional datetime.date — end of the reporting period (inclusive).
+        When both are None the period defaults to the last 30 days (consistent with
+        _resolve_period_metadata's default of '30d').
+    """
     company = user.company
     now = timezone.now()
     week_ago = now - timedelta(days=7)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    if date_from is not None and date_to is not None:
+        period_start, _ = _local_day_bounds(date_from)
+        _, period_end = _local_day_bounds(date_to)
+    else:
+        period_start = now - timedelta(days=30)
+        period_end = now
 
     employees_qs = company.members.filter(is_active=True).exclude(role='superadmin')
-    last_30_days = now - timedelta(days=30)
 
-    storage_used = File.objects.filter(company=company).aggregate(total=Sum('file_size'))['total'] or 0
+    from apps.companies.limits import get_company_storage_used_bytes
+    storage_used = get_company_storage_used_bytes(company)
     storage_limit_bytes = int(company.storage_limit_gb * 1024 * 1024 * 1024)
 
     tasks_qs = Task.objects.filter(
@@ -387,6 +400,8 @@ def build_company_analytics_data(user):
         column__board__is_archived=False,
         is_deleted=False,
         is_archived=False,
+        created_at__gte=period_start,
+        created_at__lte=period_end,
     )
     column_agg = list(
         tasks_qs.values(
@@ -404,34 +419,28 @@ def build_company_analytics_data(user):
             r['column_id'] or 0,
         ),
     )
-    buckets = {'todo': 0, 'in_progress': 0, 'done': 0, 'other': 0}
-    by_column = []
-    for row in column_agg:
-        cnt = row['count']
-        name = row['column__name'] or ''
-        status_key = _normalize_column_status(name)
-        if status_key:
-            buckets[status_key] += cnt
-        else:
-            buckets['other'] += cnt
-        by_column.append(
-            {
-                'column_id': row['column_id'],
-                'name': name,
-                'board_name': row['column__board__name'] or '',
-                'count': cnt,
-            },
-        )
-    active_crm_tasks = {'total': tasks_qs.count(), **buckets, 'by_column': by_column}
+    by_column = [
+        {
+            'column_id': row['column_id'],
+            'name': row['column__name'] or '',
+            'board_name': row['column__board__name'] or '',
+            'count': row['count'],
+        }
+        for row in column_agg
+    ]
+    active_crm_tasks = {'total': tasks_qs.count(), 'by_column': by_column}
 
     employee_ids = list(employees_qs.values_list('id', flat=True))
-    bookings_30d = {
+    bookings_period = {
         item['user_id']: item['count']
         for item in Booking.objects.filter(
-            company=company, start_time__gte=last_30_days, user_id__in=employee_ids,
+            company=company,
+            start_time__gte=period_start,
+            start_time__lte=period_end,
+            user_id__in=employee_ids,
         ).values('user_id').annotate(count=Count('id'))
     }
-    active_tasks_30d = {}
+    active_tasks_period = {}
     for row in tasks_qs.filter(assignee_id__in=employee_ids).values('assignee_id', 'column__name'):
         status_key = _normalize_column_status(row['column__name'])
         if status_key == 'done':
@@ -439,13 +448,12 @@ def build_company_analytics_data(user):
         assignee_id = row['assignee_id']
         if assignee_id is None:
             continue
-        active_tasks_30d[assignee_id] = active_tasks_30d.get(assignee_id, 0) + 1
+        active_tasks_period[assignee_id] = active_tasks_period.get(assignee_id, 0) + 1
     employee_activity = [
         {
-            'user_id': employee.id,
-            'full_name': employee.full_name,
-            'booking_count_30d': bookings_30d.get(employee.id, 0),
-            'task_count_active': active_tasks_30d.get(employee.id, 0),
+            'user': employee,
+            'booking_count_30d': bookings_period.get(employee.id, 0),
+            'task_count_active': active_tasks_period.get(employee.id, 0),
             'last_login': employee.last_login,
         }
         for employee in employees_qs.order_by('id')
@@ -481,13 +489,22 @@ def build_company_analytics_data(user):
     return {
         'total_employees': employees_qs.count(),
         'active_7d': employees_qs.filter(last_login__gte=week_ago).count(),
-        'bookings_month': Booking.objects.filter(company=company, start_time__gte=month_start).count(),
+        'bookings_month': Booking.objects.filter(
+            company=company,
+            start_time__gte=period_start,
+            start_time__lte=period_end,
+        ).count(),
         'storage': {
             'used': storage_used,
             'limit': storage_limit_bytes,
         },
         'active_crm_tasks': active_crm_tasks,
-        'guest_visits_month': GuestPass.objects.filter(company=company, created_at__gte=month_start).count(),
+        'guest_visits_month': AccessLog.objects.filter(
+            is_entry=True,
+            guest_pass__company=company,
+            created_at__gte=period_start,
+            created_at__lte=period_end,
+        ).count(),
         'employee_activity': employee_activity,
         'pending_approvals': {
             'leaves': pending_leaves,
@@ -679,10 +696,6 @@ def _build_company_pdf(data, lang='ru'):
         _pdf_cell(t('analytics.csv.bookings_month'), header=True),
         _pdf_cell('Storage (GB)', header=True),
         _pdf_cell(t('analytics.csv.crm_total'), header=True),
-        _pdf_cell(t('analytics.csv.crm_todo'), header=True),
-        _pdf_cell(t('analytics.csv.crm_in_progress'), header=True),
-        _pdf_cell(t('analytics.csv.crm_done'), header=True),
-        _pdf_cell(t('analytics.csv.crm_other'), header=True),
         _pdf_cell(t('analytics.csv.guest_visits_month'), header=True),
     ]
     summary_values = [
@@ -691,10 +704,6 @@ def _build_company_pdf(data, lang='ru'):
         _pdf_cell(data['bookings_month']),
         _pdf_cell(f'{storage_used_gb} / {storage_limit_gb}'),
         _pdf_cell(act['total']),
-        _pdf_cell(act['todo']),
-        _pdf_cell(act['in_progress']),
-        _pdf_cell(act['done']),
-        _pdf_cell(act['other']),
         _pdf_cell(data['guest_visits_month']),
     ]
 
@@ -723,7 +732,7 @@ def _build_company_pdf(data, lang='ru'):
     for emp in data['employee_activity']:
         last_login = emp['last_login'].strftime('%Y-%m-%d %H:%M') if emp['last_login'] else '—'
         emp_rows.append([
-            _pdf_cell(emp['full_name']),
+            _pdf_cell(emp['user'].full_name),
             _pdf_cell(emp['booking_count_30d']),
             _pdf_cell(emp['task_count_active']),
             _pdf_cell(last_login),
@@ -788,10 +797,6 @@ def _rows_company_csv(data, lang='ru'):
         t('analytics.csv.storage_used'),
         t('analytics.csv.storage_limit'),
         t('analytics.csv.crm_total'),
-        t('analytics.csv.crm_todo'),
-        t('analytics.csv.crm_in_progress'),
-        t('analytics.csv.crm_done'),
-        t('analytics.csv.crm_other'),
         t('analytics.csv.guest_visits_month'),
     ]
     summary_row = [
@@ -801,10 +806,6 @@ def _rows_company_csv(data, lang='ru'):
         data['storage']['used'],
         data['storage']['limit'],
         act['total'],
-        act['todo'],
-        act['in_progress'],
-        act['done'],
-        act['other'],
         data['guest_visits_month'],
     ]
     rows = [summary_header, summary_row, []]
@@ -817,7 +818,7 @@ def _rows_company_csv(data, lang='ru'):
     for emp in data['employee_activity']:
         last_login = emp['last_login'].isoformat() if emp['last_login'] else ''
         rows.append([
-            emp['full_name'],
+            emp['user'].full_name,
             emp['booking_count_30d'],
             emp['task_count_active'],
             last_login,
@@ -880,9 +881,30 @@ def superadmin_dashboard(request):
 @extend_schema(
     tags=['Analytics'],
     summary='Company admin dashboard',
+    parameters=[
+        OpenApiParameter(
+            name='period',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Период: 7d, 30d, 90d или custom. По умолчанию: последние 30 дней.',
+            enum=['7d', '30d', '90d', 'custom'],
+        ),
+        OpenApiParameter(
+            name='date_from',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Начало периода (YYYY-MM-DD). Обязательно при period=custom.',
+        ),
+        OpenApiParameter(
+            name='date_to',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Конец периода (YYYY-MM-DD). Обязательно при period=custom.',
+        ),
+    ],
     responses={
         200: CompanyAnalyticsSerializer,
-        400: OpenApiResponse(description='No company assigned'),
+        400: OpenApiResponse(description='No company assigned or invalid period params'),
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Company admin only'),
     },
@@ -895,7 +917,8 @@ def company_dashboard(request):
     if not company:
         return Response({'detail': 'No company'}, status=400)
 
-    data = build_company_analytics_data(user)
+    period, date_from, date_to = _resolve_period_metadata(request.query_params)
+    data = build_company_analytics_data(user, date_from=date_from, date_to=date_to)
     return Response(CompanyAnalyticsSerializer(data).data)
 
 
@@ -979,10 +1002,29 @@ class SuperadminExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
             enum=['csv', 'pdf'],
             required=True,
         ),
+        OpenApiParameter(
+            name='period',
+            type=str,
+            location=OpenApiParameter.QUERY,
+            description='Период: 7d, 30d, 90d или custom. По умолчанию: последние 30 дней.',
+            enum=['7d', '30d', '90d', 'custom'],
+        ),
+        OpenApiParameter(
+            name='date_from',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Начало периода (YYYY-MM-DD). Обязательно при period=custom.',
+        ),
+        OpenApiParameter(
+            name='date_to',
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+            description='Конец периода (YYYY-MM-DD). Обязательно при period=custom.',
+        ),
     ],
     responses={
         200: OpenApiResponse(description='CSV (UTF-8 with BOM) or PDF, Content-Disposition: attachment'),
-        400: OpenApiResponse(description='No company assigned or invalid format'),
+        400: OpenApiResponse(description='No company assigned or invalid format/period params'),
         401: OpenApiResponse(description='Not authenticated'),
         403: OpenApiResponse(description='Company admin only'),
     },
@@ -997,9 +1039,10 @@ class CompanyExportView(_IgnoreDrfFormatQueryParamMixin, APIView):
         user = request.user
         if not user.company:
             return Response({'detail': 'No company'}, status=400)
-        data = build_company_analytics_data(user)
+        period, date_from, date_to = _resolve_period_metadata(request.query_params)
+        data = build_company_analytics_data(user, date_from=date_from, date_to=date_to)
         safe_slug = ''.join(c if c.isalnum() else '-' for c in user.company.name.lower()) or 'company'
-        stem = f'analytics-company-{safe_slug}'
+        stem = f'analytics-company-{safe_slug}-{period}'
         if fmt == 'pdf':
             pdf_bytes = _build_company_pdf(data, get_lang(request))
             return _http_pdf_attachment(stem, pdf_bytes)

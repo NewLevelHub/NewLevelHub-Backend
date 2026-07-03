@@ -225,7 +225,6 @@ class TestAnalyticsExportVsDashboardConsistency:
         assert int(summary['Bookings This Month']) == dj['bookings_month']
         assert int(summary['Guest Visits This Month']) == dj['guest_visits_month']
         assert int(summary['CRM Total']) == dj['active_crm_tasks']['total']
-        assert int(summary['CRM: Other']) == dj['active_crm_tasks']['other']
 
 
 def _assert_pdf_attachment_response(response):

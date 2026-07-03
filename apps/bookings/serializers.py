@@ -22,7 +22,7 @@ from apps.core.i18n import get_lang, translate
 from apps.notifications.utils import create_notification
 from .models import (
     Resource, ResourcePhoto, Booking, BookingParticipant,
-    RecurringBooking, ResourceBlock, BookingCancellationAudit,
+    RecurringBooking, ResourceBlock,
 )
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
@@ -168,6 +168,11 @@ class ResourceSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'floor_number', 'floor_name', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
+        # Defensively coerce available_days to a list before the ListField iterates it.
+        # Some legacy DB rows have an int stored in this JSONField; iterating an int raises
+        # TypeError. We patch only the in-memory instance — no DB write occurs.
+        if not isinstance(instance.available_days, list):
+            instance.available_days = []
         data = super().to_representation(instance)
         if instance.resource_type == 'meeting_room':
             data['equipment'] = equipment_from_resource(instance)
@@ -351,6 +356,14 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'reason',
             'available_at',
         ]
+
+    def to_representation(self, instance):
+        # Defensively coerce available_days to a list before the ListField iterates it.
+        # Some legacy DB rows have an int stored in this JSONField; iterating an int raises
+        # TypeError. We patch only the in-memory instance — no DB write occurs.
+        if not isinstance(instance.available_days, list):
+            instance.available_days = []
+        return super().to_representation(instance)
 
     def get_parking_type(self, obj):
         if obj.resource_type != 'parking':
@@ -1048,13 +1061,3 @@ class BulkCancelSerializer(serializers.Serializer):
         max_length=50,
     )
     reason = serializers.CharField(required=False, allow_blank=True, default='')
-
-
-class BookingCancellationAuditSerializer(serializers.ModelSerializer):
-    booking_id = serializers.IntegerField(read_only=True)
-    cancelled_by = UserBriefSerializer(read_only=True)
-
-    class Meta:
-        model = BookingCancellationAudit
-        fields = ['id', 'booking_id', 'cancelled_by', 'cancel_reason', 'cancelled_at']
-        read_only_fields = fields

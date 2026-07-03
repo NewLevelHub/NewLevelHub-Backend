@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from apps.users.serializers import UserBriefSerializer
+
 
 class SuperAdminOverviewSerializer(serializers.Serializer):
     total_companies = serializers.IntegerField()
@@ -96,16 +98,11 @@ class CrmColumnTaskCountSerializer(serializers.Serializer):
 
 class ActiveCrmTasksSerializer(serializers.Serializer):
     total = serializers.IntegerField()
-    todo = serializers.IntegerField()
-    in_progress = serializers.IntegerField()
-    done = serializers.IntegerField()
-    other = serializers.IntegerField()
     by_column = CrmColumnTaskCountSerializer(many=True)
 
 
 class EmployeeActivitySerializer(serializers.Serializer):
-    user_id = serializers.IntegerField()
-    full_name = serializers.CharField()
+    user = UserBriefSerializer()
     booking_count_30d = serializers.IntegerField()
     task_count_active = serializers.IntegerField()
     last_login = serializers.DateTimeField(allow_null=True)

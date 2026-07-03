@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.access.models import GuestPass
+from apps.access.models import AccessLog, GuestPass
 from apps.bookings.models import Booking, Resource
 from apps.companies.models import Company
 from apps.crm.models import Board, Column, Task
@@ -135,7 +135,11 @@ def _create_guest_pass(*, creator, company, created_days_ago):
         valid_until=now + timedelta(days=1),
         status='active',
     )
-    GuestPass.objects.filter(pk=gp.pk).update(created_at=now - timedelta(days=created_days_ago))
+    visit_time = now - timedelta(days=created_days_ago)
+    GuestPass.objects.filter(pk=gp.pk).update(created_at=visit_time)
+    log = AccessLog.objects.create(guest_pass=gp, is_entry=True, method='qr')
+    AccessLog.objects.filter(pk=log.pk).update(created_at=visit_time)
+    return gp
 
 
 def _create_company_file(*, owner, company, size_bytes):
@@ -154,7 +158,7 @@ class TestCompanyAnalyticsAC:
         self, api_client, company_admin, employee_a, employee_b, company_resource, company,
     ):
         _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=0)
-        _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=1)
+        _create_booking(company=company, resource=company_resource, user=employee_a, start_shift_days=-5)
         _create_booking(company=company, resource=company_resource, user=employee_b, start_shift_days=-35)
 
         board = Board.objects.create(company=company, name='Main board', created_by=company_admin)
@@ -200,17 +204,14 @@ class TestCompanyAnalyticsAC:
         }
         act = data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == 1
-        assert act['in_progress'] == 1
-        assert act['done'] == 1
-        assert act['other'] == 0
         assert len(act['by_column']) == 3
         assert sum(c['count'] for c in act['by_column']) == 3
         assert data['guest_visits_month'] == 1
 
-        by_user_id = {row['user_id']: row for row in data['employee_activity']}
+        by_user_id = {row['user']['id']: row for row in data['employee_activity']}
         assert set(by_user_id.keys()) == {company_admin.id, employee_a.id, employee_b.id}
-        assert by_user_id[employee_a.id]['full_name'] == employee_a.full_name
+        assert by_user_id[employee_a.id]['user']['full_name'] == employee_a.full_name
+        assert by_user_id[employee_a.id]['user']['email'] == employee_a.email
         assert by_user_id[employee_a.id]['booking_count_30d'] == 2
         assert by_user_id[employee_a.id]['task_count_active'] == 2
         assert by_user_id[employee_a.id]['last_login'] is not None
@@ -264,7 +265,6 @@ class TestCompanyAnalyticsAC:
         assert response.data['guest_visits_month'] == 0
         z = response.data['active_crm_tasks']
         assert z['total'] == 0
-        assert z['todo'] == z['in_progress'] == z['done'] == z['other'] == 0
         assert z['by_column'] == []
 
     def test_crm_statuses_are_counted_for_flexible_column_names(self, api_client, company_admin, company):
@@ -287,13 +287,13 @@ class TestCompanyAnalyticsAC:
         assert response.status_code == status.HTTP_200_OK
         act = response.data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == act['in_progress'] == act['done'] == 1
-        assert act['other'] == 0
+        assert len(act['by_column']) == 3
+        assert sum(c['count'] for c in act['by_column']) == 3
 
-    def test_custom_crm_columns_are_in_total_and_other_bucket(
+    def test_custom_crm_columns_are_in_total_and_by_column(
         self, api_client, company_admin, company,
     ):
-        """Columns whose names do not match todo/in_progress/done heuristics still count in total and by_column."""
+        """Columns with any name are counted in total and appear in by_column."""
         board = Board.objects.create(company=company, name='Sprint', created_by=company_admin)
         col_review = Column.objects.create(board=board, name='Code review', position=0)
         col_todo = Column.objects.create(board=board, name='To Do', position=1)
@@ -306,9 +306,6 @@ class TestCompanyAnalyticsAC:
         assert response.status_code == status.HTTP_200_OK
         act = response.data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == 1
-        assert act['other'] == 2
-        assert act['in_progress'] == act['done'] == 0
         assert len(act['by_column']) == 2
         by_name = {c['name']: c['count'] for c in act['by_column']}
         assert by_name == {'Code review': 2, 'To Do': 1}

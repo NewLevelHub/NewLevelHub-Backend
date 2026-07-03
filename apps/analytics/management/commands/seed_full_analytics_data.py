@@ -60,11 +60,11 @@ class Command(BaseCommand):
         current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         # Last month boundaries
         if now.month == 1:
-            last_month_start = now.replace(year=now.year - 1, month=12, day=1, hour=0, minute=0, second=0, microsecond=0)
-            last_month_end = current_month_start - timedelta(seconds=1)
+            last_month_start = now.replace(
+                year=now.year - 1, month=12, day=1, hour=0, minute=0, second=0, microsecond=0,
+            )
         else:
             last_month_start = now.replace(month=now.month - 1, day=1, hour=0, minute=0, second=0, microsecond=0)
-            last_month_end = current_month_start - timedelta(seconds=1)
 
         # Fetch users
         users = list(User.objects.filter(id__in=EMPLOYEE_IDS))
@@ -111,7 +111,6 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.WARNING(f'Booking #{i+1} (current month) skipped: {e}'))
 
         # 5 bookings in last month
-        last_month_days = (last_month_end.day if hasattr(last_month_end, 'day') else 28)
         for i in range(5):
             try:
                 day_offset = i * 4  # spread across last month
@@ -156,7 +155,9 @@ class Command(BaseCommand):
                 try:
                     column = Column.objects.get(board=board, name=col_name)
                 except Column.DoesNotExist:
-                    self.stdout.write(self.style.WARNING(f'Column "{col_name}" not found in board {board.id}, skipping'))
+                    self.stdout.write(
+                        self.style.WARNING(f'Column "{col_name}" not found in board {board.id}, skipping')
+                    )
                     continue
                 except Column.MultipleObjectsReturned:
                     column = Column.objects.filter(board=board, name=col_name).first()

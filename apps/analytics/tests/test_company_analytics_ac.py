@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from apps.access.models import GuestPass
+from apps.access.models import AccessLog, GuestPass
 from apps.bookings.models import Booking, Resource
 from apps.companies.models import Company
 from apps.crm.models import Board, Column, Task
@@ -135,7 +135,11 @@ def _create_guest_pass(*, creator, company, created_days_ago):
         valid_until=now + timedelta(days=1),
         status='active',
     )
-    GuestPass.objects.filter(pk=gp.pk).update(created_at=now - timedelta(days=created_days_ago))
+    visit_time = now - timedelta(days=created_days_ago)
+    GuestPass.objects.filter(pk=gp.pk).update(created_at=visit_time)
+    log = AccessLog.objects.create(guest_pass=gp, is_entry=True, method='qr')
+    AccessLog.objects.filter(pk=log.pk).update(created_at=visit_time)
+    return gp
 
 
 def _create_company_file(*, owner, company, size_bytes):

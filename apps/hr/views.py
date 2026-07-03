@@ -6,7 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
 from django.utils import timezone
-from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiResponse
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiResponse
+from drf_spectacular.openapi import OpenApiTypes
 
 from apps.companies.models import Company, CompanySettings
 from apps.core.exceptions import LocalizedError, raise_validation_error
@@ -762,6 +763,15 @@ def onboarding_team_member_progress(request, user_id):
     tags=['HR'],
     methods=['GET'],
     summary='List all company members with their onboarding assignment',
+    parameters=[
+        OpenApiParameter(
+            name='company_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            required=False,
+            description='Superadmin only: ID компании для просмотра прогресса команды.',
+        ),
+    ],
     responses={200: OpenApiResponse(description='List of members with assignment info')},
 )
 @extend_schema(
@@ -788,25 +798,40 @@ def onboarding_assignments(request):
 
 
 def _onboarding_assignments_list(request):
-    if not request.user.company_id:
-        return Response([])
+    user = request.user
+    if user.role == 'superadmin':
+        company_id_param = request.query_params.get('company_id')
+        if not company_id_param:
+            return Response([])
+        try:
+            company_id = int(company_id_param)
+        except (TypeError, ValueError):
+            return Response([])
+        company = Company.objects.filter(pk=company_id).first()
+        if company is None:
+            return Response([])
+    else:
+        company_id = user.company_id
+        if not company_id:
+            return Response([])
+        company = user.company
 
     assignment_map = {
         a.user_id: a
         for a in OnboardingAssignment.objects.filter(
-            user__company_id=request.user.company_id,
+            user__company_id=company_id,
         ).select_related('template')
     }
 
     # Fallback: company default template to show for members without an explicit assignment.
     # We do NOT create assignments here — that only happens lazily in _get_or_auto_assign_template.
     default_template = OnboardingTemplate.objects.filter(
-        company_id=request.user.company_id,
+        company_id=company_id,
         is_default=True,
         is_active=True,
     ).first()
 
-    members = request.user.company.members.exclude(role='superadmin').order_by('id')
+    members = company.members.exclude(role='superadmin').order_by('id')
     payload = []
     for member in members:
         assignment = assignment_map.get(member.id)

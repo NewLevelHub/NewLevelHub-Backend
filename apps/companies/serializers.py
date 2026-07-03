@@ -11,7 +11,7 @@ from apps.core.i18n import get_lang, translate
 from apps.services.models import Floor
 from apps.bookings.models import Booking
 from apps.crm.models import Task
-from apps.access.models import GuestPass
+from apps.access.models import AccessLog
 
 from .invite_policy import email_blocks_new_company_invitation
 from .limits import notify_company_admins_limit_thresholds
@@ -200,8 +200,10 @@ class CompanyDetailSerializer(serializers.ModelSerializer):
                 is_deleted=False,
                 is_archived=False,
             ).count(),
-            'guests_this_month': GuestPass.objects.filter(
-                company=obj, created_at__gte=month_start
+            'guests_this_month': AccessLog.objects.filter(
+                is_entry=True,
+                guest_pass__company=obj,
+                created_at__gte=month_start,
             ).count(),
         }
 

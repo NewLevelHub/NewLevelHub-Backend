@@ -712,7 +712,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
                         status='confirmed',
                         start_time__lte=catalog_now,
                         end_time__gt=catalog_now,
-                    ).order_by('end_time'),
+                    ).only('id', 'resource_id', 'end_time').order_by('end_time'),
                     to_attr='_active_bookings_prefetch',
                 ),
                 Prefetch(
@@ -720,7 +720,7 @@ class ResourceViewSet(viewsets.ModelViewSet):
                     queryset=ResourceBlock.objects.filter(
                         start_time__lte=catalog_now,
                         end_time__gt=catalog_now,
-                    ).order_by('end_time'),
+                    ).only('id', 'resource_id', 'end_time', 'reason').order_by('end_time'),
                     to_attr='_active_blocks_prefetch',
                 ),
                 'photos',

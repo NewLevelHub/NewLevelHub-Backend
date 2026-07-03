@@ -516,6 +516,45 @@ class TestResourceCatalogOrdering:
         ours = [x['name'] for x in _list_results(r) if tag in x['name']]
         assert ours == sorted(created)
 
+    def test_ordering_name_with_page_size_and_active_bookings(
+        self, api_client, superadmin, employee, company
+    ):
+        """
+        Regression test for the production 500:
+        GET /api/v1/bookings/resources/?ordering=name&page_size=24 must return 200
+        even when there are active (currently ongoing) bookings, which populate
+        the _active_bookings_prefetch.  The prefetch queryset uses .only() to
+        select just the fields the catalog serializer needs — this avoids SELECT-ing
+        columns (e.g. priority, qr_code, qr_image) that may not yet exist in a
+        production DB that is missing some migrations.
+        """
+        api_client.force_authenticate(user=superadmin)
+        resource = Resource.objects.create(
+            name='Regression DEV-428 desk',
+            resource_type='desk',
+            floor=1,
+        )
+        now = timezone.now()
+        # Create an active booking so the bookings prefetch actually fetches rows.
+        Booking.objects.create(
+            resource=resource,
+            user=employee,
+            company=company,
+            start_time=now - timedelta(minutes=30),
+            end_time=now + timedelta(hours=1),
+            status='confirmed',
+            priority=1,
+        )
+        r = api_client.get(RESOURCES_URL, {'ordering': 'name', 'page_size': '24'})
+        assert r.status_code == status.HTTP_200_OK
+        data = r.json()
+        assert 'results' in data
+        assert 'meeting_room_equipment_keys' in data
+        row = next((x for x in data['results'] if x['id'] == resource.id), None)
+        assert row is not None
+        # The active booking should cause status=occupied (more than 15-min window)
+        assert row['status'] == 'occupied'
+
 
 @pytest.mark.django_db
 class TestResourceCatalogAssignedVisibility:

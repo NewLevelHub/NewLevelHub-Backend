@@ -458,8 +458,7 @@ def build_company_analytics_data(user, date_from=None, date_to=None):
         active_tasks_period[assignee_id] = active_tasks_period.get(assignee_id, 0) + 1
     employee_activity = [
         {
-            'user_id': employee.id,
-            'full_name': employee.full_name,
+            'user': employee,
             'booking_count_30d': bookings_period.get(employee.id, 0),
             'task_count_active': active_tasks_period.get(employee.id, 0),
             'last_login': employee.last_login,
@@ -747,7 +746,7 @@ def _build_company_pdf(data, lang='ru'):
     for emp in data['employee_activity']:
         last_login = emp['last_login'].strftime('%Y-%m-%d %H:%M') if emp['last_login'] else '—'
         emp_rows.append([
-            _pdf_cell(emp['full_name']),
+            _pdf_cell(emp['user'].full_name),
             _pdf_cell(emp['booking_count_30d']),
             _pdf_cell(emp['task_count_active']),
             _pdf_cell(last_login),
@@ -841,7 +840,7 @@ def _rows_company_csv(data, lang='ru'):
     for emp in data['employee_activity']:
         last_login = emp['last_login'].isoformat() if emp['last_login'] else ''
         rows.append([
-            emp['full_name'],
+            emp['user'].full_name,
             emp['booking_count_30d'],
             emp['task_count_active'],
             last_login,

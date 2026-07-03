@@ -208,9 +208,10 @@ class TestCompanyAnalyticsAC:
         assert sum(c['count'] for c in act['by_column']) == 3
         assert data['guest_visits_month'] == 1
 
-        by_user_id = {row['user_id']: row for row in data['employee_activity']}
+        by_user_id = {row['user']['id']: row for row in data['employee_activity']}
         assert set(by_user_id.keys()) == {company_admin.id, employee_a.id, employee_b.id}
-        assert by_user_id[employee_a.id]['full_name'] == employee_a.full_name
+        assert by_user_id[employee_a.id]['user']['full_name'] == employee_a.full_name
+        assert by_user_id[employee_a.id]['user']['email'] == employee_a.email
         assert by_user_id[employee_a.id]['booking_count_30d'] == 2
         assert by_user_id[employee_a.id]['task_count_active'] == 2
         assert by_user_id[employee_a.id]['last_login'] is not None

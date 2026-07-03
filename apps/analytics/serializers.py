@@ -98,10 +98,6 @@ class CrmColumnTaskCountSerializer(serializers.Serializer):
 
 class ActiveCrmTasksSerializer(serializers.Serializer):
     total = serializers.IntegerField()
-    todo = serializers.IntegerField()
-    in_progress = serializers.IntegerField()
-    done = serializers.IntegerField()
-    other = serializers.IntegerField()
     by_column = CrmColumnTaskCountSerializer(many=True)
 
 

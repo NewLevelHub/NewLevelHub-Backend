@@ -22,7 +22,7 @@ from apps.core.i18n import get_lang, translate
 from apps.notifications.utils import create_notification
 from .models import (
     Resource, ResourcePhoto, Booking, BookingParticipant,
-    RecurringBooking, ResourceBlock, BookingCancellationAudit,
+    RecurringBooking, ResourceBlock,
 )
 from .schedule import busy_slots_for_resource, is_soon_available, seven_day_range_from_today
 
@@ -1048,13 +1048,3 @@ class BulkCancelSerializer(serializers.Serializer):
         max_length=50,
     )
     reason = serializers.CharField(required=False, allow_blank=True, default='')
-
-
-class BookingCancellationAuditSerializer(serializers.ModelSerializer):
-    booking_id = serializers.IntegerField(read_only=True)
-    cancelled_by = UserBriefSerializer(read_only=True)
-
-    class Meta:
-        model = BookingCancellationAudit
-        fields = ['id', 'booking_id', 'cancelled_by', 'cancel_reason', 'cancelled_at']
-        read_only_fields = fields

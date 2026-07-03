@@ -200,10 +200,6 @@ class TestCompanyAnalyticsAC:
         }
         act = data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == 1
-        assert act['in_progress'] == 1
-        assert act['done'] == 1
-        assert act['other'] == 0
         assert len(act['by_column']) == 3
         assert sum(c['count'] for c in act['by_column']) == 3
         assert data['guest_visits_month'] == 1
@@ -265,7 +261,6 @@ class TestCompanyAnalyticsAC:
         assert response.data['guest_visits_month'] == 0
         z = response.data['active_crm_tasks']
         assert z['total'] == 0
-        assert z['todo'] == z['in_progress'] == z['done'] == z['other'] == 0
         assert z['by_column'] == []
 
     def test_crm_statuses_are_counted_for_flexible_column_names(self, api_client, company_admin, company):
@@ -288,13 +283,13 @@ class TestCompanyAnalyticsAC:
         assert response.status_code == status.HTTP_200_OK
         act = response.data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == act['in_progress'] == act['done'] == 1
-        assert act['other'] == 0
+        assert len(act['by_column']) == 3
+        assert sum(c['count'] for c in act['by_column']) == 3
 
-    def test_custom_crm_columns_are_in_total_and_other_bucket(
+    def test_custom_crm_columns_are_in_total_and_by_column(
         self, api_client, company_admin, company,
     ):
-        """Columns whose names do not match todo/in_progress/done heuristics still count in total and by_column."""
+        """Columns with any name are counted in total and appear in by_column."""
         board = Board.objects.create(company=company, name='Sprint', created_by=company_admin)
         col_review = Column.objects.create(board=board, name='Code review', position=0)
         col_todo = Column.objects.create(board=board, name='To Do', position=1)
@@ -307,9 +302,6 @@ class TestCompanyAnalyticsAC:
         assert response.status_code == status.HTTP_200_OK
         act = response.data['active_crm_tasks']
         assert act['total'] == 3
-        assert act['todo'] == 1
-        assert act['other'] == 2
-        assert act['in_progress'] == act['done'] == 0
         assert len(act['by_column']) == 2
         by_name = {c['name']: c['count'] for c in act['by_column']}
         assert by_name == {'Code review': 2, 'To Do': 1}

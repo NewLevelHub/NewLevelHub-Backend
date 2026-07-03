@@ -400,6 +400,8 @@ def build_company_analytics_data(user, date_from=None, date_to=None):
         column__board__is_archived=False,
         is_deleted=False,
         is_archived=False,
+        created_at__gte=period_start,
+        created_at__lte=period_end,
     )
     column_agg = list(
         tasks_qs.values(
@@ -417,25 +419,16 @@ def build_company_analytics_data(user, date_from=None, date_to=None):
             r['column_id'] or 0,
         ),
     )
-    buckets = {'todo': 0, 'in_progress': 0, 'done': 0, 'other': 0}
-    by_column = []
-    for row in column_agg:
-        cnt = row['count']
-        name = row['column__name'] or ''
-        status_key = _normalize_column_status(name)
-        if status_key:
-            buckets[status_key] += cnt
-        else:
-            buckets['other'] += cnt
-        by_column.append(
-            {
-                'column_id': row['column_id'],
-                'name': name,
-                'board_name': row['column__board__name'] or '',
-                'count': cnt,
-            },
-        )
-    active_crm_tasks = {'total': tasks_qs.count(), **buckets, 'by_column': by_column}
+    by_column = [
+        {
+            'column_id': row['column_id'],
+            'name': row['column__name'] or '',
+            'board_name': row['column__board__name'] or '',
+            'count': row['count'],
+        }
+        for row in column_agg
+    ]
+    active_crm_tasks = {'total': tasks_qs.count(), 'by_column': by_column}
 
     employee_ids = list(employees_qs.values_list('id', flat=True))
     bookings_period = {
@@ -506,8 +499,9 @@ def build_company_analytics_data(user, date_from=None, date_to=None):
             'limit': storage_limit_bytes,
         },
         'active_crm_tasks': active_crm_tasks,
-        'guest_visits_month': GuestPass.objects.filter(
-            company=company,
+        'guest_visits_month': AccessLog.objects.filter(
+            is_entry=True,
+            guest_pass__company=company,
             created_at__gte=period_start,
             created_at__lte=period_end,
         ).count(),
@@ -702,10 +696,6 @@ def _build_company_pdf(data, lang='ru'):
         _pdf_cell(t('analytics.csv.bookings_month'), header=True),
         _pdf_cell('Storage (GB)', header=True),
         _pdf_cell(t('analytics.csv.crm_total'), header=True),
-        _pdf_cell(t('analytics.csv.crm_todo'), header=True),
-        _pdf_cell(t('analytics.csv.crm_in_progress'), header=True),
-        _pdf_cell(t('analytics.csv.crm_done'), header=True),
-        _pdf_cell(t('analytics.csv.crm_other'), header=True),
         _pdf_cell(t('analytics.csv.guest_visits_month'), header=True),
     ]
     summary_values = [
@@ -714,10 +704,6 @@ def _build_company_pdf(data, lang='ru'):
         _pdf_cell(data['bookings_month']),
         _pdf_cell(f'{storage_used_gb} / {storage_limit_gb}'),
         _pdf_cell(act['total']),
-        _pdf_cell(act['todo']),
-        _pdf_cell(act['in_progress']),
-        _pdf_cell(act['done']),
-        _pdf_cell(act['other']),
         _pdf_cell(data['guest_visits_month']),
     ]
 
@@ -811,10 +797,6 @@ def _rows_company_csv(data, lang='ru'):
         t('analytics.csv.storage_used'),
         t('analytics.csv.storage_limit'),
         t('analytics.csv.crm_total'),
-        t('analytics.csv.crm_todo'),
-        t('analytics.csv.crm_in_progress'),
-        t('analytics.csv.crm_done'),
-        t('analytics.csv.crm_other'),
         t('analytics.csv.guest_visits_month'),
     ]
     summary_row = [
@@ -824,10 +806,6 @@ def _rows_company_csv(data, lang='ru'):
         data['storage']['used'],
         data['storage']['limit'],
         act['total'],
-        act['todo'],
-        act['in_progress'],
-        act['done'],
-        act['other'],
         data['guest_visits_month'],
     ]
     rows = [summary_header, summary_row, []]

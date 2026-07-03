@@ -168,6 +168,11 @@ class ResourceSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'floor_number', 'floor_name', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
+        # Defensively coerce available_days to a list before the ListField iterates it.
+        # Some legacy DB rows have an int stored in this JSONField; iterating an int raises
+        # TypeError. We patch only the in-memory instance — no DB write occurs.
+        if not isinstance(instance.available_days, list):
+            instance.available_days = []
         data = super().to_representation(instance)
         if instance.resource_type == 'meeting_room':
             data['equipment'] = equipment_from_resource(instance)
@@ -351,6 +356,14 @@ class ResourceListSerializer(serializers.ModelSerializer):
             'reason',
             'available_at',
         ]
+
+    def to_representation(self, instance):
+        # Defensively coerce available_days to a list before the ListField iterates it.
+        # Some legacy DB rows have an int stored in this JSONField; iterating an int raises
+        # TypeError. We patch only the in-memory instance — no DB write occurs.
+        if not isinstance(instance.available_days, list):
+            instance.available_days = []
+        return super().to_representation(instance)
 
     def get_parking_type(self, obj):
         if obj.resource_type != 'parking':

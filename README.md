@@ -52,6 +52,7 @@ python manage.py createsuperuser
 | OpenAPI schema | http://localhost:8000/api/schema/ |
 | Health check | http://localhost:8000/api/v1/health/ |
 | Dozzle (логи контейнеров) | http://localhost:9999/ |
+| Monitoring (Prometheus) | http://localhost:9090 — см. [docs/MONITORING.md](docs/MONITORING.md) |
 
 ## Dozzle (логи контейнеров)
 

@@ -1,0 +1,83 @@
+# Static production monitoring: compose + fixed containers + host health → Slack / Telegram.
+#
+# Separate Compose project (nlh-monitoring) so app CD recreate does not tear this down.
+#
+# First-time install (on production server, in $DEPLOY_PATH):
+#   1. Ensure monitoring/ and this file are present
+#   2. cp .env.monitoring.example .env.monitoring  # fill Slack / Telegram
+#   3. docker compose -f docker-compose.monitoring.prod.yml up -d --build
+#
+# UIs (SSH tunnel only — bound to localhost):
+#   ssh -L 9090:127.0.0.1:9090 -L 9093:127.0.0.1:9093 user@prod
+#
+# Test: docker stop nlh_redis_prod  → wait ~3m → Slack/TG → docker start nlh_redis_prod
+
+name: nlh-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: nlh_prometheus_prod
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    depends_on:
+      - alertmanager
+      - compose_exporter
+      - node_exporter
+    restart: always
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: nlh_alertmanager_prod
+    ports:
+      - "127.0.0.1:9093:9093"
+    env_file:
+      - .env.monitoring
+    volumes:
+      - ./monitoring/render-alertmanager.sh:/etc/alertmanager/render-alertmanager.sh:ro
+      - alertmanager_data:/alertmanager
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sh /etc/alertmanager/render-alertmanager.sh /alertmanager/alertmanager.generated.yml
+        exec /bin/alertmanager \
+          --config.file=/alertmanager/alertmanager.generated.yml \
+          --storage.path=/alertmanager
+    restart: always
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: nlh_node_exporter_prod
+    ports:
+      - "127.0.0.1:9100:9100"
+    volumes:
+      - /:/host:ro,rslave
+    command:
+      - --path.rootfs=/host
+    restart: always
+
+  compose_exporter:
+    build:
+      context: ./monitoring/compose_exporter
+    container_name: nlh_compose_exporter_prod
+    ports:
+      - "127.0.0.1:9101:9101"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      COMPOSE_PROJECT: newlevelhub-backend
+      COMPOSE_SERVICES: backend,db,redis,celery,celery_beat,nginx,dozzle
+      CONTAINER_NAMES: nlh_frontend_prod
+    restart: always
+
+volumes:
+  prometheus_data:
+  alertmanager_data:

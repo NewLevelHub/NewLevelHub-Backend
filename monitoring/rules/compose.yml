@@ -1,0 +1,22 @@
+groups:
+  - name: compose
+    interval: 30s
+    rules:
+      # 3m absorbs short blips from app CD force-recreate and Docker Desktop hiccups.
+      - alert: ComposeServiceNotRunning
+        expr: compose_service_up == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Compose service {{ $labels.service }} is not running"
+          description: "No running container for compose project `{{ $labels.project }}`, service `{{ $labels.service }}`."
+
+      - alert: ContainerNotRunning
+        expr: container_up == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is not running"
+          description: "Docker container `{{ $labels.name }}` is stopped or missing."

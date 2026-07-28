@@ -8,7 +8,7 @@ from .base import REST_FRAMEWORK
 
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', 'host.docker.internal']
 
 # Disable security features for local development
 SECURE_SSL_REDIRECT = False

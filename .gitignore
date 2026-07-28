@@ -43,6 +43,7 @@ staticfiles/
 !.env.example
 !.env.staging.example
 !.env.production.example
+!.env.monitoring.example
 
 # ------------------------------
 # Testing / quality

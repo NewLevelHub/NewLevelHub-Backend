@@ -1,0 +1,78 @@
+# Basic monitoring: compose service state + server health → Slack / Telegram.
+#
+# Separate Compose project so monitoring containers are NOT part of
+# newlevelhub-backend (stops / restarts of the app stack stay isolated).
+#
+# Production (static, localhost-only): docker-compose.monitoring.prod.yml
+# Full runbook: docs/MONITORING.md
+#
+# 1. App:      docker compose -f docker-compose.local.yml up -d
+# 2. Secrets:  cp .env.monitoring.example .env.monitoring
+# 3. Monitor:  docker compose -f docker-compose.monitoring.yml up -d --build
+#
+# Test: docker compose -f docker-compose.local.yml stop redis
+
+name: nlh-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: nlh_prometheus_local
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    depends_on:
+      - alertmanager
+      - compose_exporter
+      - node_exporter
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: nlh_alertmanager_local
+    ports:
+      - "9093:9093"
+    env_file:
+      - .env.monitoring
+    volumes:
+      - ./monitoring/render-alertmanager.sh:/etc/alertmanager/render-alertmanager.sh:ro
+      - alertmanager_data:/alertmanager
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sh /etc/alertmanager/render-alertmanager.sh /alertmanager/alertmanager.generated.yml
+        exec /bin/alertmanager \
+          --config.file=/alertmanager/alertmanager.generated.yml \
+          --storage.path=/alertmanager
+    restart: unless-stopped
+
+  node_exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: nlh_node_exporter_local
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+  compose_exporter:
+    build:
+      context: ./monitoring/compose_exporter
+    container_name: nlh_compose_exporter_local
+    ports:
+      - "9101:9101"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      COMPOSE_PROJECT: newlevelhub-backend
+      COMPOSE_SERVICES: backend,db,redis,celery_worker,celery_beat,minio,dozzle
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  alertmanager_data:

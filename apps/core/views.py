@@ -1,5 +1,7 @@
 from datetime import datetime, time as dt_time, timedelta
 
+import redis
+from django.conf import settings
 from django.db import connection
 from django.db.models import Case, IntegerField, Q, When
 
@@ -33,11 +35,12 @@ from apps.users.models import User
             fields={
                 'status': fields.CharField(),
                 'database': fields.CharField(),
+                'redis': fields.CharField(),
                 'deployment_marker': fields.CharField(),
                 'environment': fields.CharField(),
             },
         ),
-        503: OpenApiResponse(description='Service unavailable — database unreachable'),
+        503: OpenApiResponse(description='Service unavailable — dependency unreachable'),
     },
 )
 @api_view(['GET'])
@@ -49,11 +52,18 @@ def health_check(request):
     except Exception:
         db_ok = False
 
-    healthy = db_ok
+    try:
+        redis_client = redis.from_url(settings.CELERY_BROKER_URL, socket_connect_timeout=2)
+        redis_ok = redis_client.ping()
+    except Exception:
+        redis_ok = False
+
+    healthy = db_ok and redis_ok
     return Response(
         {
             'status': 'healthy' if healthy else 'unhealthy',
             'database': 'connected' if db_ok else 'unavailable',
+            'redis': 'connected' if redis_ok else 'unavailable',
             'deployment_marker': 'pipeline-verify-2026-04-06',
             'environment': 'alpha-test',
         },
